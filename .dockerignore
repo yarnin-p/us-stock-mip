@@ -1,0 +1,10 @@
+.git
+.idea
+.env
+.env.*
+bin
+coverage.out
+mip
+outputs
+tmp
+work

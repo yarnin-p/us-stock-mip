@@ -1,0 +1,12 @@
+.DS_Store
+.idea/
+.env
+.env.*
+!.env.example
+/bin/
+/coverage.out
+/dist/
+/mip
+/outputs/
+/tmp/
+/work/

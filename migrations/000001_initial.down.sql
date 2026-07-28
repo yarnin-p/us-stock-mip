@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS trades;
+DROP TABLE IF EXISTS sec_filings;
+DROP TABLE IF EXISTS news;
+DROP TABLE IF EXISTS intraday_prices;
+DROP TABLE IF EXISTS daily_prices;
+DROP TABLE IF EXISTS stocks;
