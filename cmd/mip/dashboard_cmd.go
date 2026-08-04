@@ -1566,6 +1566,34 @@ func startDailyScheduler(
 			},
 		},
 		{
+			// Runs after the 20:00 ET after-hours close (07:10 Bangkok) so the
+			// session it labels is complete. Reads only stored observations, so
+			// a missed day is recovered by re-running the date.
+			name: "ah_outcomes", environment: "SCHEDULE_AH_OUTCOMES",
+			defaultClock: "07:10",
+			run: func(jobContext context.Context) error {
+				tradingDate, err := time.Parse(
+					time.DateOnly,
+					previousUSTradingDate(time.Now()),
+				)
+				if err != nil {
+					return err
+				}
+				rows, err := store.CaptureAHBoundaryOutcomes(
+					jobContext, tradingDate,
+				)
+				if err != nil {
+					return err
+				}
+				logger.Info(
+					"after-hours boundary outcomes captured",
+					"trading_date", tradingDate.Format(time.DateOnly),
+					"rows", rows,
+				)
+				return nil
+			},
+		},
+		{
 			name: "strategy_replay", environment: "SCHEDULE_STRATEGY_REPLAY",
 			defaultClock: "13:25",
 			run: func(jobContext context.Context) error {

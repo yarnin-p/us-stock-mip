@@ -68,6 +68,8 @@ func run(args []string, stderr io.Writer) error {
 		return runTrain(args[1:], stderr)
 	case "rank":
 		return runRank(args[1:], stderr)
+	case "ah-outcomes":
+		return runAHOutcomes(args[1:], os.Stdout, stderr)
 	case "opening-list":
 		return runOpeningList(args[1:], os.Stdout, stderr)
 	case "intelligence":
