@@ -61,15 +61,18 @@ func NewStore(pool *pgxpool.Pool) *Store {
 func (store *Store) UpsertStock(ctx context.Context, stock model.Stock) (int64, error) {
 	const query = `
 		INSERT INTO stocks (
-			ticker, company_name, exchange, sector, market_cap, float_shares
+			ticker, company_name, exchange, sector, security_type,
+			market_cap, float_shares
 		)
 		VALUES (
-			$1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5, $6
+			$1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''),
+			NULLIF($5, ''), $6, $7
 		)
 		ON CONFLICT (ticker) DO UPDATE SET
 			company_name = COALESCE(EXCLUDED.company_name, stocks.company_name),
 			exchange = COALESCE(EXCLUDED.exchange, stocks.exchange),
 			sector = COALESCE(EXCLUDED.sector, stocks.sector),
+			security_type = COALESCE(EXCLUDED.security_type, stocks.security_type),
 			market_cap = COALESCE(EXCLUDED.market_cap, stocks.market_cap),
 			float_shares = COALESCE(EXCLUDED.float_shares, stocks.float_shares),
 			updated_at = NOW()
@@ -80,16 +83,56 @@ func (store *Store) UpsertStock(ctx context.Context, stock model.Stock) (int64, 
 	}
 
 	var stockID int64
-	if err := store.pool.QueryRow(
-		ctx,
-		query,
-		stock.Ticker,
-		stock.CompanyName,
-		stock.Exchange,
-		stock.Sector,
-		stock.MarketCap,
-		stock.FloatShares,
-	).Scan(&stockID); err != nil {
+	err := pgx.BeginFunc(ctx, store.pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(
+			ctx,
+			query,
+			stock.Ticker,
+			stock.CompanyName,
+			stock.Exchange,
+			stock.Sector,
+			stock.SecurityType,
+			stock.MarketCap,
+			stock.FloatShares,
+		).Scan(&stockID); err != nil {
+			return err
+		}
+		if stock.FloatShares != nil && *stock.FloatShares > 0 {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO stock_float_history (
+					stock_id,available_at,float_shares
+				) VALUES ($1,NOW(),$2)
+				ON CONFLICT (stock_id,available_at,source) DO NOTHING`,
+				stockID, *stock.FloatShares,
+			); err != nil {
+				return err
+			}
+		}
+		if stock.MarketCap != nil && *stock.MarketCap >= 0 {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO stock_market_cap_history (
+					stock_id,available_at,market_cap
+				) VALUES ($1,NOW(),$2)
+				ON CONFLICT (stock_id,available_at,source) DO NOTHING`,
+				stockID, *stock.MarketCap,
+			); err != nil {
+				return err
+			}
+		}
+		if stock.Sector != "" {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO stock_sector_history (
+					stock_id,effective_at,sector
+				) VALUES ($1,NOW(),$2)
+				ON CONFLICT (stock_id,effective_at,source) DO NOTHING`,
+				stockID, stock.Sector,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return 0, fmt.Errorf("upserting stock %s: %w", stock.Ticker, err)
 	}
 	return stockID, nil
