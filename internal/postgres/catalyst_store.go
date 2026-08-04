@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/momentum-intelligence-platform/mip/internal/catalyst"
@@ -14,7 +15,12 @@ func (store *Store) BoundaryCandidates(
 	asOf time.Time,
 	lookback time.Duration,
 	limit int,
+	minRelativeVolume float64,
 ) ([]catalyst.Candidate, error) {
+	if minRelativeVolume <= 0 {
+		// Disabling the tape lane must not admit every ticker on the market.
+		minRelativeVolume = math.MaxFloat64
+	}
 	if asOf.IsZero() || lookback <= 0 {
 		return nil, errors.New(
 			"boundary candidates require an as-of time and lookback",
@@ -26,7 +32,38 @@ func (store *Store) BoundaryCandidates(
 		)
 	}
 	rows, err := store.pool.Query(ctx, `
-		WITH latest_news AS (
+		WITH prior_average AS (
+			SELECT
+				daily.stock_id,
+				AVG(daily.volume) OVER (
+					PARTITION BY daily.stock_id
+					ORDER BY daily.trade_date
+					ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+				) AS average_volume,
+				daily.trade_date
+			FROM daily_prices AS daily
+		),
+		-- The tape lane admits a name on volume alone. It compares only volume
+		-- already printed by the cutoff against completed prior sessions, so it
+		-- never reads a closing bar the decision cannot see.
+		volume_lane AS (
+			SELECT DISTINCT ON (signals.ticker)
+				signals.ticker,
+				signals.volume / NULLIF(prior_average.average_volume, 0)
+					AS relative_volume
+			FROM scanner_signals AS signals
+			JOIN stocks ON stocks.ticker = signals.ticker
+			JOIN prior_average
+				ON prior_average.stock_id = stocks.id
+				AND prior_average.trade_date =
+					($1 AT TIME ZONE 'America/New_York')::date
+			WHERE signals.observed_at <= $1
+				AND signals.observed_at >= $1 - INTERVAL '30 minutes'
+				AND prior_average.average_volume > 0
+				AND signals.volume / prior_average.average_volume >= $4
+			ORDER BY signals.ticker, signals.observed_at DESC
+		),
+		latest_news AS (
 			SELECT DISTINCT ON (news.ticker)
 				news.ticker,
 				COALESCE(news.external_id,'') AS external_id,
@@ -48,15 +85,31 @@ func (store *Store) BoundaryCandidates(
 				news.published_at DESC,
 				news.id DESC
 		)
+		,
+		-- A name may qualify on either lane; when both apply the news lane wins
+		-- so the headline still reaches the scorer.
+		universe AS (
+			SELECT ticker, 'NEWS' AS lane, 0::DOUBLE PRECISION AS relative_volume
+			FROM latest_news
+			UNION
+			SELECT volume_lane.ticker, 'VOLUME', volume_lane.relative_volume
+			FROM volume_lane
+			WHERE NOT EXISTS (
+				SELECT 1 FROM latest_news
+				WHERE latest_news.ticker = volume_lane.ticker
+			)
+		)
 		SELECT
-			latest_news.ticker,
-			latest_news.external_id,
+			universe.ticker,
+			universe.lane,
+			universe.relative_volume,
+			COALESCE(latest_news.external_id, '') AS external_id,
 			latest_news.published_at,
 			latest_news.available_at,
-			latest_news.title,
-			latest_news.content,
-			latest_news.source_url,
-			latest_news.sentiment,
+			COALESCE(latest_news.title, '') AS title,
+			COALESCE(latest_news.content, '') AS content,
+			COALESCE(latest_news.source_url, '') AS source_url,
+			COALESCE(latest_news.sentiment, '') AS sentiment,
 			COALESCE(quote.bid_price,0),
 			COALESCE(quote.bid_size,0),
 			COALESCE(quote.ask_price,0),
@@ -66,7 +119,8 @@ func (store *Store) BoundaryCandidates(
 			COALESCE(signal.volume,0),
 			COALESCE(signal.change_ratio,0),
 			signal.observed_at
-		FROM latest_news
+		FROM universe
+		LEFT JOIN latest_news ON latest_news.ticker = universe.ticker
 		LEFT JOIN LATERAL (
 			SELECT
 				history.bid_price,
@@ -75,7 +129,7 @@ func (store *Store) BoundaryCandidates(
 				history.ask_size,
 				history.observed_at
 			FROM market_quote_history AS history
-			WHERE history.ticker=latest_news.ticker
+			WHERE history.ticker=universe.ticker
 				AND history.observed_at <= $1
 			ORDER BY history.observed_at DESC,history.id DESC
 			LIMIT 1
@@ -87,15 +141,16 @@ func (store *Store) BoundaryCandidates(
 				signals.change_ratio,
 				signals.observed_at
 			FROM scanner_signals AS signals
-			WHERE signals.ticker=latest_news.ticker
+			WHERE signals.ticker=universe.ticker
 				AND signals.observed_at <= $1
 			ORDER BY signals.observed_at DESC
 			LIMIT 1
 		) AS signal ON TRUE
 		ORDER BY
-			latest_news.catalyst_score DESC,
-			latest_news.available_at DESC,
-			latest_news.ticker
+			COALESCE(latest_news.catalyst_score, 0) DESC,
+			universe.relative_volume DESC,
+			latest_news.available_at DESC NULLS LAST,
+			universe.ticker
 		LIMIT $3`,
 		asOf.UTC(),
 		asOf.UTC().Add(-lookback),
@@ -112,11 +167,14 @@ func (store *Store) BoundaryCandidates(
 	for rows.Next() {
 		var item catalyst.Candidate
 		var quoteObservedAt, signalObservedAt *time.Time
+		var publishedAt, availableAt *time.Time
 		if err := rows.Scan(
 			&item.Ticker,
+			&item.Lane,
+			&item.RelativeVolume,
 			&item.News.ExternalID,
-			&item.News.PublishedAt,
-			&item.News.AvailableAt,
+			&publishedAt,
+			&availableAt,
 			&item.News.Title,
 			&item.News.Description,
 			&item.News.URL,
@@ -135,6 +193,12 @@ func (store *Store) BoundaryCandidates(
 				"scanning boundary catalyst candidate: %w",
 				err,
 			)
+		}
+		if publishedAt != nil {
+			item.News.PublishedAt = *publishedAt
+		}
+		if availableAt != nil {
+			item.News.AvailableAt = *availableAt
 		}
 		if quoteObservedAt != nil {
 			item.QuoteObservedAt = *quoteObservedAt

@@ -19,6 +19,7 @@ type BoundaryRepository interface {
 		time.Time,
 		time.Duration,
 		int,
+		float64,
 	) ([]Candidate, error)
 	BoundaryEntryTickers(
 		context.Context,
@@ -162,6 +163,7 @@ func (runner *Runner) Evaluate(
 		now.UTC(),
 		runner.selector.config.NewsLookback,
 		runner.config.CandidateQueryLimit,
+		runner.selector.config.MinRelativeVolume,
 	)
 	if err != nil {
 		return report, fmt.Errorf(

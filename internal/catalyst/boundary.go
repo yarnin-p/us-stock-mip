@@ -10,7 +10,20 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/intelligence"
 )
 
+// Lanes a boundary candidate can qualify through. They are scored together but
+// admitted on different evidence: a headline for one, the tape for the other.
+const (
+	LaneNews   = "NEWS"
+	LaneVolume = "VOLUME"
+)
+
 type BoundaryConfig struct {
+	// MinRelativeVolume admits a candidate on tape alone. Measured over five
+	// sessions, extreme relative volume selected after-hours runners far more
+	// sharply than a headline did, and the strongest bucket of all carried no
+	// stored headline at all. Requiring news to enter was discarding them.
+	// Zero disables the lane and restores news-only selection.
+	MinRelativeVolume   float64
 	MaxCandidates       int
 	TotalNotionalTHB    float64
 	USDTHB              float64
@@ -34,7 +47,8 @@ type BoundaryConfig struct {
 
 func DefaultBoundaryConfig() BoundaryConfig {
 	return BoundaryConfig{
-		MaxCandidates: 3, TotalNotionalTHB: 100_000, USDTHB: 33.6,
+		MinRelativeVolume: 20,
+		MaxCandidates:     3, TotalNotionalTHB: 100_000, USDTHB: 33.6,
 		NewsLookback: 8 * time.Hour, MinCatalystStrength: 0.75,
 		MinVolume: 25_000, MinPrice: 0.20, MaxPrice: 100,
 		MaxSpread: 0.03, QuoteMaxAge: 30 * time.Second,
@@ -47,7 +61,15 @@ func DefaultBoundaryConfig() BoundaryConfig {
 }
 
 type Candidate struct {
-	Ticker           string                `json:"ticker"`
+	Ticker string `json:"ticker"`
+	// Lane records which evidence admitted this candidate. A volume-lane
+	// candidate may carry no news at all, so the news gate must not be applied
+	// to it.
+	Lane string `json:"lane"`
+	// RelativeVolume is the session volume observed by the cutoff against the
+	// prior twenty completed sessions. It uses only volume already printed, so
+	// it never reads the closing bar the decision cannot see.
+	RelativeVolume   float64               `json:"relative_volume"`
 	News             intelligence.NewsItem `json:"news"`
 	Bid              float64               `json:"bid"`
 	BidSize          float64               `json:"bid_size"`
@@ -149,15 +171,25 @@ func (selector *Selector) Select(
 	for _, candidate := range candidates {
 		candidate.Ticker = strings.ToUpper(strings.TrimSpace(candidate.Ticker))
 		classification := intelligence.ClassifyNews(candidate.News)
-		if candidate.Ticker == "" ||
-			!classification.Tradeable ||
+		volumeLane := candidate.Lane == LaneVolume &&
+			selector.config.MinRelativeVolume > 0
+		if volumeLane {
+			// The tape is the evidence here. A headline may be absent, stale,
+			// or unclassifiable without disqualifying the candidate.
+			if candidate.RelativeVolume < selector.config.MinRelativeVolume {
+				continue
+			}
+		} else if !classification.Tradeable ||
 			classification.Negative ||
 			classification.Strength < selector.config.MinCatalystStrength ||
 			candidate.News.PublishedAt.After(now) ||
 			candidate.News.PublishedAt.Before(
 				now.Add(-selector.config.NewsLookback),
 			) ||
-			candidate.News.AvailableAt.After(now) ||
+			candidate.News.AvailableAt.After(now) {
+			continue
+		}
+		if candidate.Ticker == "" ||
 			candidate.Bid <= 0 ||
 			candidate.Ask <= 0 ||
 			candidate.Bid > candidate.Ask ||

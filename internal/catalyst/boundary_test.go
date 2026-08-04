@@ -176,6 +176,7 @@ func (repository *boundaryRepositoryStub) BoundaryCandidates(
 	time.Time,
 	time.Duration,
 	int,
+	float64,
 ) ([]catalyst.Candidate, error) {
 	return append([]catalyst.Candidate(nil), repository.candidates...), nil
 }
@@ -337,4 +338,98 @@ func easternTime(
 		t.Fatal(err)
 	}
 	return time.Date(year, month, day, hour, minute, second, 0, location)
+}
+
+// The tape is evidence in its own right. Over the captured sessions the
+// sharpest after-hours runners were selected by extreme relative volume, and
+// the strongest bucket carried no stored headline at all — so requiring news
+// to enter was discarding exactly the candidates worth having.
+func TestSelectorAdmitsVolumeLaneWithoutNews(t *testing.T) {
+	now := time.Date(2026, 8, 3, 19, 56, 0, 0, time.UTC)
+	config := catalyst.DefaultBoundaryConfig()
+	selector, err := catalyst.NewSelector(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selections := selector.Select(now, []catalyst.Candidate{{
+		Ticker: "TAPE", Lane: catalyst.LaneVolume, RelativeVolume: 42,
+		Bid: 2.00, Ask: 2.01, BidSize: 900, AskSize: 400,
+		QuoteObservedAt: now.Add(-2 * time.Second),
+		Price:           2.00, Volume: 5_000_000, ChangeRatio: 0.35,
+		SignalObservedAt: now.Add(-20 * time.Second),
+	}})
+	if len(selections) != 1 || selections[0].Candidate.Ticker != "TAPE" {
+		t.Fatalf("volume-lane candidate rejected: %#v", selections)
+	}
+}
+
+// The lane must earn its place: ordinary volume is not evidence.
+func TestSelectorRejectsVolumeLaneBelowThreshold(t *testing.T) {
+	now := time.Date(2026, 8, 3, 19, 56, 0, 0, time.UTC)
+	selector, err := catalyst.NewSelector(catalyst.DefaultBoundaryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selections := selector.Select(now, []catalyst.Candidate{{
+		Ticker: "QUIET", Lane: catalyst.LaneVolume, RelativeVolume: 3,
+		Bid: 2.00, Ask: 2.01, BidSize: 900, AskSize: 400,
+		QuoteObservedAt: now.Add(-2 * time.Second),
+		Price:           2.00, Volume: 5_000_000,
+		SignalObservedAt: now.Add(-20 * time.Second),
+	}}); len(selections) != 0 {
+		t.Fatalf("ordinary volume admitted: %#v", selections)
+	}
+}
+
+// Opening a tape lane must not loosen the news lane's own bar.
+func TestSelectorStillRequiresACatalystOnTheNewsLane(t *testing.T) {
+	now := time.Date(2026, 8, 3, 19, 56, 0, 0, time.UTC)
+	selector, err := catalyst.NewSelector(catalyst.DefaultBoundaryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selections := selector.Select(now, []catalyst.Candidate{{
+		Ticker: "NEWSY", Lane: catalyst.LaneNews, RelativeVolume: 99,
+		News: intelligence.NewsItem{
+			Title:       "Company announces participation in an investor conference",
+			PublishedAt: now.Add(-time.Hour),
+			AvailableAt: now.Add(-time.Hour),
+		},
+		Bid: 2.00, Ask: 2.01, BidSize: 900, AskSize: 400,
+		QuoteObservedAt: now.Add(-2 * time.Second),
+		Price:           2.00, Volume: 5_000_000,
+		SignalObservedAt: now.Add(-20 * time.Second),
+	}}); len(selections) != 0 {
+		t.Fatalf("weak headline admitted on the news lane: %#v", selections)
+	}
+}
+
+// Liquidity and freshness protect every lane, not just the news one.
+func TestSelectorAppliesMarketGuardsToTheVolumeLane(t *testing.T) {
+	now := time.Date(2026, 8, 3, 19, 56, 0, 0, time.UTC)
+	selector, err := catalyst.NewSelector(catalyst.DefaultBoundaryConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := catalyst.Candidate{
+		Ticker: "TAPE", Lane: catalyst.LaneVolume, RelativeVolume: 42,
+		Bid: 2.00, Ask: 2.01, BidSize: 900, AskSize: 400,
+		QuoteObservedAt: now.Add(-2 * time.Second),
+		Price:           2.00, Volume: 5_000_000,
+		SignalObservedAt: now.Add(-20 * time.Second),
+	}
+	wideSpread := base
+	wideSpread.Ask = 2.60
+	staleQuote := base
+	staleQuote.QuoteObservedAt = now.Add(-10 * time.Minute)
+	for name, candidate := range map[string]catalyst.Candidate{
+		"wide spread": wideSpread,
+		"stale quote": staleQuote,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := selector.Select(now, []catalyst.Candidate{candidate}); len(got) != 0 {
+				t.Fatalf("guard bypassed: %#v", got)
+			}
+		})
+	}
 }
