@@ -1,0 +1,16 @@
+DROP TRIGGER IF EXISTS notify_alerts ON alerts;
+DROP TRIGGER IF EXISTS notify_automation_runs ON automation_runs;
+DROP TRIGGER IF EXISTS notify_automation_schedule ON automation_schedule;
+DROP TRIGGER IF EXISTS notify_opening_runs ON opening_list_runs;
+DROP TRIGGER IF EXISTS notify_opening_entries ON opening_list_entries;
+DROP TRIGGER IF EXISTS notify_trades ON trades;
+DROP TRIGGER IF EXISTS notify_watchlists ON watchlists;
+DROP TRIGGER IF EXISTS notify_market_quotes ON market_quotes;
+DROP TRIGGER IF EXISTS notify_score_history ON score_history;
+DROP TRIGGER IF EXISTS notify_scanner_signals ON scanner_signals;
+DROP FUNCTION IF EXISTS notify_dashboard_change();
+DROP TRIGGER IF EXISTS score_history_alert_trigger ON score_history;
+DROP FUNCTION IF EXISTS create_score_change_alert();
+DROP TABLE IF EXISTS alerts;
+DROP TABLE IF EXISTS automation_runs;
+DROP TABLE IF EXISTS automation_schedule;
