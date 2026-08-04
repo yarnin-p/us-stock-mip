@@ -216,13 +216,13 @@ func (store *Store) SavePlan(
 			pullback_low,entry_price,stop_price,trailing_stop,cost_floor,quantity,
 			initial_quantity,pending_exit_quantity,partial_profit_taken,
 			entry_order_id,exit_order_id,protective_order_id,
-			last_price,last_reason,retry_after,
+			last_price,last_reason,retry_after,left_top_n_at,
 			created_at,updated_at
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
 			$16,$17,$18,
 			NULLIF($19,0),NULLIF($20,0),NULLIF($21,0),
-			$22,NULLIF($23,''),$24,$25,$26
+			$22,NULLIF($23,''),$24,$25,$26,$27
 		)
 		ON CONFLICT (mode,trading_date,ticker) DO UPDATE SET
 			rank=EXCLUDED.rank,score=EXCLUDED.score,status=EXCLUDED.status,
@@ -241,6 +241,7 @@ func (store *Store) SavePlan(
 			protective_order_id=EXCLUDED.protective_order_id,
 			last_price=EXCLUDED.last_price,
 			last_reason=EXCLUDED.last_reason,retry_after=EXCLUDED.retry_after,
+			left_top_n_at=EXCLUDED.left_top_n_at,
 			created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at`,
 			plan.Mode,
 			plan.TradingDate.Format(time.DateOnly),
@@ -266,6 +267,7 @@ func (store *Store) SavePlan(
 			plan.LastPrice,
 			plan.LastReason,
 			plan.RetryAfter,
+			plan.LeftTopNAt,
 			plan.CreatedAt,
 			plan.UpdatedAt,
 		); execErr != nil {
@@ -457,7 +459,8 @@ const strategyPlanSelect = `
 		initial_quantity,pending_exit_quantity,partial_profit_taken,
 		COALESCE(entry_order_id,0),COALESCE(exit_order_id,0),
 		COALESCE(protective_order_id,0),last_price,
-		COALESCE(last_reason,''),retry_after,created_at,updated_at
+		COALESCE(last_reason,''),retry_after,left_top_n_at,
+		created_at,updated_at
 	FROM strategy_plans`
 
 type strategyPlanScanner interface {
@@ -478,6 +481,7 @@ func scanStrategyPlan(scanner strategyPlanScanner) (strategy.Plan, error) {
 		&plan.EntryOrderID, &plan.ExitOrderID,
 		&plan.ProtectiveOrderID,
 		&plan.LastPrice, &plan.LastReason, &plan.RetryAfter,
+		&plan.LeftTopNAt,
 		&plan.CreatedAt, &plan.UpdatedAt,
 	)
 	if err == nil {

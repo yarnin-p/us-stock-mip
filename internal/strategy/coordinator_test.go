@@ -11,6 +11,7 @@ import (
 
 type strategyRepository struct {
 	candidates     []strategy.Candidate
+	candidateLimit int
 	active         []strategy.Plan
 	plans          map[string]strategy.Plan
 	latestID       int64
@@ -22,9 +23,13 @@ type strategyRepository struct {
 }
 
 func (repository *strategyRepository) TopCandidates(
-	context.Context,
-	int,
+	_ context.Context,
+	limit int,
 ) ([]strategy.Candidate, error) {
+	repository.candidateLimit = limit
+	if limit > 0 && len(repository.candidates) > limit {
+		return repository.candidates[:limit], nil
+	}
 	return repository.candidates, nil
 }
 
@@ -1235,5 +1240,309 @@ func TestCoordinatorRecoversPendingEntryOrderAfterRestart(t *testing.T) {
 	if len(plans) != 1 || plans[0].EntryOrderID != 42 ||
 		plans[0].Status != strategy.StatusPendingEntry {
 		t.Fatalf("recovered plans = %#v", plans)
+	}
+}
+
+// retentionConfig builds a coordinator whose entry tier stays narrow while an
+// in-progress setup survives a wider rank band plus a grace window.
+func retentionConfig(
+	retentionRank int,
+	grace time.Duration,
+) strategy.CoordinatorConfig {
+	return strategy.CoordinatorConfig{
+		Enabled: true, Mode: "paper", MaxCandidates: 1,
+		RetentionRank: retentionRank, RetentionGrace: grace,
+		RiskAmount: 100, RetryDelay: 30 * time.Second,
+		Engine: strategy.Config{
+			MinPullback: 0.02, MaxPullback: 0.08, Reclaim: 0.01,
+			StopLoss: 0.04, TrailActivation: 0.08, TrailDistance: 0.04,
+			MinBuyerPressure: 0.55, MaxSpread: 0.02,
+			ExitLimitBuffer: 0.002, QuoteMaxAge: 3 * time.Second,
+		},
+	}
+}
+
+func retentionPlan(
+	ticker string,
+	status strategy.Status,
+	tradingDate, createdAt time.Time,
+) strategy.Plan {
+	return strategy.Plan{
+		Mode: "paper", Ticker: ticker, Status: status,
+		TradingDate: tradingDate, CreatedAt: createdAt,
+		SessionHigh: 10, PullbackLow: 9.6, LastPrice: 9.7,
+	}
+}
+
+func planFor(
+	t *testing.T,
+	repository *strategyRepository,
+	ticker string,
+	tradingDate time.Time,
+) strategy.Plan {
+	t.Helper()
+	plan, ok := repository.plans["paper:"+ticker+":"+tradingDate.Format(time.DateOnly)]
+	if !ok {
+		t.Fatalf("plan %s was not persisted", ticker)
+	}
+	return plan
+}
+
+// trackedPlan reads the in-memory plan. A retained plan whose state did not
+// change is deliberately not rewritten to storage on every refresh, so live
+// retention must be asserted here rather than against the repository.
+func trackedPlan(
+	t *testing.T,
+	coordinator *strategy.Coordinator,
+	ticker string,
+) (strategy.Plan, bool) {
+	t.Helper()
+	for _, plan := range coordinator.Plans() {
+		if plan.Ticker == ticker {
+			return plan, true
+		}
+	}
+	return strategy.Plan{}, false
+}
+
+// A setup that merely slips out of the narrow entry tier must keep running:
+// rank churn between refreshes is not evidence that the setup failed.
+func TestCoordinatorKeepsWatchPlanInsideRetentionRank(t *testing.T) {
+	tradingDate := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
+	repository := &strategyRepository{
+		candidates: []strategy.Candidate{
+			{Ticker: "AAA", Rank: 1, Score: 80, TradingDate: tradingDate},
+		},
+		plans: make(map[string]strategy.Plan),
+	}
+	coordinator, err := strategy.NewCoordinator(
+		repository, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := coordinator.Refresh(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	if repository.candidateLimit != 3 {
+		t.Fatalf("candidate fetch limit = %d, want the retention rank 3",
+			repository.candidateLimit)
+	}
+	repository.active = []strategy.Plan{planFor(t, repository, "AAA", tradingDate)}
+	repository.candidates = []strategy.Candidate{
+		{Ticker: "BBB", Rank: 1, Score: 90, TradingDate: tradingDate},
+		{Ticker: "AAA", Rank: 2, Score: 80, TradingDate: tradingDate},
+	}
+	if err := coordinator.Refresh(ctx, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	kept := planFor(t, repository, "AAA", tradingDate)
+	if kept.Status != strategy.StatusWatching {
+		t.Fatalf("retained plan status = %q, want WATCH", kept.Status)
+	}
+	if kept.LeftTopNAt != nil {
+		t.Fatalf("retained plan should not start a grace clock: %v",
+			kept.LeftTopNAt)
+	}
+	if len(coordinator.Plans()) != 2 {
+		t.Fatalf("tracked plans = %#v", coordinator.Plans())
+	}
+}
+
+// Leaving the retention band starts a clock instead of destroying the setup.
+func TestCoordinatorHoldsPlanDuringRetentionGrace(t *testing.T) {
+	tradingDate := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
+	repository := &strategyRepository{
+		candidates: []strategy.Candidate{
+			{Ticker: "AAA", Rank: 1, Score: 80, TradingDate: tradingDate},
+		},
+		plans: make(map[string]strategy.Plan),
+	}
+	coordinator, err := strategy.NewCoordinator(
+		repository, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := coordinator.Refresh(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	repository.active = []strategy.Plan{planFor(t, repository, "AAA", tradingDate)}
+	repository.candidates = []strategy.Candidate{
+		{Ticker: "BBB", Rank: 1, Score: 90, TradingDate: tradingDate},
+	}
+	left := start.Add(time.Minute)
+	if err := coordinator.Refresh(ctx, left); err != nil {
+		t.Fatal(err)
+	}
+	held := planFor(t, repository, "AAA", tradingDate)
+	if held.Status != strategy.StatusWatching {
+		t.Fatalf("status right after leaving = %q, want WATCH", held.Status)
+	}
+	if held.LeftTopNAt == nil || !held.LeftTopNAt.Equal(left.UTC()) {
+		t.Fatalf("grace clock = %v, want %v", held.LeftTopNAt, left.UTC())
+	}
+	repository.active = []strategy.Plan{held}
+	if err := coordinator.Refresh(ctx, left.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	stillHeld := planFor(t, repository, "AAA", tradingDate)
+	if stillHeld.Status != strategy.StatusWatching {
+		t.Fatalf("status inside grace = %q, want WATCH", stillHeld.Status)
+	}
+}
+
+func TestCoordinatorInvalidatesPlanAfterRetentionGraceExpires(t *testing.T) {
+	tradingDate := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
+	left := start.Add(time.Minute)
+	repository := &strategyRepository{
+		candidates: []strategy.Candidate{
+			{Ticker: "BBB", Rank: 1, Score: 90, TradingDate: tradingDate},
+		},
+		active: []strategy.Plan{func() strategy.Plan {
+			plan := retentionPlan("AAA", strategy.StatusWatching, tradingDate, start)
+			plan.LeftTopNAt = &left
+			return plan
+		}()},
+		plans: make(map[string]strategy.Plan),
+	}
+	coordinator, err := strategy.NewCoordinator(
+		repository, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Refresh(
+		context.Background(), left.Add(3*time.Minute+time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	expired := planFor(t, repository, "AAA", tradingDate)
+	if expired.Status != strategy.StatusInvalidated {
+		t.Fatalf("status after grace = %q, want INVALIDATED", expired.Status)
+	}
+	if expired.LastReason != "candidate left current realtime Top N" {
+		t.Fatalf("reason = %q", expired.LastReason)
+	}
+}
+
+// A name that returns to the band must not carry a stale countdown forward.
+func TestCoordinatorResetsRetentionGraceWhenCandidateReturns(t *testing.T) {
+	tradingDate := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
+	left := start.Add(time.Minute)
+	repository := &strategyRepository{
+		candidates: []strategy.Candidate{
+			{Ticker: "AAA", Rank: 1, Score: 80, TradingDate: tradingDate},
+		},
+		active: []strategy.Plan{func() strategy.Plan {
+			plan := retentionPlan("AAA", strategy.StatusWatching, tradingDate, start)
+			plan.LeftTopNAt = &left
+			return plan
+		}()},
+		plans: make(map[string]strategy.Plan),
+	}
+	coordinator, err := strategy.NewCoordinator(
+		repository, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Refresh(
+		context.Background(), left.Add(2*time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	returned := planFor(t, repository, "AAA", tradingDate)
+	if returned.Status != strategy.StatusWatching {
+		t.Fatalf("returned status = %q, want WATCH", returned.Status)
+	}
+	if returned.LeftTopNAt != nil {
+		t.Fatalf("grace clock should reset on return: %v", returned.LeftTopNAt)
+	}
+}
+
+// A pullback is one reclaim away from firing, so it earns more patience than a
+// plan that is still only watching.
+func TestCoordinatorGivesPullbackALongerRetentionGrace(t *testing.T) {
+	tradingDate := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
+	left := start.Add(time.Minute)
+	newRepository := func(status strategy.Status) *strategyRepository {
+		return &strategyRepository{
+			candidates: []strategy.Candidate{
+				{Ticker: "BBB", Rank: 1, Score: 90, TradingDate: tradingDate},
+			},
+			active: []strategy.Plan{func() strategy.Plan {
+				plan := retentionPlan("AAA", status, tradingDate, start)
+				plan.LeftTopNAt = &left
+				return plan
+			}()},
+			plans: make(map[string]strategy.Plan),
+		}
+	}
+	at := left.Add(4 * time.Minute)
+	watching := newRepository(strategy.StatusWatching)
+	watchCoordinator, err := strategy.NewCoordinator(
+		watching, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := watchCoordinator.Refresh(context.Background(), at); err != nil {
+		t.Fatal(err)
+	}
+	if got := planFor(t, watching, "AAA", tradingDate); got.Status !=
+		strategy.StatusInvalidated {
+		t.Fatalf("watch plan status = %q, want INVALIDATED", got.Status)
+	}
+	pulling := newRepository(strategy.StatusPullback)
+	pullbackCoordinator, err := strategy.NewCoordinator(
+		pulling, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pullbackCoordinator.Refresh(context.Background(), at); err != nil {
+		t.Fatal(err)
+	}
+	got, tracked := trackedPlan(t, pullbackCoordinator, "AAA")
+	if !tracked {
+		t.Fatal("pullback plan was dropped inside its longer grace window")
+	}
+	if got.Status != strategy.StatusPullback {
+		t.Fatalf("pullback plan status = %q, want PULLBACK", got.Status)
+	}
+}
+
+// Retention widens who may keep running; it must never widen who may start.
+func TestCoordinatorStartsPlansOnlyForEntryTier(t *testing.T) {
+	tradingDate := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
+	repository := &strategyRepository{
+		candidates: []strategy.Candidate{
+			{Ticker: "AAA", Rank: 1, Score: 90, TradingDate: tradingDate},
+			{Ticker: "BBB", Rank: 2, Score: 80, TradingDate: tradingDate},
+			{Ticker: "CCC", Rank: 3, Score: 70, TradingDate: tradingDate},
+		},
+		plans: make(map[string]strategy.Plan),
+	}
+	coordinator, err := strategy.NewCoordinator(
+		repository, &strategyExecutor{}, retentionConfig(3, 3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Refresh(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	plans := coordinator.Plans()
+	if len(plans) != 1 || plans[0].Ticker != "AAA" {
+		t.Fatalf("entry tier plans = %#v, want only AAA", plans)
 	}
 }

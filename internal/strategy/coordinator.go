@@ -70,11 +70,20 @@ type CoordinatorConfig struct {
 	BlockEntries  bool
 	Mode          string
 	MaxCandidates int
-	RiskAmount    float64
-	RetryDelay    time.Duration
-	FlowWindow    time.Duration
-	HoldTickers   []string
-	Engine        Config
+	// RetentionRank is the wider rank band an already-running plan may occupy
+	// before its grace window starts. Entries still require MaxCandidates, so
+	// this widens who may keep working, never who may start. Zero disables
+	// retention and a plan is dropped the moment it leaves the entry tier.
+	RetentionRank int
+	// RetentionGrace is how long a plan survives outside RetentionRank before
+	// it is abandoned. A pullback is one reclaim away from firing, so it is
+	// given twice this window. Zero drops the plan immediately.
+	RetentionGrace time.Duration
+	RiskAmount     float64
+	RetryDelay     time.Duration
+	FlowWindow     time.Duration
+	HoldTickers    []string
+	Engine         Config
 }
 
 type Coordinator struct {
@@ -105,6 +114,11 @@ func NewCoordinator(
 	if config.MaxCandidates < 1 || config.MaxCandidates > 10 ||
 		config.RiskAmount <= 0 || config.RetryDelay <= 0 {
 		return nil, errors.New("invalid strategy coordinator configuration")
+	}
+	if config.RetentionRank < 0 || config.RetentionGrace < 0 ||
+		(config.RetentionRank > 0 &&
+			config.RetentionRank < config.MaxCandidates) {
+		return nil, errors.New("invalid strategy retention configuration")
 	}
 	if config.FlowWindow == 0 {
 		config.FlowWindow = 5 * time.Second
@@ -228,41 +242,77 @@ func (coordinator *Coordinator) Refresh(
 		}
 		active[index] = plan
 	}
-	candidates, err := coordinator.repository.TopCandidates(
-		ctx,
+	// One query serves both tiers: the head of the ranking is the entry tier
+	// that may start new plans, and the full band is the retention tier that
+	// keeps existing setups alive through ordinary rank churn.
+	fetchLimit := max(
 		coordinator.config.MaxCandidates,
+		coordinator.config.RetentionRank,
 	)
+	ranked, err := coordinator.repository.TopCandidates(ctx, fetchLimit)
 	if err != nil {
 		return fmt.Errorf("loading strategy candidates: %w", err)
 	}
+	if len(ranked) > fetchLimit {
+		ranked = ranked[:fetchLimit]
+	}
+	retainedTickers := make(map[string]struct{}, len(ranked))
+	for _, candidate := range ranked {
+		ticker := strings.ToUpper(strings.TrimSpace(candidate.Ticker))
+		if ticker != "" {
+			retainedTickers[ticker] = struct{}{}
+		}
+	}
+	candidates := ranked
 	if len(candidates) > coordinator.config.MaxCandidates {
 		candidates = candidates[:coordinator.config.MaxCandidates]
 	}
-	candidateTickers := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		ticker := strings.ToUpper(strings.TrimSpace(candidate.Ticker))
-		if ticker != "" {
-			candidateTickers[ticker] = struct{}{}
-		}
-	}
 	filteredActive := make([]Plan, 0, len(active))
 	for _, plan := range active {
-		_, selected := candidateTickers[plan.Ticker]
-		if !selected &&
-			(plan.Status == StatusWatching || plan.Status == StatusPullback) {
-			plan.Status = StatusInvalidated
-			plan.LastReason = "candidate left current realtime Top N"
-			plan.UpdatedAt = now.UTC()
-			if err := coordinator.repository.SavePlan(ctx, plan); err != nil {
-				return fmt.Errorf(
-					"invalidating stale strategy plan for %s: %w",
-					plan.Ticker,
-					err,
-				)
-			}
+		if plan.Status != StatusWatching && plan.Status != StatusPullback {
+			filteredActive = append(filteredActive, plan)
 			continue
 		}
-		filteredActive = append(filteredActive, plan)
+		if _, retained := retainedTickers[plan.Ticker]; retained {
+			if plan.LeftTopNAt != nil {
+				plan.LeftTopNAt = nil
+				plan.UpdatedAt = now.UTC()
+				if err := coordinator.repository.SavePlan(ctx, plan); err != nil {
+					return fmt.Errorf(
+						"clearing retention grace for %s: %w", plan.Ticker, err,
+					)
+				}
+			}
+			filteredActive = append(filteredActive, plan)
+			continue
+		}
+		grace := coordinator.retentionGrace(plan.Status)
+		if grace > 0 && plan.LeftTopNAt == nil {
+			left := now.UTC()
+			plan.LeftTopNAt = &left
+			plan.UpdatedAt = left
+			if err := coordinator.repository.SavePlan(ctx, plan); err != nil {
+				return fmt.Errorf(
+					"arming retention grace for %s: %w", plan.Ticker, err,
+				)
+			}
+			filteredActive = append(filteredActive, plan)
+			continue
+		}
+		if grace > 0 && now.Sub(*plan.LeftTopNAt) < grace {
+			filteredActive = append(filteredActive, plan)
+			continue
+		}
+		plan.Status = StatusInvalidated
+		plan.LastReason = "candidate left current realtime Top N"
+		plan.UpdatedAt = now.UTC()
+		if err := coordinator.repository.SavePlan(ctx, plan); err != nil {
+			return fmt.Errorf(
+				"invalidating stale strategy plan for %s: %w",
+				plan.Ticker,
+				err,
+			)
+		}
 	}
 	active = filteredActive
 
@@ -353,6 +403,20 @@ func (coordinator *Coordinator) Refresh(
 		}
 	}
 	return nil
+}
+
+// retentionGrace returns how long a plan in status may stay outside the
+// retention rank band. A pullback has already produced its setup and only
+// needs the reclaim, so abandoning it costs more than abandoning a plan that
+// is still merely watching.
+func (coordinator *Coordinator) retentionGrace(status Status) time.Duration {
+	if coordinator.config.RetentionGrace <= 0 {
+		return 0
+	}
+	if status == StatusPullback {
+		return 2 * coordinator.config.RetentionGrace
+	}
+	return coordinator.config.RetentionGrace
 }
 
 func (coordinator *Coordinator) persistedHigh(

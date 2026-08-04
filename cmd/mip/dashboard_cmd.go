@@ -1022,12 +1022,14 @@ func startAutonomousStrategy(
 			Enabled: true, Mode: appConfig.TradingMode,
 			BlockEntries: appConfig.TradingMode == string(execution.ModeLive) &&
 				!appConfig.AutoLiveEntriesEnabled,
-			MaxCandidates: appConfig.AutoMaxCandidates,
-			RiskAmount:    appConfig.AutoRiskPerTrade,
-			RetryDelay:    appConfig.AutoRetryDelay,
-			FlowWindow:    appConfig.StrategyFlowWindow,
-			HoldTickers:   appConfig.StrategyHoldTickers,
-			Engine:        strategyEngineConfig(appConfig),
+			MaxCandidates:  appConfig.AutoMaxCandidates,
+			RetentionRank:  appConfig.StrategyRetentionRank,
+			RetentionGrace: appConfig.StrategyRetentionGrace,
+			RiskAmount:     appConfig.AutoRiskPerTrade,
+			RetryDelay:     appConfig.AutoRetryDelay,
+			FlowWindow:     appConfig.StrategyFlowWindow,
+			HoldTickers:    appConfig.StrategyHoldTickers,
+			Engine:         strategyEngineConfig(appConfig),
 		},
 	)
 	if err != nil {

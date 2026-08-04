@@ -59,6 +59,8 @@ type Config struct {
 	AutomaticTrading               bool
 	AutoLiveEntriesEnabled         bool
 	AutoMaxCandidates              int
+	StrategyRetentionRank          int
+	StrategyRetentionGrace         time.Duration
 	AutoRiskPerTrade               float64
 	AutoRetryDelay                 time.Duration
 	AutoEntryOrderTimeout          time.Duration
@@ -330,6 +332,16 @@ func load(requireMassive bool) (Config, error) {
 		return Config{}, err
 	}
 	config.AutoMaxCandidates, err = intEnv("AUTO_MAX_CANDIDATES", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	config.StrategyRetentionRank, err = intEnv("STRATEGY_RETENTION_RANK", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	config.StrategyRetentionGrace, err = durationEnv(
+		"STRATEGY_RETENTION_GRACE", 0,
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -760,6 +772,18 @@ func load(requireMassive bool) (Config, error) {
 	}
 	if config.AutoMaxCandidates < 1 || config.AutoMaxCandidates > 10 {
 		return Config{}, errors.New("AUTO_MAX_CANDIDATES must be between 1 and 10")
+	}
+	if config.StrategyRetentionRank < 0 ||
+		config.StrategyRetentionRank > 100 {
+		return Config{}, errors.New(
+			"STRATEGY_RETENTION_RANK must be between 0 and 100",
+		)
+	}
+	if config.StrategyRetentionGrace < 0 ||
+		config.StrategyRetentionGrace > time.Hour {
+		return Config{}, errors.New(
+			"STRATEGY_RETENTION_GRACE must not exceed one hour",
+		)
 	}
 	if config.ShadowMaxCandidates < 1 || config.ShadowMaxCandidates > 10 {
 		return Config{}, errors.New("SHADOW_MAX_CANDIDATES must be between 1 and 10")

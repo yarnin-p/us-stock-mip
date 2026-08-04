@@ -95,9 +95,14 @@ type Plan struct {
 	OrderFlow           OrderFlow  `json:"order_flow"`
 	LastReason          string     `json:"last_reason,omitempty"`
 	RetryAfter          *time.Time `json:"retry_after,omitempty"`
-	TradingDate         time.Time  `json:"trading_date"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	// LeftTopNAt is when the candidate last fell outside the retention rank
+	// band. It arms the retention grace window and is cleared as soon as the
+	// candidate returns, so a setup is only abandoned after a sustained
+	// absence rather than after a single noisy ranking refresh.
+	LeftTopNAt  *time.Time `json:"left_top_n_at,omitempty"`
+	TradingDate time.Time  `json:"trading_date"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type Quote struct {
