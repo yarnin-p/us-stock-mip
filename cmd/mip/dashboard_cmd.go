@@ -905,6 +905,8 @@ func startBoundaryShadow(
 	logger.Info(
 		"AH boundary catalyst shadow started",
 		"entry_window", "15:55-16:00 America/New_York",
+		"min_relative_volume", appConfig.BoundaryMinRelativeVolume,
+		"volume_lane", appConfig.BoundaryMinRelativeVolume > 0,
 		"max_candidates", appConfig.BoundaryShadowMaxCandidates,
 		"total_notional_thb", appConfig.BoundaryShadowTotalNotionalTHB,
 		"usd_thb", appConfig.BoundaryShadowUSDTHB,

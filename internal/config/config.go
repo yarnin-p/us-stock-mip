@@ -831,7 +831,10 @@ func load(requireMassive bool) (Config, error) {
 		config.BoundaryShadowTotalNotionalTHB <= 0 ||
 		config.BoundaryShadowUSDTHB <= 0 ||
 		config.BoundaryShadowNewsLookback < time.Hour ||
-		config.BoundaryShadowNewsLookback > 24*time.Hour ||
+		// The selector itself accepts up to seven days. A 24-hour cap here was
+		// the tighter of the two and made a weekend-spanning window, which the
+		// captured sessions showed is needed, impossible to configure.
+		config.BoundaryShadowNewsLookback > 7*24*time.Hour ||
 		config.BoundaryShadowMinCatalyst <= 0 ||
 		config.BoundaryShadowMinCatalyst > 1 ||
 		config.BoundaryShadowMinVolume < 0 ||
