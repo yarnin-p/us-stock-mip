@@ -99,7 +99,19 @@ func (store *Store) BoundaryCandidates(
 				WHERE latest_news.ticker = volume_lane.ticker
 			)
 		)
+		SELECT * FROM (
 		SELECT
+			-- Each lane gets its own quota. Ordering the union by catalyst score
+			-- let the news lane consume the whole limit, so the tape lane never
+			-- reached the selector however extreme its volume was.
+			ROW_NUMBER() OVER (
+				PARTITION BY universe.lane
+				ORDER BY
+					COALESCE(latest_news.catalyst_score, 0) DESC,
+					universe.relative_volume DESC,
+					latest_news.available_at DESC NULLS LAST,
+					universe.ticker
+			) AS lane_rank,
 			universe.ticker,
 			universe.lane,
 			universe.relative_volume,
@@ -151,7 +163,8 @@ func (store *Store) BoundaryCandidates(
 			universe.relative_volume DESC,
 			latest_news.available_at DESC NULLS LAST,
 			universe.ticker
-		LIMIT $3`,
+		) AS ranked
+		WHERE ranked.lane_rank <= $3`,
 		asOf.UTC(),
 		asOf.UTC().Add(-lookback),
 		limit,
@@ -168,7 +181,9 @@ func (store *Store) BoundaryCandidates(
 		var item catalyst.Candidate
 		var quoteObservedAt, signalObservedAt *time.Time
 		var publishedAt, availableAt *time.Time
+		var laneRank int
 		if err := rows.Scan(
+			&laneRank,
 			&item.Ticker,
 			&item.Lane,
 			&item.RelativeVolume,
