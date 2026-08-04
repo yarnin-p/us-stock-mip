@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"time"
 
+	"github.com/momentum-intelligence-platform/mip/internal/boundary"
 	"github.com/momentum-intelligence-platform/mip/internal/config"
 	"github.com/momentum-intelligence-platform/mip/internal/opening"
 	"github.com/momentum-intelligence-platform/mip/internal/postgres"
@@ -53,7 +55,50 @@ func runAHOutcomes(args []string, stdout, stderr io.Writer) error {
 		)
 	}
 	fmt.Fprintf(stdout, "captured %d rows across %d dates\n", total, len(dates))
+
+	watched, err := refreshCatalystWatchlist(ctx, store, dates[0])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "watchlist: %d scheduled catalysts\n", watched)
 	return nil
+}
+
+// refreshCatalystWatchlist parks forward-dated headlines on the day they will
+// matter. A headline announcing results "on August 12" is not a catalyst when
+// it is published; scoring it as one invents an event that has not happened and
+// loses the date on which it will.
+func refreshCatalystWatchlist(
+	ctx context.Context,
+	store *postgres.Store,
+	since time.Time,
+) (int, error) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		location = time.UTC
+	}
+	headlines, err := store.PendingScheduleHeadlines(
+		ctx, since.AddDate(0, 0, -7), 20000,
+	)
+	if err != nil {
+		return 0, err
+	}
+	saved := 0
+	for _, headline := range headlines {
+		event, ok := boundary.ExtractSchedule(
+			headline.Title, headline.AvailableAt, location,
+		)
+		if !ok {
+			continue
+		}
+		if err := store.SaveCatalystWatch(
+			ctx, headline.Ticker, event, headline,
+		); err != nil {
+			return saved, err
+		}
+		saved++
+	}
+	return saved, nil
 }
 
 // outcomeDates resolves the requested window to trading days. A bare command

@@ -97,7 +97,10 @@ features AS (
 		news.catalyst_score   AS news_catalyst_score,
 		news.sentiment        AS news_sentiment,
 		news.title            AS news_title,
-		news.available_at     AS news_available_at
+		news.available_at     AS news_available_at,
+		news_volume.items     AS news_items,
+		post_close.available_at AS post_close_at,
+		post_close.title        AS post_close_title
 	FROM ah
 	LEFT JOIN stocks ON stocks.ticker = ah.ticker
 	LEFT JOIN LATERAL (
@@ -129,6 +132,32 @@ features AS (
 			items.available_at DESC
 		LIMIT 1
 	) AS news ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT count(*) AS items
+		FROM news AS items, bounds
+		WHERE items.ticker = ah.ticker
+			AND items.available_at <= bounds.cutoff
+			AND items.available_at >= bounds.cutoff - ($2::interval)
+	) AS news_volume ON TRUE
+	-- Explanatory only: a headline that landed after the cutoff tells us why a
+	-- move happened but was not knowable when the scan ran.
+	LEFT JOIN LATERAL (
+		SELECT items.available_at, items.title
+		FROM news AS items, bounds
+		WHERE items.ticker = ah.ticker
+			AND items.available_at > bounds.cutoff
+			AND items.available_at <= bounds.ah_close
+		ORDER BY items.available_at
+		LIMIT 1
+	) AS post_close ON TRUE
+),
+-- Feed health for the date. A row with no headline on a day the feed produced
+-- almost nothing is NO_STORED_CATALYST, not evidence of a catalyst-free move.
+feed AS (
+	SELECT count(*) AS rows
+	FROM news, bounds
+	WHERE news.available_at >= bounds.cutoff - ($2::interval)
+		AND news.available_at <= bounds.ah_close
 ),
 -- First crossing of each level, measured against the same reference.
 crossings AS (
@@ -158,7 +187,9 @@ INSERT INTO ah_boundary_outcomes (
 	signal_price, signal_volume, signal_change_ratio, signal_score,
 	signal_observed_at, float_shares, float_rotation,
 	has_news, news_catalyst_score, news_sentiment, news_title,
-	news_available_at,
+	news_available_at, news_age_hours, news_items_7d,
+	post_close_news, post_close_news_at, post_close_news_title,
+	news_feed_rows,
 	ah_observations, ah_first_at, ah_last_at,
 	ah_high, ah_low, ah_close, ah_mfe, ah_mae, ah_close_return,
 	first_10pct_at, first_20pct_at, first_50pct_at,
@@ -186,6 +217,18 @@ SELECT
 	features.news_sentiment,
 	left(features.news_title, 300),
 	features.news_available_at,
+	CASE
+		WHEN features.news_available_at IS NOT NULL
+		THEN EXTRACT(epoch FROM (
+			($1::date + TIME '15:55') AT TIME ZONE 'America/New_York'
+			- features.news_available_at
+		)) / 3600.0
+	END,
+	COALESCE(features.news_items, 0),
+	features.post_close_at IS NOT NULL,
+	features.post_close_at,
+	left(features.post_close_title, 300),
+	COALESCE(feed.rows, 0),
 	ah.observations,
 	ah.first_at,
 	ah.last_at,
@@ -204,6 +247,7 @@ FROM ah
 JOIN reference ON reference.ticker = ah.ticker
 JOIN features ON features.ticker = ah.ticker
 LEFT JOIN crossings ON crossings.ticker = ah.ticker
+CROSS JOIN feed
 WHERE reference.price > 0 AND ah.low > 0
 ON CONFLICT (trading_date, ticker) DO UPDATE SET
 	reference_price = EXCLUDED.reference_price,
@@ -222,6 +266,12 @@ ON CONFLICT (trading_date, ticker) DO UPDATE SET
 	news_sentiment = EXCLUDED.news_sentiment,
 	news_title = EXCLUDED.news_title,
 	news_available_at = EXCLUDED.news_available_at,
+	news_age_hours = EXCLUDED.news_age_hours,
+	news_items_7d = EXCLUDED.news_items_7d,
+	post_close_news = EXCLUDED.post_close_news,
+	post_close_news_at = EXCLUDED.post_close_news_at,
+	post_close_news_title = EXCLUDED.post_close_news_title,
+	news_feed_rows = EXCLUDED.news_feed_rows,
 	ah_observations = EXCLUDED.ah_observations,
 	ah_first_at = EXCLUDED.ah_first_at,
 	ah_last_at = EXCLUDED.ah_last_at,
@@ -246,5 +296,9 @@ ON CONFLICT (trading_date, ticker) DO UPDATE SET
 }
 
 // newsLookbackInterval bounds how stale a headline may be and still count as
-// the decision-time catalyst. It matches the boundary selector's own lookback.
-const newsLookbackInterval = "8 hours"
+// decision-time context. Eight hours was too narrow: a Friday catalyst that
+// pays on Monday fell outside it entirely, and a Monday scan could not see the
+// weekend at all. Seven days keeps the whole prior week in view; recency is
+// preserved as news_age_hours so a model can weigh it rather than having the
+// window decide for it.
+const newsLookbackInterval = "168 hours"
