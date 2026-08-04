@@ -34,15 +34,16 @@ type AggregateBar struct {
 }
 
 type Stock struct {
-	ID          int64
-	Ticker      string
-	CompanyName string
-	Exchange    string
-	Sector      string
-	MarketCap   *float64
-	FloatShares *int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           int64
+	Ticker       string
+	CompanyName  string
+	Exchange     string
+	Sector       string
+	SecurityType string
+	MarketCap    *float64
+	FloatShares  *int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type DailyPrice struct {
@@ -105,4 +106,34 @@ type Trade struct {
 	Notes      string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+type FeatureSnapshot struct {
+	ID                   int64
+	StockID              int64
+	Ticker               string
+	AsOf                 time.Time
+	GapPercent           *float64
+	PremarketChange      *float64
+	AfterHourChange      *float64
+	Return1D             *float64
+	RelativeVolume       *float64
+	VolumeSpike          *float64
+	FloatRotation        *float64
+	EMA                  *float64
+	VWAPDistance         *float64
+	BreakoutStrength     *float64
+	NewsScore            *float64
+	FDAScore             *float64
+	MAScore              *float64
+	ThemeScore           *float64
+	ATMRisk              *float64
+	OfferingRisk         *float64
+	ReverseSplitCount    *int32
+	CalculatorVersion    int
+	RelativeVolumePeriod int
+	EMAPeriod            int
+	BreakoutPeriod       int
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
