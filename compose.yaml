@@ -18,6 +18,20 @@ services:
       retries: 12
     restart: unless-stopped
 
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   migrate:
     image: migrate/migrate:v4.19.1
     profiles: ["tools"]
@@ -44,5 +58,44 @@ services:
       postgres:
         condition: service_healthy
 
+  api:
+    build:
+      context: .
+    command:
+      - "serve"
+      - "--addr=:8080"
+      - "--allowed-origin=${ALLOWED_ORIGIN:-http://localhost:3001,http://127.0.0.1:3001}"
+      - "--quote-tickers=${QUOTE_TICKERS:-}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-mip}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-mip}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      WEBULL_ACCESS_TOKEN_FILE: /run/secrets/webull-token.txt
+      MIP_ML_PYTHON: /usr/local/bin/python3
+    volumes:
+      - ./.secrets/webull-token.txt:/run/secrets/webull-token.txt:ro
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8080}
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-3001}:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  redis-data:

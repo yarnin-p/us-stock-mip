@@ -2,9 +2,12 @@
 .idea
 .env
 .env.*
+.secrets
+.venv
 bin
 coverage.out
 mip
 outputs
 tmp
 work
+web

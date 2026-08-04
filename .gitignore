@@ -1,6 +1,7 @@
 .DS_Store
 .idea/
 .env
+.secrets/
 .env.*
 !.env.example
 /bin/
@@ -10,3 +11,6 @@
 /outputs/
 /tmp/
 /work/
+/.venv/
+__pycache__/
+*.pyc

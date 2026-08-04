@@ -1,13 +1,26 @@
-.PHONY: build db-up db-down migrate-up migrate-down test test-race test-integration lint fmt
+.PHONY: build ml-setup db-up db-down dashboard-up dashboard-down dashboard-dev migrate-up migrate-down test test-race test-integration lint fmt
 
 build:
 	go build -o bin/mip ./cmd/mip
+
+ml-setup:
+	python3.12 -m venv .venv
+	.venv/bin/python -m pip install -r requirements-ml.txt
 
 db-up:
 	docker compose up -d postgres
 
 db-down:
 	docker compose down
+
+dashboard-up:
+	docker compose up -d --build redis api dashboard
+
+dashboard-down:
+	docker compose stop dashboard api redis
+
+dashboard-dev:
+	cd web && npm run dev
 
 migrate-up:
 	docker compose --profile tools run --rm migrate
