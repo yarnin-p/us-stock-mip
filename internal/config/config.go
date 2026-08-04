@@ -59,6 +59,7 @@ type Config struct {
 	AutomaticTrading               bool
 	AutoLiveEntriesEnabled         bool
 	AutoMaxCandidates              int
+	BoundaryMinRelativeVolume      float64
 	FilingWatchPinnedTickers       []string
 	StrategyRetentionRank          int
 	StrategyRetentionGrace         time.Duration
@@ -333,6 +334,12 @@ func load(requireMassive bool) (Config, error) {
 		return Config{}, err
 	}
 	config.AutoMaxCandidates, err = intEnv("AUTO_MAX_CANDIDATES", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	config.BoundaryMinRelativeVolume, err = floatEnv(
+		"BOUNDARY_MIN_RELATIVE_VOLUME", 0,
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -779,6 +786,12 @@ func load(requireMassive bool) (Config, error) {
 	}
 	if config.AutoMaxCandidates < 1 || config.AutoMaxCandidates > 10 {
 		return Config{}, errors.New("AUTO_MAX_CANDIDATES must be between 1 and 10")
+	}
+	if config.BoundaryMinRelativeVolume < 0 ||
+		config.BoundaryMinRelativeVolume > 1000 {
+		return Config{}, errors.New(
+			"BOUNDARY_MIN_RELATIVE_VOLUME must be between 0 and 1000",
+		)
 	}
 	if config.StrategyRetentionRank < 0 ||
 		config.StrategyRetentionRank > 100 {

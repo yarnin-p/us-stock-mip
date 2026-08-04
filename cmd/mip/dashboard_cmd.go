@@ -802,6 +802,7 @@ func startBoundaryShadow(
 	},
 ) (autonomousStrategyHandlers, error) {
 	selector, err := catalyst.NewSelector(catalyst.BoundaryConfig{
+		MinRelativeVolume:   appConfig.BoundaryMinRelativeVolume,
 		MaxCandidates:       appConfig.BoundaryShadowMaxCandidates,
 		TotalNotionalTHB:    appConfig.BoundaryShadowTotalNotionalTHB,
 		USDTHB:              appConfig.BoundaryShadowUSDTHB,
