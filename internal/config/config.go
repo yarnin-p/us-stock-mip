@@ -59,6 +59,7 @@ type Config struct {
 	AutomaticTrading               bool
 	AutoLiveEntriesEnabled         bool
 	AutoMaxCandidates              int
+	FilingWatchPinnedTickers       []string
 	StrategyRetentionRank          int
 	StrategyRetentionGrace         time.Duration
 	AutoRiskPerTrade               float64
@@ -332,6 +333,12 @@ func load(requireMassive bool) (Config, error) {
 		return Config{}, err
 	}
 	config.AutoMaxCandidates, err = intEnv("AUTO_MAX_CANDIDATES", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	config.FilingWatchPinnedTickers, err = tickerListEnv(
+		"FILING_WATCH_PINNED_TICKERS",
+	)
 	if err != nil {
 		return Config{}, err
 	}

@@ -21,11 +21,18 @@ type FilingMonitorConfig struct {
 	Interval time.Duration
 	Lookback time.Duration
 	Count    int
+	// PinnedTickers are followed regardless of form type. The market-wide
+	// filter keeps only forms that are material for an unknown company, but a
+	// name already held or under active research needs its whole filing
+	// history: a prospectus supplement or a routine foreign report can be the
+	// decisive document once you own the position.
+	PinnedTickers []string
 }
 
 type FilingMonitorReport struct {
 	Filings            int       `json:"filings"`
 	OwnershipCatalysts int       `json:"ownership_catalysts"`
+	PinnedFilings      int       `json:"pinned_filings"`
 	CompletedAt        time.Time `json:"completed_at"`
 }
 
@@ -34,6 +41,7 @@ type FilingMonitor struct {
 	repository NewsRepository
 	scorer     *intelligence.Scorer
 	config     FilingMonitorConfig
+	pinned     map[string]struct{}
 	mu         sync.Mutex
 	seen       map[string]struct{}
 }
@@ -56,11 +64,26 @@ func NewFilingMonitor(
 		config.Count > 1000 {
 		return nil, errors.New("invalid current filing monitor configuration")
 	}
+	pinned := make(map[string]struct{}, len(config.PinnedTickers))
+	for _, raw := range config.PinnedTickers {
+		ticker := strings.ToUpper(strings.TrimSpace(raw))
+		if ticker == "" {
+			return nil, errors.New("pinned filing ticker must not be empty")
+		}
+		pinned[ticker] = struct{}{}
+	}
 	return &FilingMonitor{
 		source: source, repository: repository,
 		scorer: intelligence.NewScorer(), config: config,
-		seen: make(map[string]struct{}),
+		pinned: pinned,
+		seen:   make(map[string]struct{}),
 	}, nil
+}
+
+// Pinned reports whether a ticker is followed regardless of form type.
+func (monitor *FilingMonitor) Pinned(ticker string) bool {
+	_, ok := monitor.pinned[strings.ToUpper(strings.TrimSpace(ticker))]
+	return ok
 }
 
 func (monitor *FilingMonitor) Sync(
@@ -79,10 +102,11 @@ func (monitor *FilingMonitor) Sync(
 	for _, item := range items {
 		ticker := strings.ToUpper(strings.TrimSpace(item.Ticker))
 		form := strings.ToUpper(strings.TrimSpace(item.FormType))
+		pinned := monitor.Pinned(ticker)
 		if ticker == "" ||
 			item.AcceptedAt.After(now) ||
 			item.AcceptedAt.Before(now.Add(-monitor.config.Lookback)) ||
-			!materialFilingForm(form) {
+			(!pinned && !materialFilingForm(form)) {
 			continue
 		}
 		key := ticker + ":" + item.AccessionNo
@@ -156,6 +180,10 @@ func (monitor *FilingMonitor) Sync(
 			report.OwnershipCatalysts++
 			alertType = "STRONG_CATALYST_NEWS"
 			title = "Ownership catalyst detected"
+		} else if pinned {
+			report.PinnedFilings++
+			alertType = "STRONG_CATALYST_NEWS"
+			title = "Filing from a pinned ticker"
 		}
 		tickerCopy := ticker
 		if err := monitor.repository.RecordAlert(

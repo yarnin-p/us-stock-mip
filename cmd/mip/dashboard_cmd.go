@@ -760,9 +760,10 @@ func startCurrentFilingMonitor(
 		client,
 		store,
 		catalyst.FilingMonitorConfig{
-			Interval: interval,
-			Lookback: lookback,
-			Count:    count,
+			Interval:      interval,
+			Lookback:      lookback,
+			Count:         count,
+			PinnedTickers: appConfig.FilingWatchPinnedTickers,
 		},
 	)
 	if err != nil {
@@ -1563,6 +1564,46 @@ func startDailyScheduler(
 					"--research-limit=0",
 					"--format=json",
 				)
+			},
+		},
+		{
+			// A collection gap produces no error, only fewer rows, so it has to
+			// be checked against a normal day. Two sessions were lost before
+			// anyone noticed; this makes the next one visible the morning after.
+			name: "news_coverage", environment: "SCHEDULE_NEWS_COVERAGE",
+			defaultClock: "07:05",
+			run: func(jobContext context.Context) error {
+				health, err := store.CheckNewsCoverage(jobContext, 0.5)
+				if err != nil {
+					return err
+				}
+				if health.Degraded {
+					logger.Error(
+						"news coverage degraded",
+						"date", health.Date,
+						"rows", health.Rows,
+						"median_rows", health.MedianRows,
+						"ratio", health.RatioOfNorm,
+					)
+					ticker := ""
+					return store.RecordAlert(
+						jobContext,
+						"NEWS_COVERAGE_DEGRADED", "WARNING", &ticker,
+						"Headline collection fell below normal",
+						fmt.Sprintf(
+							"%s stored %d headlines against a 14-day median of %d.",
+							health.Date, health.Rows, health.MedianRows,
+						),
+						"news-coverage:"+health.Date,
+					)
+				}
+				logger.Info(
+					"news coverage healthy",
+					"date", health.Date,
+					"rows", health.Rows,
+					"median_rows", health.MedianRows,
+				)
+				return nil
 			},
 		},
 		{

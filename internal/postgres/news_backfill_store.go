@@ -123,3 +123,60 @@ func (store *Store) NewsCoverage(
 		return item, err
 	})
 }
+
+// NewsCoverageHealth compares the latest completed day against the recent
+// median. A collection gap is silent by nature — the table simply has fewer
+// rows — so it has to be measured against what a normal day looks like rather
+// than against zero.
+type NewsCoverageHealth struct {
+	Date        string
+	Rows        int
+	MedianRows  int
+	RatioOfNorm float64
+	Degraded    bool
+}
+
+func (store *Store) CheckNewsCoverage(
+	ctx context.Context,
+	minRatio float64,
+) (NewsCoverageHealth, error) {
+	if minRatio <= 0 || minRatio > 1 {
+		return NewsCoverageHealth{}, fmt.Errorf(
+			"news coverage ratio must be between 0 and 1",
+		)
+	}
+	var health NewsCoverageHealth
+	err := store.pool.QueryRow(ctx, `
+		WITH daily AS (
+			SELECT
+				(available_at AT TIME ZONE 'America/New_York')::date AS day,
+				count(*) AS rows
+			FROM news
+			WHERE available_at >= NOW() - INTERVAL '14 days'
+				AND available_at < date_trunc(
+					'day', NOW() AT TIME ZONE 'America/New_York'
+				)
+			GROUP BY 1
+		),
+		latest AS (SELECT day, rows FROM daily ORDER BY day DESC LIMIT 1)
+		SELECT
+			to_char(latest.day, 'YYYY-MM-DD'),
+			latest.rows,
+			COALESCE(
+				percentile_cont(0.5) WITHIN GROUP (ORDER BY daily.rows), 0
+			)::int
+		FROM latest, daily
+		GROUP BY latest.day, latest.rows`).Scan(
+		&health.Date, &health.Rows, &health.MedianRows,
+	)
+	if err != nil {
+		return NewsCoverageHealth{}, fmt.Errorf(
+			"checking news coverage: %w", err,
+		)
+	}
+	if health.MedianRows > 0 {
+		health.RatioOfNorm = float64(health.Rows) / float64(health.MedianRows)
+		health.Degraded = health.RatioOfNorm < minRatio
+	}
+	return health, nil
+}

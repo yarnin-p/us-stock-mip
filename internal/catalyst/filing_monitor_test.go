@@ -94,3 +94,84 @@ func TestFilingMonitorDoesNotPromoteSchedule13DAWithoutStakeIncrease(t *testing.
 		t.Fatalf("alerts = %#v", repository.alerts)
 	}
 }
+
+// Once a position is held, the market-wide materiality filter is the wrong
+// filter: a prospectus supplement or a routine foreign report can be the
+// decisive document. A pinned ticker is therefore followed on every form.
+func TestFilingMonitorFollowsEveryFormForPinnedTickers(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	repository := &newsRepositoryStub{}
+	monitor, err := catalyst.NewFilingMonitor(
+		&filingSourceStub{items: []sec.CurrentFiling{
+			{
+				Ticker: "KWM", CompanyName: "K Wave Media",
+				FormType: "F-3", AccessionNo: "0001-26-000001",
+				AcceptedAt: now.Add(-time.Minute),
+				SourceURL:  "https://sec.example/kwm",
+			},
+			{
+				Ticker: "OTHER", CompanyName: "Unpinned Corp",
+				FormType: "F-3", AccessionNo: "0002-26-000002",
+				AcceptedAt: now.Add(-time.Minute),
+				SourceURL:  "https://sec.example/other",
+			},
+		}},
+		repository,
+		catalyst.FilingMonitorConfig{
+			Interval: time.Minute, Lookback: 24 * time.Hour, Count: 50,
+			PinnedTickers: []string{"kwm"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !monitor.Pinned("KWM") || monitor.Pinned("OTHER") {
+		t.Fatal("pinned set did not normalise its tickers")
+	}
+	report, err := monitor.Sync(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Filings != 1 || report.PinnedFilings != 1 {
+		t.Fatalf("report = %#v, want only the pinned F-3", report)
+	}
+	if len(repository.alerts) != 1 ||
+		repository.alerts[0] != "STRONG_CATALYST_NEWS" {
+		t.Fatalf("alerts = %#v", repository.alerts)
+	}
+}
+
+// Pinning must not weaken the market-wide filter for everyone else.
+func TestFilingMonitorKeepsMaterialityFilterForUnpinnedTickers(t *testing.T) {
+	now := time.Date(2026, 8, 4, 15, 0, 0, 0, time.UTC)
+	repository := &newsRepositoryStub{}
+	monitor, err := catalyst.NewFilingMonitor(
+		&filingSourceStub{items: []sec.CurrentFiling{
+			{
+				Ticker: "OTHER", CompanyName: "Unpinned Corp",
+				FormType: "F-3", AccessionNo: "0002-26-000002",
+				AcceptedAt: now.Add(-time.Minute),
+			},
+			{
+				Ticker: "OTHER", CompanyName: "Unpinned Corp",
+				FormType: "8-K", AccessionNo: "0003-26-000003",
+				AcceptedAt: now.Add(-time.Minute),
+			},
+		}},
+		repository,
+		catalyst.FilingMonitorConfig{
+			Interval: time.Minute, Lookback: 24 * time.Hour, Count: 50,
+			PinnedTickers: []string{"KWM"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := monitor.Sync(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Filings != 1 || report.PinnedFilings != 0 {
+		t.Fatalf("report = %#v, want only the 8-K", report)
+	}
+}
