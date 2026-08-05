@@ -1614,26 +1614,47 @@ func startDailyScheduler(
 			// session it labels is complete. Reads only stored observations, so
 			// a missed day is recovered by re-running the date.
 			name: "ah_outcomes", environment: "SCHEDULE_AH_OUTCOMES",
-			defaultClock: "07:10",
+			// Runs after the daily bars land, not straight after the
+			// after-hours close. The regular close is what an after-hours move
+			// is measured from, and it does not exist until the daily sync;
+			// capturing earlier silently downgrades every reference to the
+			// pre-close fallback. The tape it reads is already stored, so
+			// waiting costs nothing.
+			defaultClock: "13:35",
 			run: func(jobContext context.Context) error {
-				tradingDate, err := time.Parse(
-					time.DateOnly,
-					previousUSTradingDate(time.Now()),
-				)
+				dates, err := pendingAHOutcomeDates(jobContext, store)
 				if err != nil {
 					return err
 				}
-				rows, err := store.CaptureAHBoundaryOutcomes(
-					jobContext, tradingDate,
-				)
-				if err != nil {
-					return err
+				for _, tradingDate := range dates {
+					rows, err := store.CaptureAHBoundaryOutcomes(
+						jobContext, tradingDate,
+					)
+					if err != nil {
+						return err
+					}
+					closes, fallback, mixErr := store.AHBoundaryReferenceMix(
+						jobContext, tradingDate,
+					)
+					if mixErr != nil {
+						return mixErr
+					}
+					logger.Info(
+						"after-hours boundary outcomes captured",
+						"trading_date", tradingDate.Format(time.DateOnly),
+						"rows", rows,
+						"regular_close_refs", closes,
+						"fallback_refs", fallback,
+					)
+					if fallback > closes {
+						logger.Error(
+							"after-hours labels fell back to pre-close prices",
+							"trading_date", tradingDate.Format(time.DateOnly),
+							"fallback_refs", fallback,
+							"regular_close_refs", closes,
+						)
+					}
 				}
-				logger.Info(
-					"after-hours boundary outcomes captured",
-					"trading_date", tradingDate.Format(time.DateOnly),
-					"rows", rows,
-				)
 				return nil
 			},
 		},
@@ -1957,6 +1978,40 @@ func startDailyScheduler(
 	}()
 	logger.Info("daily scheduler started", "timezone", locationName)
 	return nil
+}
+
+// pendingAHOutcomeDates lists the trading days that still need labelling: every
+// session from the one after the last capture up to the previous close. A day
+// missed because the process was down would otherwise stay missing, and the
+// gap only shows up when someone counts dates by hand.
+func pendingAHOutcomeDates(
+	ctx context.Context,
+	store *postgres.Store,
+) ([]time.Time, error) {
+	last, found, err := store.LastCapturedAHBoundaryDate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse(time.DateOnly, previousUSTradingDate(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return []time.Time{end}, nil
+	}
+	dates := make([]time.Time, 0, 8)
+	for date := last.AddDate(0, 0, 1); !date.After(end); date = date.AddDate(0, 0, 1) {
+		if opening.IsTradingDay(date) {
+			dates = append(dates, date)
+		}
+	}
+	// Cap the catch-up so a long outage cannot turn one scheduled run into an
+	// unbounded backfill; the remainder is picked up by the following days.
+	const maxCatchUp = 10
+	if len(dates) > maxCatchUp {
+		dates = dates[len(dates)-maxCatchUp:]
+	}
+	return dates, nil
 }
 
 func runDailyStrategyReplays(

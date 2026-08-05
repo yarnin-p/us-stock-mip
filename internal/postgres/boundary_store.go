@@ -302,3 +302,47 @@ ON CONFLICT (trading_date, ticker) DO UPDATE SET
 // preserved as news_age_hours so a model can weigh it rather than having the
 // window decide for it.
 const newsLookbackInterval = "168 hours"
+
+// LastCapturedAHBoundaryDate returns the most recent trading date already
+// labelled, so a scheduled run can fill everything since instead of only the
+// previous session. A missed day — a restart across the job's window, a night
+// the container was down — otherwise stays missing forever, and the gap is
+// invisible until someone counts the dates by hand.
+func (store *Store) LastCapturedAHBoundaryDate(
+	ctx context.Context,
+) (time.Time, bool, error) {
+	var captured *time.Time
+	if err := store.pool.QueryRow(ctx,
+		`SELECT max(trading_date) FROM ah_boundary_outcomes`,
+	).Scan(&captured); err != nil {
+		return time.Time{}, false, fmt.Errorf(
+			"reading last captured AH boundary date: %w", err,
+		)
+	}
+	if captured == nil {
+		return time.Time{}, false, nil
+	}
+	return *captured, true, nil
+}
+
+// AHBoundaryReferenceMix reports how the references for a date were obtained.
+// The regular close defines an after-hours move, so a date dominated by the
+// pre-close fallback means the capture ran before the daily bar landed and its
+// labels are weaker than they look.
+func (store *Store) AHBoundaryReferenceMix(
+	ctx context.Context,
+	tradingDate time.Time,
+) (regularClose int, fallback int, err error) {
+	err = store.pool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE reference_source = 'regular_close'),
+			count(*) FILTER (WHERE reference_source = 'last_pre_close_signal')
+		FROM ah_boundary_outcomes
+		WHERE trading_date = $1`,
+		tradingDate.Format(time.DateOnly),
+	).Scan(&regularClose, &fallback)
+	if err != nil {
+		return 0, 0, fmt.Errorf("reading AH boundary reference mix: %w", err)
+	}
+	return regularClose, fallback, nil
+}
