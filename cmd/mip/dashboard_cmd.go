@@ -34,6 +34,7 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/scanner"
 	secclient "github.com/momentum-intelligence-platform/mip/internal/sec"
 	"github.com/momentum-intelligence-platform/mip/internal/strategy"
+	"github.com/momentum-intelligence-platform/mip/internal/ticket"
 	"github.com/momentum-intelligence-platform/mip/internal/webull"
 )
 
@@ -208,6 +209,20 @@ func runServe(args []string, stderr io.Writer) error {
 		SpikeWatcher:       store,
 		NewsCatalysts:      store,
 		RuntimeHealth:      runtimeHealth.Snapshot,
+		// Ceilings are read per request, never cached: a ticket sized against a
+		// stale view of the day's spent allowance would be sized too large.
+		TicketLimits: func() (ticket.Limits, error) {
+			return ticket.Limits{
+				MaxRiskPerTicket: appConfig.TicketMaxRisk,
+				MaxNotional:      appConfig.TicketMaxNotional,
+				MinSharePrice:    appConfig.TicketMinSharePrice,
+				MaxSharePrice:    appConfig.TicketMaxSharePrice,
+				MaxStopDistance:  appConfig.TicketMaxStopDistance,
+				MaxDailyLoss:     appConfig.TicketMaxDailyLoss,
+				MaxTicketsPerDay: appConfig.TicketMaxPerDay,
+				KillSwitch:       appConfig.TradingKillSwitch,
+			}, nil
+		},
 	})
 	server := &http.Server{
 		Addr:              address,

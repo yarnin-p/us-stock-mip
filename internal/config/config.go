@@ -59,6 +59,13 @@ type Config struct {
 	AutomaticTrading               bool
 	AutoLiveEntriesEnabled         bool
 	AutoMaxCandidates              int
+	TicketMaxRisk                  float64
+	TicketMaxNotional              float64
+	TicketMinSharePrice            float64
+	TicketMaxSharePrice            float64
+	TicketMaxStopDistance          float64
+	TicketMaxDailyLoss             float64
+	TicketMaxPerDay                int
 	BoundaryMinRelativeVolume      float64
 	FilingWatchPinnedTickers       []string
 	StrategyRetentionRank          int
@@ -336,6 +343,33 @@ func load(requireMassive bool) (Config, error) {
 	config.AutoMaxCandidates, err = intEnv("AUTO_MAX_CANDIDATES", 2)
 	if err != nil {
 		return Config{}, err
+	}
+	for _, binding := range []struct {
+		target   *float64
+		name     string
+		fallback float64
+	}{
+		{&config.TicketMaxRisk, "TICKET_MAX_RISK", 2000},
+		{&config.TicketMaxNotional, "TICKET_MAX_NOTIONAL", 40000},
+		{&config.TicketMinSharePrice, "TICKET_MIN_SHARE_PRICE", 0.20},
+		{&config.TicketMaxSharePrice, "TICKET_MAX_SHARE_PRICE", 100},
+		{&config.TicketMaxStopDistance, "TICKET_MAX_STOP_DISTANCE", 0.10},
+		{&config.TicketMaxDailyLoss, "TICKET_MAX_DAILY_LOSS", 6000},
+	} {
+		*binding.target, err = floatEnv(binding.name, binding.fallback)
+		if err != nil {
+			return Config{}, err
+		}
+		if *binding.target < 0 {
+			return Config{}, errors.New(binding.name + " must not be negative")
+		}
+	}
+	config.TicketMaxPerDay, err = intEnv("TICKET_MAX_PER_DAY", 6)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.TicketMaxPerDay < 0 {
+		return Config{}, errors.New("TICKET_MAX_PER_DAY must not be negative")
 	}
 	config.BoundaryMinRelativeVolume, err = floatEnv(
 		"BOUNDARY_MIN_RELATIVE_VOLUME", 0,

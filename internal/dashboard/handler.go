@@ -32,6 +32,7 @@ type Options struct {
 	SpikeWatcher       SpikeWatcher
 	NewsCatalysts      NewsCatalystSource
 	RuntimeHealth      func() []ComponentHealth
+	TicketLimits       TicketLimitSource
 }
 
 type Handler struct {
@@ -47,6 +48,7 @@ type Handler struct {
 	spikeWatcher       SpikeWatcher
 	newsCatalysts      NewsCatalystSource
 	runtimeHealth      func() []ComponentHealth
+	ticketLimits       TicketLimitSource
 }
 
 func NewHandler(repository Repository, options Options) *Handler {
@@ -63,6 +65,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		spikeWatcher:       options.SpikeWatcher,
 		newsCatalysts:      options.NewsCatalysts,
 		runtimeHealth:      options.RuntimeHealth,
+		ticketLimits:       options.TicketLimits,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
 	handler.mux.HandleFunc("GET /scan", handler.scan)
@@ -81,6 +84,9 @@ func NewHandler(repository Repository, options Options) *Handler {
 	handler.mux.HandleFunc("GET /broker-positions", handler.brokerPositions)
 	handler.mux.HandleFunc("GET /broker-orders", handler.brokerOrders)
 	handler.mux.HandleFunc("GET /learning-report", handler.learningReport)
+	// Sizing and validation only. Submission stays on the execution path so a
+	// manual ticket cannot bypass approval or the kill switch.
+	handler.mux.HandleFunc("POST /ticket/preview", handler.previewTicket)
 	if handler.spikeWatcher != nil {
 		handler.mux.HandleFunc("GET /spike-watch", handler.spikeWatch)
 	}

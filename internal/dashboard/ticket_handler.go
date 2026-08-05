@@ -1,0 +1,92 @@
+package dashboard
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/momentum-intelligence-platform/mip/internal/ticket"
+)
+
+// The broker app costs more time than a fast setup allows: each leg is its own
+// screen and every submission re-authenticates, so the stop routinely lands
+// after the move has already turned. These endpoints collapse that into one
+// call — size from a risk budget, check the ceilings, return a ready ticket.
+//
+// Preview computes and refuses only. Nothing here reaches a broker; submission
+// stays a separate, deliberate act through the execution service, which keeps
+// its own approval and kill-switch path.
+
+// TicketLimitSource supplies the ceilings and the day's usage. Usage is read at
+// request time rather than cached, so a ticket cannot be sized against a stale
+// picture of how much of the day's loss allowance is already spent.
+type TicketLimitSource func() (ticket.Limits, error)
+
+type ticketPreviewResponse struct {
+	Ticket ticket.Ticket `json:"ticket"`
+	// Mode is echoed so the screen can never imply a live order while the
+	// system is in paper. A trader reading a ticket needs to know which of the
+	// two it is without checking anywhere else.
+	Mode string `json:"mode"`
+	// Warnings are conditions that do not block the ticket but change how it
+	// should be held — an unprotected stop outside regular hours, above all.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+func (handler *Handler) previewTicket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	var input ticket.Request
+	if err := decodeJSON(response, request, &input); err != nil {
+		return
+	}
+	if handler.ticketLimits == nil {
+		writeJSON(response, http.StatusServiceUnavailable, map[string]string{
+			"error": "ticket limits are not configured",
+		})
+		return
+	}
+	limits, err := handler.ticketLimits()
+	if err != nil {
+		handler.repositoryError(response, err)
+		return
+	}
+	built, err := ticket.Build(input, limits)
+	if err != nil {
+		// A rejected ticket is the normal case this exists for, not a server
+		// fault: the message names the ceiling so it can be corrected at once.
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	mode := "unknown"
+	if handler.execution != nil {
+		mode = string(handler.execution.Mode())
+	}
+	writeJSON(response, http.StatusOK, ticketPreviewResponse{
+		Ticket: built, Mode: mode, Warnings: ticketWarnings(time.Now()),
+	})
+}
+
+// ticketWarnings reports conditions a trader must know before holding the
+// position, separate from the ceilings that block a ticket outright.
+func ticketWarnings(now time.Time) []string {
+	warnings := make([]string, 0, 2)
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return warnings
+	}
+	eastern := now.In(location)
+	minutes := eastern.Hour()*60 + eastern.Minute()
+	regularOpen, regularClose := 9*60+30, 16*60
+	if minutes < regularOpen || minutes >= regularClose {
+		// Outside regular hours the broker will not hold a native stop, so the
+		// protective leg is one this system watches and sends itself. If the
+		// process is down, that protection is not there — and it has been down.
+		warnings = append(warnings,
+			"outside regular hours the stop is not held by the broker; "+
+				"it is watched by this system and disappears if it stops",
+		)
+	}
+	return warnings
+}
