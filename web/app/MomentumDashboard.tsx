@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+import TicketPanel from "./TicketPanel";
+
 type Quote = {
   bid_price: number;
   bid_size: number;
@@ -1134,6 +1136,7 @@ export function MomentumDashboard() {
             <ScoreHistoryChart ticker={focusTicker} points={scoreHistory} />
             <AlertsPanel items={alerts} onAcknowledge={acknowledgeAlert} />
           </div>
+          <TicketPanel api={API} defaultRisk={2000} />
           <div className="automation-note">
             <span><small>ANALYSIS MODE</small><strong>DETERMINISTIC</strong></span>
             <p>LLM is disabled. Scanner, research, ranking, score events, and alerts use reproducible rules only.</p>

@@ -1824,3 +1824,58 @@ h2 { font-size: 34px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* Ticket panel. The numbers a trader acts on are large and the mode is
+   unmistakable: a paper ticket that looks identical to a live one invites the
+   wrong assumption at the worst possible moment. */
+.ticket-panel {
+  background: var(--panel, #11161f);
+  border: 1px solid var(--line, #1f2733);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-top: 18px;
+}
+.ticket-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.ticket-panel > header small { display: block; opacity: 0.55; font-size: 11px; letter-spacing: 0.08em; }
+.ticket-panel > header strong { font-size: 18px; }
+.ticket-panel .mode-paper,
+.ticket-panel .mode-live {
+  font-size: 12px; letter-spacing: 0.1em; padding: 4px 10px; border-radius: 999px;
+}
+.ticket-panel .mode-paper { background: #1d2b3a; color: #7fb2e5; }
+.ticket-panel .mode-live { background: #3a1d1d; color: #ef8a8a; }
+.ticket-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.ticket-form label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 92px; }
+.ticket-form small { opacity: 0.55; font-size: 10px; letter-spacing: 0.09em; }
+.ticket-form input {
+  background: #0b0f16; border: 1px solid var(--line, #1f2733); border-radius: 8px;
+  color: inherit; padding: 9px 10px; font-size: 15px; font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+.ticket-side { display: flex; gap: 6px; }
+.ticket-side button {
+  background: #0b0f16; border: 1px solid var(--line, #1f2733); border-radius: 8px;
+  color: inherit; padding: 9px 14px; cursor: pointer; font-size: 13px;
+}
+.ticket-side button.active.buy { background: #14351f; border-color: #2f7a45; color: #8fe0a8; }
+.ticket-side button.active.sell { background: #3a1d1d; border-color: #7a2f2f; color: #ef8a8a; }
+.ticket-result { margin-top: 14px; }
+.ticket-headline { display: flex; flex-wrap: wrap; gap: 22px; }
+.ticket-headline span { display: flex; flex-direction: column; }
+.ticket-headline small { opacity: 0.55; font-size: 10px; letter-spacing: 0.09em; }
+.ticket-headline strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.ticket-detail { margin: 10px 0 0; font-size: 13px; opacity: 0.8; }
+.ticket-note { margin: 8px 0 0; font-size: 12px; opacity: 0.6; }
+.ticket-warning {
+  margin: 8px 0 0; font-size: 12px; color: #e8c07d;
+  border-left: 2px solid #e8c07d; padding-left: 10px;
+}
+.ticket-error {
+  margin: 12px 0 0; font-size: 13px; color: #ef8a8a;
+  border-left: 2px solid #ef8a8a; padding-left: 10px;
+}
