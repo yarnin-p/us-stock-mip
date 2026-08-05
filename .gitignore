@@ -17,3 +17,6 @@ __pycache__/
 /web/dist/
 /web/build/
 /web/.next/
+
+# Database dumps. Restorable state, not source; keep them off the remote.
+/backups/
