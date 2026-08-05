@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 
 // The broker app is the bottleneck, not the chart: every leg is its own screen
 // and each submission re-authenticates, so the stop lands after the move has
-// already turned. This panel asks for the four numbers a chart read produces
-// and sizes the rest, previewing as you type so the ticket is ready before the
-// decision is.
+// already turned. This panel keeps the shape a trader already knows from those
+// apps — side tabs, stacked fields with steppers, one large action button — and
+// removes the part that costs the setup its timing.
 
 type Ticket = {
   ticker: string;
@@ -16,9 +16,8 @@ type Ticket = {
   target?: number;
   shares: number;
   notional: number;
-  risk_amount: number;
-  risk_per_share: number;
   actual_risk: number;
+  risk_per_share: number;
   reward_risk?: number;
   stop_distance: number;
   capped_by?: string;
@@ -32,112 +31,102 @@ type PlacedOrder = {
   limit_price: number;
 };
 
-type SubmitResponse = {
-  ticket: Ticket;
-  entry_order: PlacedOrder;
-  mode: string;
-  protection: { stop_price: number; quantity: number; note: string };
-};
-
 type PreviewResponse = {
   ticket: Ticket;
   mode: string;
+  usd_thb: number;
   warnings?: string[];
 };
 
 const money = (value: number) =>
   value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-export default function TicketPanel({
-  api,
-  defaultRisk,
-}: {
-  api: string;
-  defaultRisk: number;
-}) {
+// step nudges a price field the way a broker app's +/- does. The increment
+// follows the price: a cent is meaningless on a $300 share and far too coarse
+// on one trading at twenty cents.
+function step(value: string, direction: 1 | -1): string {
+  const current = Number(value);
+  if (!Number.isFinite(current)) return value;
+  const increment = current >= 100 ? 0.1 : current >= 1 ? 0.01 : 0.001;
+  const next = Math.max(0, current + increment * direction);
+  return next.toFixed(increment === 0.001 ? 4 : 2);
+}
+
+export default function TicketPanel({ api }: { api: string }) {
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [ticker, setTicker] = useState("");
-  const [entry, setEntry] = useState("");
-  const [stop, setStop] = useState("");
-  const [target, setTarget] = useState("");
-  const [risk, setRisk] = useState(String(defaultRisk));
+  const [price, setPrice] = useState("");
+  const [sl, setSL] = useState("");
+  const [tp, setTP] = useState("");
+  const [shares, setShares] = useState("");
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
   const [placed, setPlaced] = useState<PlacedOrder | null>(null);
-  const [sendError, setSendError] = useState("");
-  const [confirming, setConfirming] = useState(false);
+  const [rate, setRate] = useState(33.6);
   const latest = useRef(0);
 
-  // Previewing as the numbers are typed is the point: a ticket that has to be
-  // submitted before it can be checked is the slow path this replaces.
+  const payload = () => ({
+    ticker: ticker.trim(),
+    side,
+    entry: Number(price),
+    stop: Number(sl),
+    target: Number(tp) || undefined,
+    shares: Number(shares),
+  });
+
+  // Priced as the numbers are typed. A ticket that must be submitted before it
+  // can be checked is the slow path this replaces.
   useEffect(() => {
-    const numeric = {
-      entry: Number(entry),
-      stop: Number(stop),
-      target: Number(target),
-      risk_amount: Number(risk),
-    };
-    if (!ticker.trim() || !numeric.entry || !numeric.stop || !numeric.risk_amount) {
+    if (!ticker.trim() || !Number(price) || !Number(sl) || !Number(shares)) {
       setPreview(null);
       setError("");
       return;
     }
-    // A new set of numbers is a new idea; the order created from the previous
+    // A new set of numbers is a new idea; the order placed from the previous
     // one must not stay on screen as though it still describes them.
     setPlaced(null);
-    setSendError("");
     setConfirming(false);
     const requestID = ++latest.current;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
-      setPending(true);
       try {
         const response = await fetch(`${api}/ticket/preview`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ticker: ticker.trim(),
-            side,
-            entry: numeric.entry,
-            stop: numeric.stop,
-            target: numeric.target || undefined,
-            risk_amount: numeric.risk_amount,
-          }),
+          body: JSON.stringify(payload()),
           signal: controller.signal,
         });
         // A slower earlier request must not overwrite a newer answer.
         if (requestID !== latest.current) return;
-        const body = await response.json();
+        const answer = await response.json();
         if (!response.ok) {
           setPreview(null);
-          setError(body?.error ?? `request failed (${response.status})`);
+          setError(answer?.error ?? `request failed (${response.status})`);
           return;
         }
         setError("");
-        setPreview(body as PreviewResponse);
+        if (answer.usd_thb > 0) setRate(answer.usd_thb);
+        setPreview(answer as PreviewResponse);
       } catch (cause) {
         if (requestID === latest.current && !controller.signal.aborted) {
           setPreview(null);
           setError(cause instanceof Error ? cause.message : "preview failed");
         }
-      } finally {
-        if (requestID === latest.current) setPending(false);
       }
     }, 180);
     return () => {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [api, ticker, side, entry, stop, target, risk]);
+  }, [api, ticker, side, price, sl, tp, shares]);
 
   const ticket = preview?.ticket;
   const live = preview?.mode === "live";
 
-  // Escape backs out of the confirmation. A person who reaches for it has
-  // changed their mind, and hunting for a cancel button is the wrong thing to
-  // be doing at that moment.
+  // Escape backs out. Someone reaching for it has changed their mind, and that
+  // is the wrong moment to be hunting for a cancel button.
   useEffect(() => {
     if (!confirming) return;
     function onKey(event: KeyboardEvent) {
@@ -150,222 +139,226 @@ export default function TicketPanel({
   async function send() {
     if (!ticket || sending) return;
     setSending(true);
-    setSendError("");
+    setError("");
     try {
       const response = await fetch(`${api}/ticket/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker: ticket.ticker,
-          side: ticket.side,
-          entry: ticket.entry,
-          stop: ticket.stop,
-          target: ticket.target || undefined,
-          risk_amount: Number(risk),
-          send: true,
-        }),
+        body: JSON.stringify({ ...payload(), send: true }),
       });
-      const body = await response.json();
+      const answer = await response.json();
       if (!response.ok) {
-        setSendError(body?.error ?? `send failed (${response.status})`);
+        setError(answer?.error ?? `send failed (${response.status})`);
         return;
       }
       setConfirming(false);
-      setPlaced((body as SubmitResponse).entry_order);
+      setPlaced(answer.entry_order as PlacedOrder);
     } catch (cause) {
-      setSendError(cause instanceof Error ? cause.message : "create failed");
+      setError(cause instanceof Error ? cause.message : "send failed");
     } finally {
       setSending(false);
     }
   }
 
+  const priceField = (
+    label: string,
+    value: string,
+    set: (next: string) => void,
+    placeholder: string,
+  ) => (
+    <label className="tk-row">
+      <span>{label}</span>
+      <div className="tk-stepper">
+        <button type="button" onClick={() => set(step(value, -1))} tabIndex={-1}>
+          −
+        </button>
+        <input
+          value={value}
+          inputMode="decimal"
+          onChange={(event) => set(event.target.value)}
+          placeholder={placeholder}
+        />
+        <button type="button" onClick={() => set(step(value, 1))} tabIndex={-1}>
+          +
+        </button>
+      </div>
+    </label>
+  );
 
   return (
-    <article className="ticket-panel">
-      <header>
-        <span>
-          <small>RISK-SIZED ORDER</small>
-          <strong>Ticket</strong>
-        </span>
+    <article className="tk">
+      <header className="tk-head">
+        <input
+          className="tk-ticker"
+          value={ticker}
+          autoCapitalize="characters"
+          onChange={(event) => setTicker(event.target.value.toUpperCase())}
+          placeholder="TICKER"
+        />
         {/* The mode must be unmistakable: a ticket that looks the same on paper
             and live invites the wrong assumption at the worst moment. */}
-        <b className={live ? "mode-live" : "mode-paper"}>
+        <b className={live ? "tk-live" : "tk-paper"}>
           {preview?.mode?.toUpperCase() ?? "—"}
         </b>
       </header>
 
-      {/* Enter moves from the numbers to the confirmation without leaving the
-          keyboard; the confirm button is focused there, so a second Enter
-          sends. Two deliberate presses, no reaching for the mouse. */}
+      {/* Side first and full width, the way every broker app puts it: the
+          direction is the one thing that must never be picked by accident. */}
+      <div className="tk-side">
+        {(["BUY", "SELL"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={side === option ? `on ${option.toLowerCase()}` : ""}
+            onClick={() => setSide(option)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+
+      {/* Enter carries the ticket to the review without leaving the keyboard;
+          the send button holds focus there, so a second Enter places it. */}
       <div
-        className="ticket-form"
+        className="tk-fields"
         onKeyDown={(event) => {
           if (event.key !== "Enter" || confirming || !ticket) return;
           event.preventDefault();
           setConfirming(true);
         }}
       >
-        <div className="ticket-side">
-          {(["BUY", "SELL"] as const).map((option) => (
+        {priceField("Price", price, setPrice, "2.06")}
+        {priceField("Stop loss", sl, setSL, "1.95")}
+        {priceField("Take profit", tp, setTP, "optional")}
+        <label className="tk-row">
+          <span>Shares</span>
+          <div className="tk-stepper">
             <button
-              key={option}
               type="button"
-              className={side === option ? `active ${option.toLowerCase()}` : ""}
-              onClick={() => setSide(option)}
+              tabIndex={-1}
+              onClick={() =>
+                setShares(String(Math.max(0, (Number(shares) || 0) - 100)))
+              }
             >
-              {option}
+              −
             </button>
-          ))}
-        </div>
-        <label>
-          <small>TICKER</small>
-          <input
-            value={ticker}
-            autoCapitalize="characters"
-            onChange={(event) => setTicker(event.target.value.toUpperCase())}
-            placeholder="ABCD"
-          />
-        </label>
-        <label>
-          <small>ENTRY</small>
-          <input
-            value={entry}
-            inputMode="decimal"
-            onChange={(event) => setEntry(event.target.value)}
-            placeholder="10.00"
-          />
-        </label>
-        <label>
-          <small>STOP</small>
-          <input
-            value={stop}
-            inputMode="decimal"
-            onChange={(event) => setStop(event.target.value)}
-            placeholder="9.50"
-          />
-        </label>
-        <label>
-          <small>TARGET</small>
-          <input
-            value={target}
-            inputMode="decimal"
-            onChange={(event) => setTarget(event.target.value)}
-            placeholder="optional"
-          />
-        </label>
-        <label>
-          <small>RISK</small>
-          <input
-            value={risk}
-            inputMode="decimal"
-            onChange={(event) => setRisk(event.target.value)}
-          />
+            <input
+              value={shares}
+              inputMode="numeric"
+              onChange={(event) => setShares(event.target.value)}
+              placeholder="500"
+            />
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={() => setShares(String((Number(shares) || 0) + 100))}
+            >
+              +
+            </button>
+          </div>
         </label>
       </div>
 
-      <p className="ticket-hint">
+      <p className="tk-hint">
         <kbd>Enter</kbd> review · <kbd>Enter</kbd> send · <kbd>Esc</kbd> cancel
       </p>
 
-      {error && <p className="ticket-error">{error}</p>}
+      {error && <p className="tk-error">{error}</p>}
 
       {ticket && (
-        <div className="ticket-result">
-          <div className="ticket-headline">
-            <span>
-              <small>SHARES</small>
-              <strong>{ticket.shares.toLocaleString()}</strong>
-            </span>
-            <span>
-              <small>NOTIONAL</small>
-              <strong>${money(ticket.notional)}</strong>
-            </span>
-            <span>
-              <small>RISK</small>
-              <strong>${money(ticket.actual_risk)}</strong>
-            </span>
-            <span>
-              <small>R:R</small>
-              <strong>{ticket.reward_risk ? `${ticket.reward_risk}:1` : "—"}</strong>
-            </span>
+        <div className="tk-summary">
+          <div>
+            <span>Cost</span>
+            <b>${money(ticket.notional)}</b>
           </div>
-          <p className="ticket-detail">
-            {ticket.side} {ticket.shares.toLocaleString()} {ticket.ticker} @{" "}
-            {ticket.entry} · stop {ticket.stop} ({(ticket.stop_distance * 100).toFixed(1)}%
-            away, ${money(ticket.risk_per_share)}/share)
-            {ticket.target ? ` · target ${ticket.target}` : ""}
-          </p>
-          {ticket.capped_by && (
-            <p className="ticket-note">
-              Size reduced by {ticket.capped_by.replace(/_/g, " ").toLowerCase()};
-              this ticket risks less than the budget asked for.
-            </p>
-          )}
-          {preview?.warnings?.map((warning) => (
-            <p className="ticket-warning" key={warning}>
-              {warning}
-            </p>
-          ))}
-          {/* Creating fills in the order; approving still sends it. That
-              second step is the last point a person can refuse, so it is not
-              collapsed away however much time it costs. */}
-          {placed ? (
-            <div className="ticket-placed">
-              <strong>
-                Order #{placed.id} · {placed.state}
-              </strong>
-              <span>
-                {placed.quantity.toLocaleString()} {placed.ticker} @{" "}
-                {placed.limit_price}
-              </span>
-            </div>
-          ) : confirming ? (
-            /* One screen, every number that matters, and the mode spelled out.
-               This is the review step — after it the order goes out, so it
-               repeats the figures rather than asking "are you sure?". */
-            <div className={`ticket-confirm ${live ? "live" : "paper"}`}>
-              <strong>
-                {ticket.side} {ticket.shares.toLocaleString()} {ticket.ticker} @{" "}
-                {ticket.entry}
-              </strong>
-              <span>
-                stop {ticket.stop} · risk ${money(ticket.actual_risk)} ·{" "}
-                {ticket.target ? `target ${ticket.target} · ` : ""}
-                {live ? "LIVE — real money" : "paper — simulated"}
-              </span>
-              <div>
-                <button
-                  type="button"
-                  className={`ticket-send ${live ? "live" : "paper"}`}
-                  onClick={send}
-                  disabled={sending}
-                  autoFocus
-                >
-                  {sending ? "sending…" : "CONFIRM & SEND"}
-                </button>
-                <button
-                  type="button"
-                  className="ticket-cancel"
-                  onClick={() => setConfirming(false)}
-                  disabled={sending}
-                >
-                  cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className={`ticket-send ${live ? "live" : "paper"}`}
-              onClick={() => setConfirming(true)}
-            >
-              {`SEND ${ticket.side} · ${ticket.shares.toLocaleString()} ${ticket.ticker}`}
-            </button>
-          )}
-          {sendError && <p className="ticket-error">{sendError}</p>}
+          {/* Risk follows from the size rather than setting it, and is shown in
+              the currency the account is budgeted in as well as the one it
+              trades in. */}
+          <div>
+            <span>Loss if stopped</span>
+            <b>฿{money(ticket.actual_risk * rate)}</b>
+            <em>${money(ticket.actual_risk)}</em>
+          </div>
+          <div>
+            <span>Reward : risk</span>
+            <b>{ticket.reward_risk ? `${ticket.reward_risk} : 1` : "—"}</b>
+          </div>
+          <div>
+            <span>Stop distance</span>
+            <b>{(ticket.stop_distance * 100).toFixed(1)}%</b>
+          </div>
         </div>
       )}
-      {pending && !ticket && <p className="ticket-note">sizing…</p>}
+
+      {ticket?.capped_by && (
+        <p className="tk-note">
+          Size reduced by {ticket.capped_by.replace(/_/g, " ").toLowerCase()}.
+        </p>
+      )}
+      {preview?.warnings?.map((warning) => (
+        <p className="tk-warn" key={warning}>
+          {warning}
+        </p>
+      ))}
+
+      {ticket && placed && (
+        <div className="tk-placed">
+          <b>
+            Order #{placed.id} · {placed.state}
+          </b>
+          <span>
+            {placed.quantity.toLocaleString()} {placed.ticker} @{" "}
+            {placed.limit_price}
+          </span>
+        </div>
+      )}
+
+      {ticket && !placed && !confirming && (
+        <button
+          type="button"
+          className={`tk-go ${side.toLowerCase()}`}
+          onClick={() => setConfirming(true)}
+        >
+          {side} {ticket.shares.toLocaleString()} {ticket.ticker}
+        </button>
+      )}
+
+      {ticket && !placed && confirming && (
+        /* The review repeats the figures rather than asking "are you sure?" —
+           the numbers are what needs checking, and the mode is spelled out so a
+           live order is never sent believing it was paper. */
+        <div className={`tk-confirm ${live ? "live" : "paper"}`}>
+          <b>
+            {ticket.side} {ticket.shares.toLocaleString()} {ticket.ticker} @{" "}
+            {ticket.entry}
+          </b>
+          <span>
+            SL {ticket.stop}
+            {ticket.target ? ` · TP ${ticket.target}` : ""} · risk ฿
+            {money(ticket.actual_risk * rate)} ·{" "}
+            {live ? "LIVE — real money" : "paper — simulated"}
+          </span>
+          <div>
+            <button
+              type="button"
+              className={`tk-go ${side.toLowerCase()}`}
+              onClick={send}
+              disabled={sending}
+              autoFocus
+            >
+              {sending ? "sending…" : "CONFIRM"}
+            </button>
+            <button
+              type="button"
+              className="tk-cancel"
+              onClick={() => setConfirming(false)}
+              disabled={sending}
+            >
+              cancel
+            </button>
+          </div>
+        </div>
+      )}
     </article>
   );
 }

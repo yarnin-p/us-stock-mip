@@ -33,6 +33,7 @@ type Options struct {
 	NewsCatalysts      NewsCatalystSource
 	RuntimeHealth      func() []ComponentHealth
 	TicketLimits       TicketLimitSource
+	TicketUSDTHB       float64
 }
 
 type Handler struct {
@@ -49,6 +50,7 @@ type Handler struct {
 	newsCatalysts      NewsCatalystSource
 	runtimeHealth      func() []ComponentHealth
 	ticketLimits       TicketLimitSource
+	usdTHB             float64
 }
 
 func NewHandler(repository Repository, options Options) *Handler {
@@ -66,6 +68,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		newsCatalysts:      options.NewsCatalysts,
 		runtimeHealth:      options.RuntimeHealth,
 		ticketLimits:       options.TicketLimits,
+		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
 	handler.mux.HandleFunc("GET /scan", handler.scan)

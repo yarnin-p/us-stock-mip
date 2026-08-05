@@ -213,3 +213,54 @@ func TestBuildSizesAShortFromTheStopAbove(t *testing.T) {
 		t.Fatalf("reward:risk = %v, want 2", got.RewardRisk)
 	}
 }
+
+// A trader who already knows the size should not have to express it as a risk
+// budget and let it be divided back out. The risk becomes an outcome, and the
+// ceilings still measure it.
+func TestBuildAcceptsAnExplicitShareCount(t *testing.T) {
+	got, err := ticket.Build(ticket.Request{
+		Ticker: "ABCD", Side: ticket.SideBuy,
+		Entry: 10, Stop: 9.5, Target: 11.5, Shares: 500,
+	}, limits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Shares != 500 {
+		t.Fatalf("shares = %d, want the 500 that were asked for", got.Shares)
+	}
+	if got.ActualRisk != 250 {
+		t.Fatalf("risk = %v, want 500 shares x 0.50 = 250", got.ActualRisk)
+	}
+	if got.RewardRisk != 3 {
+		t.Fatalf("reward:risk = %v, want 3", got.RewardRisk)
+	}
+}
+
+// The ceilings are what protect the account, so they must bind a size that was
+// typed just as firmly as one that was derived.
+func TestBuildAppliesCeilingsToAnExplicitShareCount(t *testing.T) {
+	if _, err := ticket.Build(ticket.Request{
+		Ticker: "ABCD", Side: ticket.SideBuy,
+		Entry: 10, Stop: 9.5, Shares: 100_000,
+	}, limits()); err == nil {
+		t.Fatal("a typed size over the risk ceiling must be refused")
+	}
+	capped, err := ticket.Build(ticket.Request{
+		Ticker: "ABCD", Side: ticket.SideBuy,
+		Entry: 10, Stop: 9.99, Shares: 5000,
+	}, limits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capped.Shares != 4000 || capped.CappedBy != "MAX_NOTIONAL" {
+		t.Fatalf("ticket = %#v, want the notional cap to bind", capped)
+	}
+}
+
+func TestBuildStillNeedsASizeOrABudget(t *testing.T) {
+	if _, err := ticket.Build(ticket.Request{
+		Ticker: "ABCD", Side: ticket.SideBuy, Entry: 10, Stop: 9.5,
+	}, limits()); err == nil {
+		t.Fatal("a ticket with neither a size nor a budget must be refused")
+	}
+}

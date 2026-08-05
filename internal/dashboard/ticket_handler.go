@@ -27,6 +27,11 @@ type TicketLimitSource func() (ticket.Limits, error)
 
 type ticketPreviewResponse struct {
 	Ticket ticket.Ticket `json:"ticket"`
+	// Sizing is done in the account currency because prices are. The trader
+	// budgets risk in baht, so the rate travels with the answer and the screen
+	// can state both — a figure typed in one currency and sized in the other is
+	// a position thirty times too large.
+	USDTHB float64 `json:"usd_thb"`
 	// Mode is echoed so the screen can never imply a live order while the
 	// system is in paper. A trader reading a ticket needs to know which of the
 	// two it is without checking anywhere else.
@@ -68,7 +73,8 @@ func (handler *Handler) previewTicket(
 		mode = string(handler.execution.Mode())
 	}
 	writeJSON(response, http.StatusOK, ticketPreviewResponse{
-		Ticket: built, Mode: mode, Warnings: ticketWarnings(time.Now()),
+		Ticket: built, Mode: mode, USDTHB: handler.usdTHB,
+		Warnings: ticketWarnings(time.Now()),
 	})
 }
 

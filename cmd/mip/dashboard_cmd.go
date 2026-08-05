@@ -211,6 +211,7 @@ func runServe(args []string, stderr io.Writer) error {
 		RuntimeHealth:      runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.
+		TicketUSDTHB: appConfig.TicketUSDTHB,
 		TicketLimits: func() (ticket.Limits, error) {
 			return ticket.Limits{
 				MaxRiskPerTicket: appConfig.TicketMaxRisk,

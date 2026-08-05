@@ -59,6 +59,7 @@ type Config struct {
 	AutomaticTrading               bool
 	AutoLiveEntriesEnabled         bool
 	AutoMaxCandidates              int
+	TicketUSDTHB                   float64
 	TicketMaxRisk                  float64
 	TicketMaxNotional              float64
 	TicketMinSharePrice            float64
@@ -349,6 +350,7 @@ func load(requireMassive bool) (Config, error) {
 		name     string
 		fallback float64
 	}{
+		{&config.TicketUSDTHB, "TICKET_USD_THB", 33.6},
 		{&config.TicketMaxRisk, "TICKET_MAX_RISK", 2000},
 		{&config.TicketMaxNotional, "TICKET_MAX_NOTIONAL", 40000},
 		{&config.TicketMinSharePrice, "TICKET_MIN_SHARE_PRICE", 0.20},

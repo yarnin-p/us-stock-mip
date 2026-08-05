@@ -34,8 +34,13 @@ type Request struct {
 	Entry  float64 `json:"entry"`
 	Stop   float64 `json:"stop"`
 	Target float64 `json:"target,omitempty"`
-	// RiskAmount is the account currency lost if the stop fills — one R.
-	RiskAmount float64 `json:"risk_amount"`
+	// RiskAmount is the account currency lost if the stop fills — one R. It
+	// sizes the position when Shares is not given.
+	RiskAmount float64 `json:"risk_amount,omitempty"`
+	// Shares states the size directly. A trader who already knows the size
+	// should not have to express it as a risk budget and let it be divided
+	// back out; the ceilings apply either way.
+	Shares int64 `json:"shares,omitempty"`
 }
 
 // Limits are the ceilings a ticket may not cross. They are enforced here rather
@@ -99,8 +104,14 @@ func Build(request Request, limits Limits) (Ticket, error) {
 			return Ticket{}, errors.New("ticket prices must be finite and positive")
 		}
 	}
-	if request.Entry <= 0 || request.RiskAmount <= 0 {
-		return Ticket{}, errors.New("ticket needs an entry price and a risk amount")
+	if request.Entry <= 0 {
+		return Ticket{}, errors.New("ticket needs an entry price")
+	}
+	if request.Shares < 0 {
+		return Ticket{}, errors.New("share count must not be negative")
+	}
+	if request.Shares == 0 && request.RiskAmount <= 0 {
+		return Ticket{}, errors.New("ticket needs a share count or a risk amount")
 	}
 	// A ticket without a stop is the failure this package exists to prevent:
 	// the stop is the leg that never gets placed in time.
@@ -140,6 +151,11 @@ func Build(request Request, limits Limits) (Ticket, error) {
 			stopDistance*100, limits.MaxStopDistance*100,
 		)
 	}
+	// Sizing by shares means the risk is an outcome rather than an input, so it
+	// is computed before the ceilings that measure it.
+	if request.Shares > 0 {
+		request.RiskAmount = float64(request.Shares) * riskPerShare
+	}
 	if limits.MaxRiskPerTicket > 0 && request.RiskAmount > limits.MaxRiskPerTicket {
 		return Ticket{}, fmt.Errorf(
 			"risk %.2f exceeds the per-ticket ceiling %.2f",
@@ -172,7 +188,10 @@ func Build(request Request, limits Limits) (Ticket, error) {
 		RiskAmount: request.RiskAmount, RiskPerShare: riskPerShare,
 		StopDistance: stopDistance,
 	}
-	ticket.Shares = int64(math.Floor(request.RiskAmount / riskPerShare))
+	ticket.Shares = request.Shares
+	if ticket.Shares == 0 {
+		ticket.Shares = int64(math.Floor(request.RiskAmount / riskPerShare))
+	}
 	if limits.MaxNotional > 0 {
 		allowed := int64(math.Floor(limits.MaxNotional / request.Entry))
 		if allowed < ticket.Shares {
