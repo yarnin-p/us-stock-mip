@@ -135,6 +135,18 @@ export default function TicketPanel({
   const ticket = preview?.ticket;
   const live = preview?.mode === "live";
 
+  // Escape backs out of the confirmation. A person who reaches for it has
+  // changed their mind, and hunting for a cancel button is the wrong thing to
+  // be doing at that moment.
+  useEffect(() => {
+    if (!confirming) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && !sending) setConfirming(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [confirming, sending]);
+
   async function send() {
     if (!ticket || sending) return;
     setSending(true);
@@ -182,7 +194,17 @@ export default function TicketPanel({
         </b>
       </header>
 
-      <div className="ticket-form">
+      {/* Enter moves from the numbers to the confirmation without leaving the
+          keyboard; the confirm button is focused there, so a second Enter
+          sends. Two deliberate presses, no reaching for the mouse. */}
+      <div
+        className="ticket-form"
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || confirming || !ticket) return;
+          event.preventDefault();
+          setConfirming(true);
+        }}
+      >
         <div className="ticket-side">
           {(["BUY", "SELL"] as const).map((option) => (
             <button
@@ -240,6 +262,10 @@ export default function TicketPanel({
           />
         </label>
       </div>
+
+      <p className="ticket-hint">
+        <kbd>Enter</kbd> review · <kbd>Enter</kbd> send · <kbd>Esc</kbd> cancel
+      </p>
 
       {error && <p className="ticket-error">{error}</p>}
 
