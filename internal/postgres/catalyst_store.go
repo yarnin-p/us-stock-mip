@@ -168,6 +168,7 @@ func (store *Store) BoundaryCandidates(
 		asOf.UTC(),
 		asOf.UTC().Add(-lookback),
 		limit,
+		minRelativeVolume,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
