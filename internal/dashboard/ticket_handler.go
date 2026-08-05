@@ -1,8 +1,11 @@
 package dashboard
 
 import (
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/momentum-intelligence-platform/mip/internal/execution"
 
 	"github.com/momentum-intelligence-platform/mip/internal/ticket"
 )
@@ -89,4 +92,92 @@ func ticketWarnings(now time.Time) []string {
 		)
 	}
 	return warnings
+}
+
+type ticketSubmitResponse struct {
+	Ticket ticket.Ticket    `json:"ticket"`
+	Entry  *execution.Order `json:"entry_order"`
+	Mode   string           `json:"mode"`
+	// Protection carries the stop the entry must be paired with. It is created
+	// only after the entry fills — a resting stop against a position that does
+	// not exist would be rejected — so it is returned here as the instruction
+	// the strategy path will act on rather than as a live order.
+	Protection ticketProtection `json:"protection"`
+	Warnings   []string         `json:"warnings,omitempty"`
+}
+
+type ticketProtection struct {
+	StopPrice float64 `json:"stop_price"`
+	Quantity  int64   `json:"quantity"`
+	Note      string  `json:"note"`
+}
+
+// submitTicket turns a chart read into a created, risk-checked entry order.
+//
+// It deliberately stops at creation. Filling in ticker, size, limit and stop is
+// the part that costs the setup its timing; approving is one action and is the
+// last point at which a person can refuse. Collapsing that away would remove
+// the only human gate between a mistyped number and the market.
+func (handler *Handler) submitTicket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	var input ticket.Request
+	if err := decodeJSON(response, request, &input); err != nil {
+		return
+	}
+	if handler.execution == nil {
+		writeJSON(response, http.StatusServiceUnavailable, map[string]string{
+			"error": "execution is not configured",
+		})
+		return
+	}
+	if handler.ticketLimits == nil {
+		writeJSON(response, http.StatusServiceUnavailable, map[string]string{
+			"error": "ticket limits are not configured",
+		})
+		return
+	}
+	limits, err := handler.ticketLimits()
+	if err != nil {
+		handler.repositoryError(response, err)
+		return
+	}
+	built, err := ticket.Build(input, limits)
+	if err != nil {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	order, err := handler.execution.Create(
+		request.Context(),
+		execution.CreateOrderInput{
+			Ticker:      built.Ticker,
+			Side:        string(built.Side),
+			OrderType:   "LIMIT",
+			Quantity:    float64(built.Shares),
+			LimitPrice:  built.Entry,
+			TimeInForce: "DAY",
+			Reason: fmt.Sprintf(
+				"MANUAL TICKET: stop=%.4f target=%.4f risk=%.2f",
+				built.Stop, built.Target, built.ActualRisk,
+			),
+		},
+	)
+	if err != nil {
+		writeJSON(response, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+	writeJSON(response, http.StatusCreated, ticketSubmitResponse{
+		Ticket: built, Entry: &order,
+		Mode: string(handler.execution.Mode()),
+		Protection: ticketProtection{
+			StopPrice: built.Stop, Quantity: built.Shares,
+			Note: "created once the entry fills; a resting stop against no " +
+				"position is rejected by the broker",
+		},
+		Warnings: ticketWarnings(time.Now()),
+	})
 }

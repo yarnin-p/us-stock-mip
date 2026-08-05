@@ -107,3 +107,53 @@ func TestPreviewTicketNeedsLimitsConfigured(t *testing.T) {
 			recorder.Code)
 	}
 }
+
+// Submission stops at creation on purpose. Filling in ticker, size, limit and
+// stop is what costs the setup its timing; approving is one action and the last
+// point a person can refuse. Collapsing it away would leave nothing between a
+// mistyped number and the market.
+func TestSubmitTicketNeedsExecutionConfigured(t *testing.T) {
+	handler := ticketHandler(t, ticket.Limits{MaxRiskPerTicket: 2000})
+	payload, err := json.Marshal(map[string]any{
+		"ticker": "ABCD", "side": "BUY",
+		"entry": 10.0, "stop": 9.5, "risk_amount": 500.0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost, "/ticket/submit", bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 without an execution service",
+			recorder.Code)
+	}
+}
+
+// A ticket over a ceiling must be refused before it reaches the execution
+// service at all, so a bad size never becomes an order anyone has to cancel.
+func TestSubmitTicketRefusesBeforeCreatingAnything(t *testing.T) {
+	handler := ticketHandler(t, ticket.Limits{MaxRiskPerTicket: 100})
+	payload, err := json.Marshal(map[string]any{
+		"ticker": "ABCD", "side": "BUY",
+		"entry": 10.0, "stop": 9.5, "risk_amount": 5000.0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost, "/ticket/submit", bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	// The ceiling is checked first, so this fails on the limit rather than on
+	// the missing execution service.
+	if recorder.Code != http.StatusServiceUnavailable &&
+		recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+}

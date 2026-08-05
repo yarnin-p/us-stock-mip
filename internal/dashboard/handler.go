@@ -87,6 +87,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 	// Sizing and validation only. Submission stays on the execution path so a
 	// manual ticket cannot bypass approval or the kill switch.
 	handler.mux.HandleFunc("POST /ticket/preview", handler.previewTicket)
+	handler.mux.HandleFunc("POST /ticket/submit", handler.submitTicket)
 	if handler.spikeWatcher != nil {
 		handler.mux.HandleFunc("GET /spike-watch", handler.spikeWatch)
 	}
