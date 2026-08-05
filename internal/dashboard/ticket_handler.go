@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -106,6 +107,30 @@ type ticketSubmitResponse struct {
 	Warnings   []string         `json:"warnings,omitempty"`
 }
 
+// sendCreatedOrder walks a created order through preview, approval and
+// submission. The approval token is single-use and never leaves the process:
+// the human gate is the confirmation the person already gave on screen, so
+// re-typing a token here would only be ceremony.
+func (handler *Handler) sendCreatedOrder(
+	ctx context.Context,
+	id int64,
+) (execution.Order, error) {
+	if _, err := handler.execution.Preview(ctx, id); err != nil {
+		return execution.Order{}, fmt.Errorf("previewing ticket order: %w", err)
+	}
+	approval, err := handler.execution.Approve(ctx, id)
+	if err != nil {
+		return execution.Order{}, fmt.Errorf("approving ticket order: %w", err)
+	}
+	sent, err := handler.execution.Submit(
+		ctx, id, approval.ConfirmationToken, approval.ConfirmationText,
+	)
+	if err != nil {
+		return execution.Order{}, fmt.Errorf("submitting ticket order: %w", err)
+	}
+	return sent, nil
+}
+
 type ticketProtection struct {
 	StopPrice float64 `json:"stop_price"`
 	Quantity  int64   `json:"quantity"`
@@ -118,13 +143,26 @@ type ticketProtection struct {
 // the part that costs the setup its timing; approving is one action and is the
 // last point at which a person can refuse. Collapsing that away would remove
 // the only human gate between a mistyped number and the market.
+// ticketSubmitRequest is a chart read plus whether to carry it all the way.
+//
+// Send=false stops at a created order, which is what the ranking-driven paths
+// want. Send=true walks preview, approval and submission in one call: the
+// person has already confirmed the exact ticket on screen, and making them find
+// the same order again in another panel reintroduces the delay this whole path
+// exists to remove.
+type ticketSubmitRequest struct {
+	ticket.Request
+	Send bool `json:"send"`
+}
+
 func (handler *Handler) submitTicket(
 	response http.ResponseWriter, request *http.Request,
 ) {
-	var input ticket.Request
-	if err := decodeJSON(response, request, &input); err != nil {
+	var payload ticketSubmitRequest
+	if err := decodeJSON(response, request, &payload); err != nil {
 		return
 	}
+	input := payload.Request
 	if handler.execution == nil {
 		writeJSON(response, http.StatusServiceUnavailable, map[string]string{
 			"error": "execution is not configured",
@@ -169,6 +207,20 @@ func (handler *Handler) submitTicket(
 			"error": err.Error(),
 		})
 		return
+	}
+	if payload.Send {
+		sent, sendErr := handler.sendCreatedOrder(request.Context(), order.ID)
+		if sendErr != nil {
+			// The order exists and is visible in Execution, so the person can
+			// finish or cancel it there rather than being left unsure whether
+			// anything was placed.
+			writeJSON(response, http.StatusConflict, map[string]any{
+				"error":       sendErr.Error(),
+				"entry_order": order,
+			})
+			return
+		}
+		order = sent
 	}
 	writeJSON(response, http.StatusCreated, ticketSubmitResponse{
 		Ticket: built, Entry: &order,

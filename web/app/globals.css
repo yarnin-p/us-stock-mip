@@ -1879,3 +1879,40 @@ h2 { font-size: 34px; }
   margin: 12px 0 0; font-size: 13px; color: #ef8a8a;
   border-left: 2px solid #ef8a8a; padding-left: 10px;
 }
+
+/* The create button carries the mode's colour so a live order can never be
+   sent under the impression it was paper. */
+.ticket-send {
+  margin-top: 14px; width: 100%; padding: 13px 16px; border-radius: 10px;
+  border: 1px solid transparent; cursor: pointer; font-size: 14px;
+  letter-spacing: 0.06em; font-weight: 600;
+}
+.ticket-send.paper { background: #1d2b3a; border-color: #2f5a7a; color: #9fd0f5; }
+.ticket-send.live { background: #3a1d1d; border-color: #7a2f2f; color: #ff9d9d; }
+.ticket-send:disabled { opacity: 0.55; cursor: default; }
+.ticket-placed {
+  margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+  background: #14351f; border: 1px solid #2f7a45;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.ticket-placed strong { color: #8fe0a8; font-size: 14px; }
+.ticket-placed span { font-size: 12px; opacity: 0.85; }
+
+/* The confirmation repeats the figures instead of asking "are you sure?" —
+   the numbers are what a person needs to check, and the mode is stated in
+   words so a live order is never sent under the impression it was paper. */
+.ticket-confirm {
+  margin-top: 14px; padding: 14px; border-radius: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ticket-confirm.paper { background: #16202c; border: 1px solid #2f5a7a; }
+.ticket-confirm.live { background: #2c1616; border: 1px solid #7a2f2f; }
+.ticket-confirm strong { font-size: 17px; }
+.ticket-confirm span { font-size: 12px; opacity: 0.85; }
+.ticket-confirm > div { display: flex; gap: 8px; margin-top: 6px; }
+.ticket-confirm .ticket-send { margin-top: 0; flex: 1; }
+.ticket-cancel {
+  background: transparent; border: 1px solid var(--line, #1f2733);
+  border-radius: 10px; color: inherit; padding: 13px 18px; cursor: pointer;
+  font-size: 13px;
+}

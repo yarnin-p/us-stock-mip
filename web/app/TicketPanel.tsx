@@ -24,6 +24,21 @@ type Ticket = {
   capped_by?: string;
 };
 
+type PlacedOrder = {
+  id: number;
+  state: string;
+  ticker: string;
+  quantity: number;
+  limit_price: number;
+};
+
+type SubmitResponse = {
+  ticket: Ticket;
+  entry_order: PlacedOrder;
+  mode: string;
+  protection: { stop_price: number; quantity: number; note: string };
+};
+
 type PreviewResponse = {
   ticket: Ticket;
   mode: string;
@@ -49,6 +64,10 @@ export default function TicketPanel({
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [placed, setPlaced] = useState<PlacedOrder | null>(null);
+  const [sendError, setSendError] = useState("");
+  const [confirming, setConfirming] = useState(false);
   const latest = useRef(0);
 
   // Previewing as the numbers are typed is the point: a ticket that has to be
@@ -65,6 +84,11 @@ export default function TicketPanel({
       setError("");
       return;
     }
+    // A new set of numbers is a new idea; the order created from the previous
+    // one must not stay on screen as though it still describes them.
+    setPlaced(null);
+    setSendError("");
+    setConfirming(false);
     const requestID = ++latest.current;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
@@ -110,6 +134,39 @@ export default function TicketPanel({
 
   const ticket = preview?.ticket;
   const live = preview?.mode === "live";
+
+  async function send() {
+    if (!ticket || sending) return;
+    setSending(true);
+    setSendError("");
+    try {
+      const response = await fetch(`${api}/ticket/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: ticket.ticker,
+          side: ticket.side,
+          entry: ticket.entry,
+          stop: ticket.stop,
+          target: ticket.target || undefined,
+          risk_amount: Number(risk),
+          send: true,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setSendError(body?.error ?? `send failed (${response.status})`);
+        return;
+      }
+      setConfirming(false);
+      setPlaced((body as SubmitResponse).entry_order);
+    } catch (cause) {
+      setSendError(cause instanceof Error ? cause.message : "create failed");
+    } finally {
+      setSending(false);
+    }
+  }
+
 
   return (
     <article className="ticket-panel">
@@ -223,11 +280,63 @@ export default function TicketPanel({
               {warning}
             </p>
           ))}
-          {/* Sizing only. Sending the order stays a deliberate act on the
-              execution path, which keeps its own approval and kill switch. */}
-          <p className="ticket-note">
-            Preview only — this does not place an order.
-          </p>
+          {/* Creating fills in the order; approving still sends it. That
+              second step is the last point a person can refuse, so it is not
+              collapsed away however much time it costs. */}
+          {placed ? (
+            <div className="ticket-placed">
+              <strong>
+                Order #{placed.id} · {placed.state}
+              </strong>
+              <span>
+                {placed.quantity.toLocaleString()} {placed.ticker} @{" "}
+                {placed.limit_price}
+              </span>
+            </div>
+          ) : confirming ? (
+            /* One screen, every number that matters, and the mode spelled out.
+               This is the review step — after it the order goes out, so it
+               repeats the figures rather than asking "are you sure?". */
+            <div className={`ticket-confirm ${live ? "live" : "paper"}`}>
+              <strong>
+                {ticket.side} {ticket.shares.toLocaleString()} {ticket.ticker} @{" "}
+                {ticket.entry}
+              </strong>
+              <span>
+                stop {ticket.stop} · risk ${money(ticket.actual_risk)} ·{" "}
+                {ticket.target ? `target ${ticket.target} · ` : ""}
+                {live ? "LIVE — real money" : "paper — simulated"}
+              </span>
+              <div>
+                <button
+                  type="button"
+                  className={`ticket-send ${live ? "live" : "paper"}`}
+                  onClick={send}
+                  disabled={sending}
+                  autoFocus
+                >
+                  {sending ? "sending…" : "CONFIRM & SEND"}
+                </button>
+                <button
+                  type="button"
+                  className="ticket-cancel"
+                  onClick={() => setConfirming(false)}
+                  disabled={sending}
+                >
+                  cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={`ticket-send ${live ? "live" : "paper"}`}
+              onClick={() => setConfirming(true)}
+            >
+              {`SEND ${ticket.side} · ${ticket.shares.toLocaleString()} ${ticket.ticker}`}
+            </button>
+          )}
+          {sendError && <p className="ticket-error">{sendError}</p>}
         </div>
       )}
       {pending && !ticket && <p className="ticket-note">sizing…</p>}

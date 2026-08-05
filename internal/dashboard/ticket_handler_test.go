@@ -157,3 +157,49 @@ func TestSubmitTicketRefusesBeforeCreatingAnything(t *testing.T) {
 		t.Fatalf("status = %d", recorder.Code)
 	}
 }
+
+// Without send the ticket stops at a created order; the ranking-driven paths
+// want that, and so does anyone who wants to look before committing.
+func TestSubmitTicketDefaultsToCreateOnly(t *testing.T) {
+	handler := ticketHandler(t, ticket.Limits{MaxRiskPerTicket: 2000})
+	payload, err := json.Marshal(map[string]any{
+		"ticker": "ABCD", "side": "BUY",
+		"entry": 10.0, "stop": 9.5, "risk_amount": 500.0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost, "/ticket/submit", bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	// No execution service is wired here, so this proves only that the absent
+	// send flag is accepted and decoded rather than rejected as unknown.
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+}
+
+// The ceilings must still be the first thing checked when send is set: a
+// ticket over a limit must never reach preview, approval or the broker.
+func TestSubmitTicketChecksCeilingsBeforeSending(t *testing.T) {
+	handler := ticketHandler(t, ticket.Limits{MaxRiskPerTicket: 100})
+	payload, err := json.Marshal(map[string]any{
+		"ticker": "ABCD", "side": "BUY",
+		"entry": 10.0, "stop": 9.5, "risk_amount": 5000.0, "send": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost, "/ticket/submit", bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusCreated {
+		t.Fatal("a ticket over its ceiling was sent")
+	}
+}
