@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./tradeedge.css";
 
 export const metadata: Metadata = {
-  title: "Momentum Intelligence",
+  title: "TradeEdge — Momentum Suite",
   description: "A decision console for US momentum trading.",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };

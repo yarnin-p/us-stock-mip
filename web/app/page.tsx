@@ -1,5 +1,5 @@
-import { MomentumDashboard } from "./MomentumDashboard";
+import { TradeEdge } from "./TradeEdge";
 
 export default function Home() {
-  return <MomentumDashboard />;
+  return <TradeEdge />;
 }
