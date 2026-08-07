@@ -346,22 +346,26 @@
 .te-table { width: 100%; border-collapse: collapse; }
 .te-table th {
   font-size: 10px; font-weight: 500; color: #89868a; text-align: left;
-  padding: 10px 20px; border-bottom: 1px solid var(--te-border-soft);
+  padding: 12px 20px; border-bottom: 1px solid var(--te-border-soft);
   white-space: nowrap;
 }
+/* Rows carry a symbol, a headline and a strip of reason chips, so the 35px of
+   a plain data grid crushed them together. Vertical padding rather than a
+   fixed height lets a two-line row breathe without stretching a one-line one. */
 .te-table td {
-  font-size: 11px; color: #353235;
-  padding: 0 20px; height: 35px;
+  font-size: 12px; color: #353235;
+  padding: 13px 20px;
   border-bottom: 1px solid #f0edef;
   font-variant-numeric: tabular-nums;
+  vertical-align: middle;
 }
 .te-table tbody tr { cursor: pointer; }
 .te-table tbody tr:hover { background: #fbfaf9; }
-.te-table .te-sym { font-weight: 650; font-size: 12px; }
+.te-table .te-sym { font-weight: 650; font-size: 13px; letter-spacing: -.01em; }
 .te-table .num { text-align: right; }
 .te-badge {
   display: inline-grid; place-items: center;
-  height: 22px; min-width: 27px; padding: 0 7px;
+  height: 23px; min-width: 30px; padding: 0 8px;
   border-radius: var(--te-radius-badge);
   font-size: 10px; font-weight: 600;
 }
@@ -410,9 +414,9 @@
 .te-note.error { color: var(--te-red); }
 
 /* Reason chips (gainers) ------------------------------------------------- */
-.te-why { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px 0; }
+.te-why { display: flex; flex-wrap: wrap; gap: 5px; }
 .te-why i {
-  font-style: normal; font-size: 9px; padding: 2px 6px;
+  font-style: normal; font-size: 10px; padding: 3px 8px; line-height: 1.35;
   border-radius: 5px; background: var(--te-surface-subtle); color: #7b7879;
 }
 .te-why i.structural { background: var(--te-brand-bg); color: #6e5ce7; }
@@ -478,10 +482,10 @@
 
 /* Sortable table headers */
 .te-sortable th { padding: 0; }
-.te-sortable th:not(:has(.te-sort)) { padding: 10px 20px; }
+.te-sortable th:not(:has(.te-sort)) { padding: 12px 20px; }
 .te-sort {
   width: 100%; border: 0; background: none; cursor: pointer;
-  padding: 10px 20px; font-size: 10px; font-weight: 500; color: #89868a;
+  padding: 12px 20px; font-size: 10px; font-weight: 500; color: #89868a;
   display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end;
   white-space: nowrap;
 }
@@ -490,7 +494,7 @@
 .te-sort.on { color: #6e5ce7; font-weight: 600; }
 .te-sort i { font-style: normal; font-size: 8px; width: 7px; }
 .te-row-news {
-  font-size: 10px; color: #9b989a; max-width: 250px;
+  font-size: 10px; color: #9b989a; max-width: 250px; margin-top: 3px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
