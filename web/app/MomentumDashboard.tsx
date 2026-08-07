@@ -437,6 +437,7 @@ type Envelope<T> = { data: T; generated_at: string };
 type View =
   | "dashboard"
   | "catalysts"
+  | "gainers"
   | "watchlist"
   | "execution"
   | "positions"
@@ -1094,6 +1095,7 @@ export function MomentumDashboard() {
         {([
           "dashboard",
           "catalysts",
+          "gainers",
           "watchlist",
           "execution",
           "positions",
@@ -1145,6 +1147,11 @@ export function MomentumDashboard() {
         {view === "catalysts" && <NewsCatalystPage
           items={newsCatalysts}
           now={now}
+          focus={focusTicker}
+          onFocus={setFocusTicker}
+        />}
+        {view === "gainers" && <GainersPage
+          api={API}
           focus={focusTicker}
           onFocus={setFocusTicker}
         />}
@@ -2340,4 +2347,254 @@ function EntryPlan({
       <span>NO MARKET CHASE</span>
     </footer>
   </div>;
+}
+
+// Session gainers ---------------------------------------------------------
+//
+// A ranked list of tickers answers nothing on its own. The same +40% means one
+// thing on a two-million-share float that rotated eighty times and something
+// else on a large cap that drifted up on a broker note, so every row carries
+// the evidence beside the move and the tags stay clickable: the question this
+// screen exists to answer is "what did the ones that ran have in common", and
+// that needs filtering by cause, not scrolling.
+
+type GainerReason = { tag: string; label: string };
+
+type GainerRow = {
+  rank: number;
+  ticker: string;
+  reference_price: number;
+  reference_source: string;
+  high?: number;
+  close: number;
+  change_pct: number;
+  max_change_pct?: number;
+  volume?: number;
+  relative_volume?: number;
+  float_shares?: number;
+  float_rotation?: number;
+  market_cap?: number;
+  has_news: boolean;
+  news_title?: string;
+  catalyst_score?: number;
+  reasons: GainerReason[];
+};
+
+type GainersPayload = {
+  trading_date: string;
+  session: string;
+  rows: GainerRow[];
+  dates?: string[];
+  note?: string;
+};
+
+const GAINER_SESSIONS = [
+  { key: "PRE_MARKET", label: "PRE-MARKET", clock: "04:00–09:30" },
+  { key: "REGULAR", label: "REGULAR", clock: "09:30–16:00" },
+  { key: "AFTER_HOURS", label: "AFTER-HOURS", clock: "16:00–20:00" },
+] as const;
+
+// Tags naming the structure a runner tends to have, kept apart from the ones
+// that only describe the aftermath so the eye lands on the cause.
+const STRUCTURAL_TAGS = new Set([
+  "EXTREME_ROTATION", "HIGH_ROTATION", "MICRO_FLOAT", "LOW_FLOAT",
+  "EXTREME_RVOL", "HIGH_RVOL", "STRONG_CATALYST",
+]);
+
+function compactCount(value?: number) {
+  if (!value) return "—";
+  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(0)}K`;
+  return value.toFixed(0);
+}
+
+function GainersPage({
+  api,
+  focus,
+  onFocus,
+}: {
+  api: string;
+  focus: string;
+  onFocus: (ticker: string) => void;
+}) {
+  const [session, setSession] = useState<string>("REGULAR");
+  const [day, setDay] = useState<string>("");
+  const [payload, setPayload] = useState<GainersPayload | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [active, setActive] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    const query = new URLSearchParams({ session });
+    if (day) query.set("date", day);
+    fetch(`${api}/gainers?${query}`, { signal: controller.signal })
+      .then(async (response) => {
+        const answer = await response.json();
+        if (!response.ok) throw new Error(answer?.error ?? "request failed");
+        setPayload(answer as GainersPayload);
+        setError("");
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setError(cause instanceof Error ? cause.message : "load failed");
+        }
+      })
+      .finally(() => setLoading(false));
+    return () => controller.abort();
+  }, [api, session, day]);
+
+  // Tag counts come from the day on screen, so the filter bar doubles as the
+  // answer to "what did this session's runners have in common".
+  const tags = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>();
+    for (const row of payload?.rows ?? []) {
+      for (const reason of row.reasons) {
+        const entry = counts.get(reason.tag);
+        if (entry) entry.count += 1;
+        else counts.set(reason.tag, { label: reason.label, count: 1 });
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1].count - a[1].count);
+  }, [payload]);
+
+  const rows = useMemo(() => {
+    const all = payload?.rows ?? [];
+    if (!active.size) return all;
+    // Every selected tag must be present: narrowing is the point, and a name
+    // that merely gapped is not the same as one that gapped on a micro float.
+    return all.filter((row) => {
+      const present = new Set(row.reasons.map((reason) => reason.tag));
+      return [...active].every((tag) => present.has(tag));
+    });
+  }, [payload, active]);
+
+  const toggle = (tag: string) => setActive((current) => {
+    const next = new Set(current);
+    if (next.has(tag)) next.delete(tag); else next.add(tag);
+    return next;
+  });
+
+  const rotated = rows.filter((row) => (row.float_rotation ?? 0) >= 2).length;
+  const newsless = rows.filter((row) => !row.has_news).length;
+
+  return <>
+    <Title
+      eyebrow="INCREMENTAL CAPTURE / EVIDENCE PRESERVED PER SESSION"
+      stats={<div className="stats">
+        <span><small>RANKED</small><strong>{rows.length}</strong></span>
+        <span><small>ROTATION ≥2×</small><strong>{rotated}</strong></span>
+        <span><small>NO STORED NEWS</small><strong>{newsless}</strong></span>
+      </div>}
+    >
+      Session gainers
+    </Title>
+    <section className="news-console">
+      <header className="news-console-head">
+        <span>
+          <small>TRADING DATE</small>
+          <strong>{payload?.trading_date || "—"}</strong>
+        </span>
+        <span>
+          <small>DAYS STORED</small>
+          <strong>{payload?.dates?.length ?? 0}</strong>
+        </span>
+        <span>
+          <small>MEASURED FROM</small>
+          <strong>
+            {session === "AFTER_HOURS" ? "REGULAR CLOSE" : "PRIOR CLOSE"}
+          </strong>
+        </span>
+      </header>
+
+      <div className="news-filters" role="group" aria-label="Session">
+        {GAINER_SESSIONS.map((option) => <button
+          className={session === option.key ? "active" : ""}
+          key={option.key}
+          onClick={() => setSession(option.key)}
+        >
+          {option.label} <i>{option.clock}</i>
+        </button>)}
+        <select
+          className="gain-date"
+          value={day}
+          onChange={(event) => setDay(event.target.value)}
+        >
+          <option value="">LATEST</option>
+          {(payload?.dates ?? []).map((value) => <option key={value} value={value}>
+            {value}
+          </option>)}
+        </select>
+        <p>
+          Ranked on where the session closed; the best print it offered is kept
+          beside it. Pre-market and after-hours exist only for dates the
+          collector was running.
+        </p>
+      </div>
+
+      {tags.length > 0 && <div className="gain-tags">
+        {tags.map(([tag, entry]) => <button
+          key={tag}
+          className={`${active.has(tag) ? "active" : ""} ${
+            STRUCTURAL_TAGS.has(tag) ? "structural" : ""}`}
+          onClick={() => toggle(tag)}
+        >
+          {entry.label}<b>{entry.count}</b>
+        </button>)}
+        {active.size > 0 && <button className="gain-clear" onClick={() => setActive(new Set())}>
+          CLEAR
+        </button>}
+      </div>}
+
+      {error && <p className="gain-note error">{error}</p>}
+      {loading && <p className="gain-note">LOADING…</p>}
+      {!loading && payload?.note && <p className="gain-note">{payload.note}</p>}
+
+      {rows.length > 0 && <>
+        <div className="gain-head">
+          <span>RK</span><span>SYMBOL</span><span>CLOSE</span><span>MOVE</span>
+          <span>BEST</span><span>VOL</span><span>RVOL</span><span>FLOAT</span>
+          <span>ROTATION</span><span>WHY IT RANKED</span>
+        </div>
+        <div className="gain-rows">
+          {rows.map((row) => <button
+            key={row.ticker}
+            className={`gain-row ${focus === row.ticker ? "focus" : ""}`}
+            onClick={() => onFocus(row.ticker)}
+          >
+            <span className="rk">{String(row.rank).padStart(2, "0")}</span>
+            <span className="sym">
+              <strong>{row.ticker}</strong>
+              {row.news_title && <small title={row.news_title}>{row.news_title}</small>}
+            </span>
+            <span className="num">{money(row.close, row.close < 1 ? 4 : 2)}</span>
+            <span className="num up">+{row.change_pct.toFixed(1)}%</span>
+            <span className="num best">
+              {row.max_change_pct ? `+${row.max_change_pct.toFixed(1)}%` : "—"}
+            </span>
+            <span className="num">{compactCount(row.volume)}</span>
+            <span className="num">
+              {row.relative_volume ? `${row.relative_volume.toFixed(1)}×` : "—"}
+            </span>
+            <span className="num">{compactCount(row.float_shares)}</span>
+            <span className={`num ${(row.float_rotation ?? 0) >= 2 ? "hot" : ""}`}>
+              {row.float_rotation ? `${row.float_rotation.toFixed(1)}×` : "—"}
+            </span>
+            <span className="why">
+              {row.reasons.map((reason) => <i
+                key={reason.tag}
+                className={STRUCTURAL_TAGS.has(reason.tag) ? "structural" : ""}
+              >{reason.label}</i>)}
+            </span>
+          </button>)}
+        </div>
+      </>}
+
+      {!loading && !payload?.note && !rows.length &&
+        (payload?.rows?.length ?? 0) > 0 &&
+        <p className="gain-note">NO NAME MATCHES THE SELECTED TAGS</p>}
+    </section>
+  </>;
 }

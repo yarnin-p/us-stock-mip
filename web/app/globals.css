@@ -1931,72 +1931,76 @@ h2 { font-size: 34px; }
 .ticket-page { max-width: 460px; margin: 0 auto; padding: 28px 18px; }
 .ticket-page .tk { margin-top: 0; }
 
-/* Session gainers ------------------------------------------------------- */
-.gainers-page { max-width: 1400px; margin: 0 auto; padding: 24px 18px; }
-.gb-head {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 16px; flex-wrap: wrap;
-}
-.gb-head h2 { margin: 0; font-size: 20px; letter-spacing: 0.2px; }
-.gb-dates { display: flex; align-items: center; gap: 10px; }
-.gb-dates select {
-  background: #16181d; color: inherit; border: 1px solid #2a2e37;
-  border-radius: 6px; padding: 6px 10px; font: inherit;
-}
-.gb-dates b { font-variant-numeric: tabular-nums; opacity: 0.75; }
 
-.gb-sessions { display: flex; gap: 8px; margin: 16px 0 12px; flex-wrap: wrap; }
-.gb-sessions button {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  background: #16181d; color: inherit; border: 1px solid #2a2e37;
-  border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer;
+/* Session gainers — inside the decision console --------------------------- */
+.news-filters .gain-date {
+  background: rgba(9, 16, 20, .8); color: var(--ink);
+  border: 1px solid var(--soft-line); border-radius: 2px;
+  font: inherit; font-size: 11px; letter-spacing: .08em;
+  padding: 6px 8px; margin-left: 8px;
 }
-.gb-sessions button em { font-style: normal; font-size: 11px; opacity: 0.5; }
-.gb-sessions button.on { border-color: #4c7dff; background: #1b2231; }
-
-.gb-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
-.gb-tags button {
+.news-filters button i {
+  font-style: normal; opacity: .45; margin-left: 6px; font-size: 10px;
+}
+.gain-tags {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px;
+  border-bottom: 1px solid var(--soft-line);
+}
+.gain-tags button {
   display: inline-flex; align-items: center; gap: 6px;
-  background: #14161b; color: #9aa3b2; border: 1px solid #262a33;
-  border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 12px;
-  cursor: pointer;
+  background: rgba(9, 16, 20, .7); color: var(--muted);
+  border: 1px solid var(--soft-line); border-radius: 2px;
+  font: inherit; font-size: 10px; letter-spacing: .07em;
+  padding: 4px 9px; cursor: pointer;
 }
-.gb-tags button span { opacity: 0.55; font-variant-numeric: tabular-nums; }
-/* Structural tags describe the shape a runner tends to have; the ones that
-   merely describe the aftermath stay muted so the eye lands on the cause. */
-.gb-tags button.structural { border-color: #3a3520; }
-.gb-tags button.on { background: #23324f; color: #cfe0ff; border-color: #4c7dff; }
-.gb-clear { color: #ef8a8a !important; border-color: #402b2b !important; }
+.gain-tags button b { opacity: .5; font-weight: 500; }
+/* Structural tags name the shape a runner tends to have; the ones describing
+   the aftermath stay muted so the eye lands on the cause. */
+.gain-tags button.structural { color: #d9c489; border-color: rgba(217, 196, 137, .28); }
+.gain-tags button.active {
+  color: var(--accent); border-color: var(--accent);
+  background: rgba(89, 215, 201, .12);
+}
+.gain-clear { color: #ef8a8a !important; border-color: rgba(239, 138, 138, .3) !important; }
 
-.gb-scroll { overflow-x: auto; }
-.gb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.gb-table th, .gb-table td {
-  padding: 8px 10px; border-bottom: 1px solid #1e2128; text-align: left;
-  vertical-align: top;
+.gain-head, .gain-row {
+  display: grid;
+  grid-template-columns: 34px minmax(150px, 1.5fr) 78px 74px 74px 70px 62px 72px 78px minmax(200px, 2fr);
+  gap: 10px; align-items: center;
 }
-.gb-table th {
-  font-weight: 500; font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.4px; color: #7c8595; white-space: nowrap;
+.gain-head {
+  padding: 9px 14px; border-bottom: 1px solid var(--soft-line);
+  font-size: 10px; letter-spacing: .12em; color: var(--muted);
 }
-.gb-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.gb-rank { color: #6b7280; font-variant-numeric: tabular-nums; }
-.gb-ticker b { font-size: 14px; letter-spacing: 0.3px; }
-.gb-news {
-  display: block; max-width: 380px; margin-top: 3px; font-size: 11px;
-  color: #7c8595; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap;
+.gain-head span:nth-child(n+3):nth-child(-n+9) { text-align: right; }
+.gain-rows { display: grid; }
+.gain-row {
+  width: 100%; text-align: left; background: none; cursor: pointer;
+  border: 0; border-bottom: 1px solid var(--soft-line);
+  padding: 11px 14px; color: inherit; font: inherit;
 }
-.gb-up { color: #5fd08a; }
-.gb-mfe { color: #8fb7ff; }
-.gb-hot { color: #ffcc66; font-weight: 600; }
-.gb-reasons { display: flex; flex-wrap: wrap; gap: 4px; max-width: 340px; }
-.gb-reasons span {
-  font-size: 11px; padding: 2px 7px; border-radius: 4px;
-  background: #14161b; color: #7c8595; border: 1px solid #22262e;
+.gain-row:hover { background: rgba(89, 215, 201, .05); }
+.gain-row.focus { background: rgba(89, 215, 201, .1); }
+.gain-row .rk { color: var(--muted); font-size: 11px; }
+.gain-row .sym { display: grid; gap: 2px; min-width: 0; }
+.gain-row .sym strong { font-size: 14px; letter-spacing: .04em; }
+.gain-row .sym small {
+  color: var(--muted); font-size: 10px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
 }
-.gb-reasons span.structural { color: #d6c48a; border-color: #3a3520; }
-.gb-note { margin: 14px 0; font-size: 13px; color: #7c8595; }
-.gb-error {
-  margin: 14px 0; font-size: 13px; color: #ef8a8a;
-  border-left: 2px solid #ef8a8a; padding-left: 10px;
+.gain-row .num { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+.gain-row .up { color: var(--accent); }
+.gain-row .best { color: #8fb7ff; }
+.gain-row .hot { color: #ffcc66; font-weight: 600; }
+.gain-row .why { display: flex; flex-wrap: wrap; gap: 4px; }
+.gain-row .why i {
+  font-style: normal; font-size: 10px; letter-spacing: .04em;
+  padding: 2px 6px; border: 1px solid var(--soft-line); border-radius: 2px;
+  color: var(--muted); background: rgba(9, 16, 20, .6);
 }
+.gain-row .why i.structural { color: #d9c489; border-color: rgba(217, 196, 137, .28); }
+.gain-note {
+  margin: 0; padding: 14px; font-size: 11px; letter-spacing: .08em;
+  color: var(--muted);
+}
+.gain-note.error { color: #ef8a8a; }
