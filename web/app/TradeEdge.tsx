@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { NAV, NAV_KEYS, type NavKey } from "./nav";
 
 // TradeEdge — the warm-white admin shell.
 //
@@ -226,24 +228,6 @@ const Icon = ({ d }: { d: string }) => (
   </svg>
 );
 
-const NAV = [
-  { key: "dashboard", label: "Dashboard", icon: "M3 12h5l2 6 4-14 2 8h5" },
-  { key: "market", label: "Market Overview", icon: "M3 3v18h18|M7 14l3-4 3 3 5-7" },
-  { key: "scanner", label: "Daily Scanner", icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z|M20 20l-4-4" },
-  { key: "gainers", label: "Gainers", icon: "M3 17l6-6 4 4 8-8|M15 7h6v6" },
-  { key: "watchlist", label: "Watchlist", icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z|M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" },
-  { key: "positions", label: "Positions", icon: "M3 7h18v12H3z|M3 7l3-4h12l3 4" },
-  { key: "orders", label: "Orders", icon: "M8 6h12|M8 12h12|M8 18h12|M3 6h.01|M3 12h.01|M3 18h.01" },
-  { key: "performance", label: "Performance", icon: "M4 19V9|M10 19V5|M16 19v-7|M22 19H2" },
-  { key: "backtest", label: "Backtest", icon: "M4 4v6h6|M4 10a8 8 0 1 1 2 5" },
-  { key: "analytics", label: "Analytics", icon: "M12 3a9 9 0 1 0 9 9h-9z|M14 3.5A9 9 0 0 1 20.5 10H14z" },
-  { key: "alerts", label: "Alerts", icon: "M18 8a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8|M13.7 21a2 2 0 0 1-3.4 0" },
-  { key: "news", label: "News & Catalyst", icon: "M4 4h13v16H4z|M17 8h3v9a3 3 0 0 1-3 3|M7 8h7|M7 12h7|M7 16h4" },
-  { key: "journal", label: "Trading Journal", icon: "M4 4h14v16H4z|M8 4v16|M11 9h4|M11 13h4" },
-  { key: "settings", label: "Settings", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z|M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 11.5 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9 2 2 0 1 1 0 4z" },
-] as const;
-
-type NavKey = (typeof NAV)[number]["key"];
 
 /* ── data hook ─────────────────────────────────────────────────────────── */
 
@@ -276,8 +260,15 @@ function useJSON<T>(path: string | null, deps: unknown[] = []) {
 
 /* ── shell ─────────────────────────────────────────────────────────────── */
 
-export function TradeEdge() {
-  const [view, setView] = useState<NavKey>("dashboard");
+export function TradeEdgeApp({ section }: { section: string }) {
+  const router = useRouter();
+  const view = (NAV_KEYS.includes(section)
+    ? section : "dashboard") as NavKey;
+  // Navigation is a route change, not a state change: the URL is what survives
+  // a refresh and what can be sent to someone else.
+  const setView = useCallback((key: NavKey) => {
+    router.push(key === "dashboard" ? "/" : `/${key}`);
+  }, [router]);
   const [now, setNow] = useState(() => new Date());
   const [focus, setFocus] = useState("");
 
@@ -690,8 +681,23 @@ function explain(tag: string, row: GainerRow): string {
 /* ── gainers: a day, then a name ───────────────────────────────────────── */
 
 function GainersView() {
-  const [day, setDay] = useState("");
-  const [detail, setDetail] = useState<string | null>(null);
+  const router = useRouter();
+  const params = useSearchParams();
+  // Day, session and the opened name all live in the URL: a refresh has to
+  // land back on what was being read, and a screen worth showing someone is a
+  // screen worth linking to.
+  const day = params.get("date") ?? "";
+  const session = params.get("session") ?? "REGULAR";
+  const detail = params.get("ticker");
+
+  const setParam = useCallback((patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(params.toString());
+    for (const [key, value] of Object.entries(patch)) {
+      if (value) next.set(key, value); else next.delete(key);
+    }
+    const query = next.toString();
+    router.replace(query ? `/gainers?${query}` : "/gainers", { scroll: false });
+  }, [params, router]);
 
   const pre = useJSON<GainersPayload>(
     `/gainers?session=PRE_MARKET${day ? `&date=${day}` : ""}`);
@@ -717,10 +723,12 @@ function GainersView() {
         ticker={detail}
         tradingDate={tradingDate}
         sessions={sessions}
-        onBack={() => setDetail(null)}
+        onBack={() => setParam({ ticker: null })}
       />
     );
   }
+
+  const activePayload = sessions.find((entry) => entry.key === session)?.payload ?? null;
 
   return (
     <>
@@ -732,7 +740,7 @@ function GainersView() {
               {dates.length} วันที่เก็บไว้
             </span>
             <select className="te-select" value={day} aria-label="Trading date"
-              onChange={(event) => setDay(event.target.value)}>
+              onChange={(event) => setParam({ date: event.target.value || null })}>
               <option value="">ล่าสุด</option>
               {dates.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
@@ -742,24 +750,39 @@ function GainersView() {
           {dates.slice(0, 14).map((value) => (
             <button key={value}
               className={value === tradingDate ? "on" : ""}
-              onClick={() => setDay(value)}>
+              onClick={() => setParam({ date: value })}>
               {value.slice(5).replace("-", "/")}
             </button>
           ))}
         </div>
       </section>
 
-      {loading && <p className="te-note">Loading…</p>}
+      <section className="te-card">
+        <div className="te-tabs">
+          {sessions.map(({ key, payload }) => {
+            const meta = SESSION_META[key];
+            return (
+              <button key={key} className={session === key ? "active" : ""}
+                onClick={() => setParam({ session: key })}>
+                {meta.label}
+                <i>{payload?.rows?.length ? `${payload.rows.length}` : "0"}</i>
+              </button>
+            );
+          })}
+          <span className="te-tab-note">{SESSION_META[session]?.clock}</span>
+        </div>
 
-      {!loading && sessions.map(({ key, payload }) => (
-        <SessionBlock key={key} sessionKey={key} payload={payload}
-          onOpen={setDetail} />
-      ))}
+        {loading && <p className="te-note">Loading…</p>}
+        {!loading && (
+          <SessionTable sessionKey={session} payload={activePayload}
+            onOpen={(ticker) => setParam({ ticker })} />
+        )}
+      </section>
     </>
   );
 }
 
-function SessionBlock({
+function SessionTable({
   sessionKey, payload, onOpen,
 }: {
   sessionKey: string;
@@ -769,8 +792,6 @@ function SessionBlock({
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({
     key: "rank", desc: true,
   });
-  const [open, setOpen] = useState(true);
-  const meta = SESSION_META[sessionKey];
   const all = payload?.rows ?? [];
 
   const rows = useMemo(() => {
@@ -797,28 +818,21 @@ function SessionBlock({
   const silent = all.filter((row) => !row.has_news).length;
 
   return (
-    <section className="te-card">
-      <button className="te-session-head" onClick={() => setOpen((value) => !value)}>
-        <span className="te-session-name">
-          <b>{meta?.label ?? sessionKey}</b>
-          <small>{meta?.clock}</small>
-        </span>
-        <span className="te-session-stats">
-          <span><small>ranked</small><b>{all.length}</b></span>
-          <span><small>rotation ≥2×</small>
-            <b style={{ color: rotated ? "#6e5ce7" : undefined }}>{rotated}</b></span>
-          <span><small>held</small>
-            <b style={{ color: held ? "#35b06b" : undefined }}>{held}</b></span>
-          <span><small>no news</small><b>{silent}</b></span>
-        </span>
-        <span className="te-session-caret" aria-hidden="true">{open ? "▾" : "▸"}</span>
-      </button>
+    <>
+      <div className="te-stats">
+        <div><small>Ranked</small><b>{all.length}</b></div>
+        <div><small>Rotation ≥2×</small>
+          <b style={{ color: rotated ? "#6e5ce7" : undefined }}>{rotated}</b></div>
+        <div><small>Held the move</small>
+          <b style={{ color: held ? "#35b06b" : undefined }}>{held}</b></div>
+        <div><small>No stored news</small><b>{silent}</b></div>
+      </div>
 
-      {open && payload?.note && (
+      {payload?.note && (
         <div className="te-empty"><b>ไม่มีข้อมูล</b><small>{payload.note}</small></div>
       )}
 
-      {open && rows.length > 0 && (
+      {rows.length > 0 && (
         <div className="te-table-scroll">
           <table className="te-table te-sortable">
             <thead>
@@ -882,7 +896,7 @@ function SessionBlock({
           </table>
         </div>
       )}
-    </section>
+    </>
   );
 }
 

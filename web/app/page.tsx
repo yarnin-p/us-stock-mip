@@ -1,5 +1,5 @@
-import { TradeEdge } from "./TradeEdge";
+import { TradeEdgeApp } from "./TradeEdge";
 
 export default function Home() {
-  return <TradeEdge />;
+  return <TradeEdgeApp section="dashboard" />;
 }

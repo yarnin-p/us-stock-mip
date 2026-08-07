@@ -605,3 +605,14 @@
   .te-journey-cell { border-right: 0; border-bottom: 1px solid var(--te-border-soft); }
   .te-session-stats { gap: 14px; }
 }
+
+.te-tabs button i {
+  font-style: normal; font-size: 9px; margin-left: 6px;
+  background: var(--te-surface-subtle); color: #89868a;
+  padding: 1px 6px; border-radius: 999px;
+}
+.te-tabs button.active i { background: var(--te-brand-bg); color: #6e5ce7; }
+.te-tab-note {
+  margin-left: auto; align-self: center; padding-bottom: 10px;
+  font-size: 10px; color: #9b989a;
+}
