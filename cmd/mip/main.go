@@ -78,6 +78,8 @@ func run(args []string, stderr io.Writer) error {
 		return runGainers(args[1:], os.Stdout, stderr)
 	case "float-backfill":
 		return runFloatBackfill(args[1:], os.Stdout, stderr)
+	case "bars-backfill":
+		return runBarsBackfill(args[1:], os.Stdout, stderr)
 	case "opening-list":
 		return runOpeningList(args[1:], os.Stdout, stderr)
 	case "intelligence":
