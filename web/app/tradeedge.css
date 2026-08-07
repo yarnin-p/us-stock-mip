@@ -493,3 +493,115 @@
   font-size: 10px; color: #9b989a; max-width: 250px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* Gainers: a day, then a name ------------------------------------------- */
+.te-daystrip {
+  display: flex; gap: 6px; padding: 14px 20px 18px; flex-wrap: wrap;
+}
+.te-daystrip button {
+  height: 28px; padding: 0 11px;
+  background: var(--te-card); border: 1px solid var(--te-border);
+  border-radius: 999px; font-size: 10px; color: #625f61; cursor: pointer;
+  font-variant-numeric: tabular-nums; transition: all 140ms ease;
+}
+.te-daystrip button:hover { background: #faf8f7; border-color: #ddd8d3; }
+.te-daystrip button.on {
+  background: var(--te-brand-bg); border-color: var(--te-brand); color: #6e5ce7;
+  font-weight: 600;
+}
+
+.te-session-head {
+  display: flex; align-items: center; gap: 18px; width: 100%;
+  padding: 16px 20px; border: 0; background: none; cursor: pointer;
+  text-align: left; border-bottom: 1px solid var(--te-border-soft);
+}
+.te-session-name b { display: block; font-size: 14px; font-weight: 600; }
+.te-session-name small { display: block; font-size: 10px; color: #9b989a; margin-top: 2px; }
+.te-session-stats { margin-left: auto; display: flex; gap: 22px; }
+.te-session-stats span { display: block; text-align: right; }
+.te-session-stats small { display: block; font-size: 9px; color: #898588; }
+.te-session-stats b {
+  display: block; font-size: 13px; font-weight: 600; margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.te-session-caret { color: var(--te-muted); font-size: 11px; }
+.te-open-cell {
+  font-size: 10px; color: var(--te-brand); white-space: nowrap;
+  opacity: 0; transition: opacity 140ms ease;
+}
+.te-table tbody tr:hover .te-open-cell { opacity: 1; }
+
+/* Detail ----------------------------------------------------------------- */
+.te-detail-head {
+  display: flex; align-items: center; gap: 18px;
+  padding: 18px 20px; border-bottom: 1px solid var(--te-border-soft);
+}
+.te-back {
+  border: 1px solid var(--te-border); background: var(--te-card);
+  border-radius: 8px; height: 30px; padding: 0 12px;
+  font-size: 11px; color: #4e4a4d; cursor: pointer;
+}
+.te-back:hover { background: #faf8f7; }
+.te-detail-title h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.te-detail-title small { font-size: 11px; color: #8c898a; }
+.te-detail-key { margin-left: auto; display: flex; gap: 22px; }
+.te-detail-key span { text-align: right; }
+.te-detail-key small { display: block; font-size: 9px; color: #898588; }
+.te-detail-key b { display: block; font-size: 13px; font-weight: 600; margin-top: 2px; }
+
+/* The day reads as one story: a name that ran pre-market and was sold through
+   the regular session is a different lesson from one that built all day. */
+.te-journey { display: grid; grid-template-columns: repeat(3, 1fr); }
+.te-journey-cell {
+  padding: 18px 20px; border-right: 1px solid var(--te-border-soft);
+  display: grid; gap: 4px; align-content: start;
+}
+.te-journey-cell:last-child { border-right: 0; }
+.te-journey-cell.muted { background: #fcfbfa; }
+.te-journey-cell > small { font-size: 10px; color: #898588; }
+.te-journey-cell > b { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+.te-journey-cell.muted > b { color: #cfccc9; }
+.te-journey-cell > em {
+  font-style: normal; font-size: 11px; color: #625f61;
+  font-variant-numeric: tabular-nums;
+}
+.te-journey-meta { font-size: 10px; color: #9b989a; font-variant-numeric: tabular-nums; }
+
+.te-detail-grid {
+  display: grid; grid-template-columns: 1.1fr 1fr; gap: var(--te-gap);
+  align-items: start;
+}
+.te-reasons { padding: 6px 20px 18px; }
+.te-reason-group { padding-top: 12px; }
+.te-reason-session {
+  display: block; font-size: 10px; font-weight: 600; color: #9b989a;
+  letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px;
+}
+.te-reason {
+  padding: 10px 0; border-bottom: 1px solid var(--te-border-soft);
+}
+.te-reason:last-child { border-bottom: 0; }
+.te-reason b {
+  display: inline-block; font-size: 11px; font-weight: 600;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--te-surface-subtle); color: #625f61;
+}
+.te-reason b.structural { background: var(--te-brand-bg); color: #6e5ce7; }
+.te-reason p {
+  margin: 7px 0 0; font-size: 12px; line-height: 1.65; color: #4e4a4d;
+}
+.te-news-title { margin: 0; font-size: 14px; line-height: 1.55; font-weight: 500; }
+.te-news-meta {
+  display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+  font-size: 10px; color: #898588;
+}
+.te-news-caveat {
+  margin: 14px 0 0; font-size: 10px; line-height: 1.6; color: #9b989a;
+}
+
+@media (max-width: 1199px) {
+  .te-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .te-journey { grid-template-columns: minmax(0, 1fr); }
+  .te-journey-cell { border-right: 0; border-bottom: 1px solid var(--te-border-soft); }
+  .te-session-stats { gap: 14px; }
+}

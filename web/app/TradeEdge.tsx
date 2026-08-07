@@ -20,6 +20,10 @@ type GainerReason = { tag: string; label: string };
 type GainerRow = {
   rank: number;
   ticker: string;
+  reference_price: number;
+  reference_source: string;
+  high?: number;
+  low?: number;
   close: number;
   change_pct: number;
   max_change_pct?: number;
@@ -30,6 +34,8 @@ type GainerRow = {
   market_cap?: number;
   has_news: boolean;
   news_title?: string;
+  news_published_at?: string;
+  catalyst_score?: number;
   reasons: GainerReason[];
 };
 type GainersPayload = {
@@ -632,6 +638,432 @@ const giveback = (row: GainerRow) => {
   return ((high - close) / high) * 100;
 };
 
+const SESSION_META: Record<string, { label: string; clock: string }> = {
+  PRE_MARKET: { label: "Pre-Market", clock: "04:00 – 09:30 ET" },
+  REGULAR: { label: "Regular", clock: "09:30 – 16:00 ET" },
+  AFTER_HOURS: { label: "After-Hours", clock: "16:00 – 20:00 ET" },
+};
+
+// Each tag is restated as a sentence carrying the row's own number. A chip
+// reading "float หมุนหนักมาก" tells you a threshold was crossed; it does not
+// tell you the float turned over eleven times, which is the fact worth having.
+function explain(tag: string, row: GainerRow): string {
+  const rotation = row.float_rotation?.toFixed(1);
+  const rvol = row.relative_volume?.toFixed(1);
+  const float = compact(row.float_shares);
+  switch (tag) {
+    case "EXTREME_ROTATION":
+      return `หุ้นหมุนเวียนทั้งก้อนเปลี่ยนมือ ${rotation} รอบในหนึ่ง session — ระดับนี้แปลว่ามีคนเข้ามาไล่กันจริง ไม่ใช่ราคาขยับลอยๆ`;
+    case "HIGH_ROTATION":
+      return `float หมุน ${rotation} รอบ — เกินเกณฑ์ 2 เท่าที่วัดได้ว่าโอกาส spike ขึ้นจาก 11% เป็น 46%`;
+    case "MICRO_FLOAT":
+      return `float เพียง ${float} หุ้น — เงินก้อนไม่ใหญ่ก็ดันราคาได้ และลงก็เร็วเท่ากัน`;
+    case "LOW_FLOAT":
+      return `float ${float} หุ้น ถือว่าน้อย ราคาจึงตอบสนองแรงกว่าปกติ`;
+    case "EXTREME_RVOL":
+      return `ปริมาณซื้อขาย ${rvol} เท่าของค่าเฉลี่ย 10 วัน — ผิดปกติชัดเจน`;
+    case "HIGH_RVOL":
+      return `ปริมาณซื้อขาย ${rvol} เท่าของค่าเฉลี่ย — มีคนสนใจมากกว่าปกติ`;
+    case "STRONG_CATALYST":
+      return `ข่าวถูกจัดว่าเป็นตัวเร่งระดับแรง (คะแนน ${row.catalyst_score?.toFixed(2) ?? "—"})`;
+    case "NEWS_CATALYST":
+      return "มีข่าวในฐานข้อมูลช่วงเวลาที่เกี่ยวข้อง แต่ไม่ถึงเกณฑ์ตัวเร่งแรง";
+    case "NO_STORED_NEWS":
+      return "ไม่มีข่าวในฐานข้อมูล — เป็นข้อเท็จจริงเกี่ยวกับฟีดข่าวของเรา ไม่ได้แปลว่าไม่มีข่าวในโลกจริง";
+    case "SUB_DOLLAR":
+      return "ราคาต่ำกว่า $1 — เข้าเขตเกณฑ์ราคาขั้นต่ำของ Nasdaq ถ้ายืนนานพอ";
+    case "NANO_CAP":
+      return `มูลค่าตลาด ${money(row.market_cap, 0)} — เล็กพอที่แรงซื้อไม่มากก็เปลี่ยนราคาได้`;
+    case "FADED_FROM_HIGH":
+      return `ถอยจากจุดสูงสุดของ session ${giveback(row).toFixed(0)}% — คนที่ไล่ตอนสูงสุดขาดทุนก่อนจบวัน`;
+    case "CLOSED_AT_HIGH":
+      return "ปิด session ใกล้จุดสูงสุด — แรงซื้อยังอยู่จนจบ ไม่ได้ถูกเทออก";
+    case "NEW_52W_HIGH":
+      return "ทำจุดสูงสุดใหม่ในรอบ 52 สัปดาห์ — ไม่มีคนติดดอยเหนือราคานี้";
+    case "NEAR_52W_LOW":
+      return "อยู่ใกล้จุดต่ำสุดรอบ 52 สัปดาห์ — หลุดลงไปคือไม่มีแนวรับในอดีตให้อ้างอิง";
+    default:
+      return tag;
+  }
+}
+
+/* ── gainers: a day, then a name ───────────────────────────────────────── */
+
+function GainersView() {
+  const [day, setDay] = useState("");
+  const [detail, setDetail] = useState<string | null>(null);
+
+  const pre = useJSON<GainersPayload>(
+    `/gainers?session=PRE_MARKET${day ? `&date=${day}` : ""}`);
+  const reg = useJSON<GainersPayload>(
+    `/gainers?session=REGULAR${day ? `&date=${day}` : ""}`);
+  const ah = useJSON<GainersPayload>(
+    `/gainers?session=AFTER_HOURS${day ? `&date=${day}` : ""}`);
+
+  const loading = pre.loading || reg.loading || ah.loading;
+  const dates = reg.data?.dates ?? pre.data?.dates ?? ah.data?.dates ?? [];
+  const tradingDate = reg.data?.trading_date || pre.data?.trading_date
+    || ah.data?.trading_date || "";
+
+  const sessions = useMemo(() => [
+    { key: "PRE_MARKET", payload: pre.data },
+    { key: "REGULAR", payload: reg.data },
+    { key: "AFTER_HOURS", payload: ah.data },
+  ], [pre.data, reg.data, ah.data]);
+
+  if (detail) {
+    return (
+      <GainerDetail
+        ticker={detail}
+        tradingDate={tradingDate}
+        sessions={sessions}
+        onBack={() => setDetail(null)}
+      />
+    );
+  }
+
+  return (
+    <>
+      <section className="te-card">
+        <div className="te-card-head">
+          <h2>Gainers — {tradingDate || "—"}</h2>
+          <div className="te-spacer" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: "#898588" }}>
+              {dates.length} วันที่เก็บไว้
+            </span>
+            <select className="te-select" value={day} aria-label="Trading date"
+              onChange={(event) => setDay(event.target.value)}>
+              <option value="">ล่าสุด</option>
+              {dates.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="te-daystrip">
+          {dates.slice(0, 14).map((value) => (
+            <button key={value}
+              className={value === tradingDate ? "on" : ""}
+              onClick={() => setDay(value)}>
+              {value.slice(5).replace("-", "/")}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {loading && <p className="te-note">Loading…</p>}
+
+      {!loading && sessions.map(({ key, payload }) => (
+        <SessionBlock key={key} sessionKey={key} payload={payload}
+          onOpen={setDetail} />
+      ))}
+    </>
+  );
+}
+
+function SessionBlock({
+  sessionKey, payload, onOpen,
+}: {
+  sessionKey: string;
+  payload: GainersPayload | null;
+  onOpen: (ticker: string) => void;
+}) {
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({
+    key: "rank", desc: true,
+  });
+  const [open, setOpen] = useState(true);
+  const meta = SESSION_META[sessionKey];
+  const all = payload?.rows ?? [];
+
+  const rows = useMemo(() => {
+    const pick = (row: GainerRow) => {
+      switch (sort.key) {
+        case "change": return row.change_pct;
+        case "best": return row.max_change_pct ?? 0;
+        case "giveback": return giveback(row);
+        case "volume": return row.volume ?? 0;
+        case "rvol": return row.relative_volume ?? 0;
+        case "float": return row.float_shares ?? 0;
+        case "rotation": return row.float_rotation ?? 0;
+        default: return -row.rank;
+      }
+    };
+    return all.slice().sort((a, b) => sort.desc ? pick(b) - pick(a) : pick(a) - pick(b));
+  }, [all, sort]);
+
+  const sortBy = useCallback((key: SortKey) => setSort((current) =>
+    current.key === key ? { key, desc: !current.desc } : { key, desc: true }), []);
+
+  const rotated = all.filter((row) => (row.float_rotation ?? 0) >= 2).length;
+  const held = all.filter((row) => giveback(row) <= 15).length;
+  const silent = all.filter((row) => !row.has_news).length;
+
+  return (
+    <section className="te-card">
+      <button className="te-session-head" onClick={() => setOpen((value) => !value)}>
+        <span className="te-session-name">
+          <b>{meta?.label ?? sessionKey}</b>
+          <small>{meta?.clock}</small>
+        </span>
+        <span className="te-session-stats">
+          <span><small>ranked</small><b>{all.length}</b></span>
+          <span><small>rotation ≥2×</small>
+            <b style={{ color: rotated ? "#6e5ce7" : undefined }}>{rotated}</b></span>
+          <span><small>held</small>
+            <b style={{ color: held ? "#35b06b" : undefined }}>{held}</b></span>
+          <span><small>no news</small><b>{silent}</b></span>
+        </span>
+        <span className="te-session-caret" aria-hidden="true">{open ? "▾" : "▸"}</span>
+      </button>
+
+      {open && payload?.note && (
+        <div className="te-empty"><b>ไม่มีข้อมูล</b><small>{payload.note}</small></div>
+      )}
+
+      {open && rows.length > 0 && (
+        <div className="te-table-scroll">
+          <table className="te-table te-sortable">
+            <thead>
+              <tr>
+                <SortHead label="#" col="rank" sort={sort} onSort={sortBy} plain />
+                <th>Symbol</th>
+                <th className="num">Close</th>
+                <SortHead label="Change %" col="change" sort={sort} onSort={sortBy} />
+                <SortHead label="Best" col="best" sort={sort} onSort={sortBy} />
+                <SortHead label="Giveback" col="giveback" sort={sort} onSort={sortBy} />
+                <SortHead label="RVol" col="rvol" sort={sort} onSort={sortBy} />
+                <SortHead label="Float" col="float" sort={sort} onSort={sortBy} />
+                <SortHead label="Rotation" col="rotation" sort={sort} onSort={sortBy} />
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const gave = giveback(row);
+                return (
+                  <tr key={row.ticker} onClick={() => onOpen(row.ticker)}>
+                    <td style={{ color: "#abacaf" }}>{row.rank}</td>
+                    <td>
+                      <div className="te-sym">{row.ticker}</div>
+                      {row.news_title && (
+                        <div className="te-row-news" title={row.news_title}>
+                          {row.news_title}
+                        </div>
+                      )}
+                    </td>
+                    <td className="num">{money(row.close, row.close < 1 ? 4 : 2)}</td>
+                    <td className="num te-up">{pct(row.change_pct, 1)}</td>
+                    <td className="num" style={{ color: "#7462eb" }}>
+                      {row.max_change_pct ? pct(row.max_change_pct, 1) : "—"}
+                    </td>
+                    <td className="num">
+                      {gave > 0
+                        // Red only past a third given back: some fade is normal,
+                        // and colouring all of it would make the column noise.
+                        ? <span style={{ color: gave >= 33 ? "#eb5a5a" : "#9b989a" }}>
+                            −{gave.toFixed(0)}%
+                          </span>
+                        : <span style={{ color: "#35b06b" }}>held</span>}
+                    </td>
+                    <td className="num">
+                      {row.relative_volume ? `${row.relative_volume.toFixed(1)}×` : "—"}
+                    </td>
+                    <td className="num">{compact(row.float_shares)}</td>
+                    <td className="num">
+                      {row.float_rotation ? (
+                        <span className={`te-badge ${row.float_rotation >= 2 ? "purple" : "low"}`}>
+                          {row.float_rotation.toFixed(1)}×
+                        </span>
+                      ) : "—"}
+                    </td>
+                    <td className="te-open-cell">ดูรายละเอียด →</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ── detail: one name, one day, all three sessions ─────────────────────── */
+
+function GainerDetail({
+  ticker, tradingDate, sessions, onBack,
+}: {
+  ticker: string;
+  tradingDate: string;
+  sessions: { key: string; payload: GainersPayload | null }[];
+  onBack: () => void;
+}) {
+  // The same name is looked up in every session so the day reads as one story:
+  // a ticker that ran in pre-market and was sold through the regular session is
+  // a different lesson from one that built all day.
+  const appearances = sessions
+    .map(({ key, payload }) => ({
+      key,
+      row: payload?.rows?.find((row) => row.ticker === ticker),
+    }))
+    .filter((entry): entry is { key: string; row: GainerRow } => Boolean(entry.row));
+
+  const primary = appearances.find((entry) => entry.key === "REGULAR")?.row
+    ?? appearances[0]?.row;
+
+  if (!primary) {
+    return (
+      <section className="te-card">
+        <div className="te-detail-head">
+          <button className="te-back" onClick={onBack}>← กลับ</button>
+        </div>
+        <div className="te-empty"><b>{ticker}</b><small>ไม่พบข้อมูลของวันนี้</small></div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className="te-card">
+        <div className="te-detail-head">
+          <button className="te-back" onClick={onBack}>← กลับ</button>
+          <div className="te-detail-title">
+            <h2>{ticker}</h2>
+            <small>{tradingDate}</small>
+          </div>
+          <div className="te-detail-key">
+            <span><small>float</small><b>{compact(primary.float_shares)}</b></span>
+            <span><small>mcap</small><b>{money(primary.market_cap, 0)}</b></span>
+            <span><small>ปรากฏใน</small><b>{appearances.length} session</b></span>
+          </div>
+        </div>
+
+        <div className="te-journey">
+          {["PRE_MARKET", "REGULAR", "AFTER_HOURS"].map((key) => {
+            const entry = appearances.find((item) => item.key === key);
+            const meta = SESSION_META[key];
+            if (!entry) {
+              return (
+                <div className="te-journey-cell muted" key={key}>
+                  <small>{meta.label}</small>
+                  <b>—</b>
+                  <em>ไม่ติดอันดับ</em>
+                </div>
+              );
+            }
+            const gave = giveback(entry.row);
+            return (
+              <div className="te-journey-cell" key={key}>
+                <small>{meta.label}</small>
+                <b className="te-up">{pct(entry.row.change_pct, 1)}</b>
+                <em>
+                  {money(entry.row.reference_price, entry.row.reference_price < 1 ? 4 : 2)}
+                  {" → "}
+                  {money(entry.row.close, entry.row.close < 1 ? 4 : 2)}
+                </em>
+                <span className="te-journey-meta">
+                  best {entry.row.max_change_pct ? pct(entry.row.max_change_pct, 1) : "—"}
+                  {gave > 0 ? ` · คืน ${gave.toFixed(0)}%` : " · ปิดใกล้ high"}
+                </span>
+                <span className="te-journey-meta">
+                  rank #{entry.row.rank}
+                  {entry.row.float_rotation
+                    ? ` · หมุน ${entry.row.float_rotation.toFixed(1)}×` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="te-detail-grid">
+        <section className="te-card">
+          <div className="te-card-head"><h2>ทำไมมันถึงขึ้น</h2></div>
+          <div className="te-reasons">
+            {appearances.map(({ key, row }) => (
+              <div className="te-reason-group" key={key}>
+                <span className="te-reason-session">{SESSION_META[key].label}</span>
+                {row.reasons.map((reason) => (
+                  <div className="te-reason" key={reason.tag}>
+                    <b className={STRUCTURAL.has(reason.tag) ? "structural" : ""}>
+                      {reason.label}
+                    </b>
+                    <p>{explain(reason.tag, row)}</p>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div style={{ display: "grid", gap: "var(--te-gap)", alignContent: "start" }}>
+          <section className="te-card">
+            <div className="te-card-head"><h2>ข่าวที่ผูกกับการเคลื่อนไหว</h2></div>
+            {primary.has_news && primary.news_title ? (
+              <div className="te-card-body">
+                <p className="te-news-title">{primary.news_title}</p>
+                <div className="te-news-meta">
+                  {primary.news_published_at && (
+                    <span>เผยแพร่ {new Date(primary.news_published_at)
+                      .toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</span>
+                  )}
+                  {primary.catalyst_score ? (
+                    <span>คะแนนตัวเร่ง {primary.catalyst_score.toFixed(2)}</span>
+                  ) : null}
+                </div>
+                <p className="te-news-caveat">
+                  ข่าวถูกจับคู่ตามช่วงเวลา ไม่ใช่การพิสูจน์ว่าเป็นสาเหตุ —
+                  ระบบเลือกข่าวที่คะแนนสูงสุดในกรอบเวลาที่เกี่ยวข้องเท่านั้น
+                </p>
+              </div>
+            ) : (
+              <div className="te-empty">
+                <b>ไม่มีข่าวในฐานข้อมูล</b>
+                <small>
+                  นี่คือข้อเท็จจริงเกี่ยวกับฟีดข่าวของเรา ไม่ได้แปลว่าไม่มีข่าวในโลกจริง —
+                  ตัวที่ไม่มีข่าวแต่ volume ระเบิดคือกลุ่มที่ระบบวัดได้ว่า hit rate สูงกว่ากลุ่มมีข่าว
+                </small>
+              </div>
+            )}
+          </section>
+
+          <section className="te-card">
+            <div className="te-card-head"><h2>ตัวเลขทั้งหมด</h2></div>
+            <table className="te-table">
+              <thead>
+                <tr>
+                  <th>Session</th><th className="num">Ref</th><th className="num">High</th>
+                  <th className="num">Close</th><th className="num">Vol</th>
+                  <th className="num">RVol</th><th className="num">Rot</th>
+                </tr>
+              </thead>
+              <tbody>
+                {appearances.map(({ key, row }) => (
+                  <tr key={key}>
+                    <td>{SESSION_META[key].label}</td>
+                    <td className="num">{money(row.reference_price, row.close < 1 ? 4 : 2)}</td>
+                    <td className="num">{money(row.high, row.close < 1 ? 4 : 2)}</td>
+                    <td className="num">{money(row.close, row.close < 1 ? 4 : 2)}</td>
+                    <td className="num">{compact(row.volume)}</td>
+                    <td className="num">
+                      {row.relative_volume ? `${row.relative_volume.toFixed(1)}×` : "—"}
+                    </td>
+                    <td className="num">
+                      {row.float_rotation ? `${row.float_rotation.toFixed(1)}×` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="te-news-caveat" style={{ padding: "0 20px 16px" }}>
+              Ref คือราคาที่ใช้วัดการเคลื่อนไหวของ session นั้น — pre-market และ regular
+              วัดจากราคาปิดวันก่อน ส่วน after-hours วัดจากราคาปิดตลาดปกติวันเดียวกัน
+            </p>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function SortHead({
   label, col, sort, onSort, plain,
 }: {
@@ -652,210 +1084,6 @@ function SortHead({
   );
 }
 
-function GainersView() {
-  const [session, setSession] = useState<string>("REGULAR");
-  const [day, setDay] = useState("");
-  const [active, setActive] = useState<Set<string>>(new Set());
-  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({
-    key: "rank", desc: true,
-  });
-  const query = `/gainers?session=${session}${day ? `&date=${day}` : ""}`;
-  const { data, error, loading } = useJSON<GainersPayload>(query);
-
-  const tags = useMemo(() => {
-    const counts = new Map<string, { label: string; count: number }>();
-    for (const row of data?.rows ?? []) {
-      for (const reason of row.reasons) {
-        const entry = counts.get(reason.tag);
-        if (entry) entry.count += 1;
-        else counts.set(reason.tag, { label: reason.label, count: 1 });
-      }
-    }
-    return [...counts.entries()].sort((a, b) => b[1].count - a[1].count);
-  }, [data]);
-
-  const rows = useMemo(() => {
-    const all = data?.rows ?? [];
-    const filtered = !active.size ? all : all.filter((row) => {
-      // Every selected tag must be present: narrowing is the point, and a name
-      // that merely gapped is not the same as one that gapped on a micro float.
-      const present = new Set(row.reasons.map((reason) => reason.tag));
-      return [...active].every((tag) => present.has(tag));
-    });
-    const pick = (row: GainerRow) => {
-      switch (sort.key) {
-        case "change": return row.change_pct;
-        case "best": return row.max_change_pct ?? 0;
-        case "giveback": return giveback(row);
-        case "volume": return row.volume ?? 0;
-        case "rvol": return row.relative_volume ?? 0;
-        case "float": return row.float_shares ?? 0;
-        case "rotation": return row.float_rotation ?? 0;
-        default: return -row.rank;
-      }
-    };
-    return filtered.slice().sort((a, b) =>
-      sort.desc ? pick(b) - pick(a) : pick(a) - pick(b));
-  }, [data, active, sort]);
-
-  const toggle = useCallback((tag: string) => setActive((current) => {
-    const next = new Set(current);
-    if (next.has(tag)) next.delete(tag); else next.add(tag);
-    return next;
-  }), []);
-
-  const sortBy = useCallback((key: SortKey) => setSort((current) =>
-    current.key === key ? { key, desc: !current.desc } : { key, desc: true }), []);
-
-  // The character of the session, which is the question the history exists to
-  // answer: did the movers rotate their float, and did they hold the move?
-  const held = rows.filter((row) => giveback(row) <= 15).length;
-  const rotated = rows.filter((row) => (row.float_rotation ?? 0) >= 2).length;
-  const silent = rows.filter((row) => !row.has_news).length;
-
-  return (
-    <section className="te-card">
-      <div className="te-card-head">
-        <h2>Session Gainers</h2>
-        <div className="te-spacer" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: "#898588" }}>
-            {session === "AFTER_HOURS" ? "measured from regular close" : "measured from prior close"}
-          </span>
-          <select className="te-select" value={day} onChange={(event) => setDay(event.target.value)}
-            aria-label="Trading date">
-            <option value="">Latest</option>
-            {(data?.dates ?? []).map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div className="te-tabs">
-        {SESSION_TABS.map((tab) => (
-          <button key={tab.key} className={session === tab.key ? "active" : ""}
-            onClick={() => { setSession(tab.key); setActive(new Set()); }}>
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {tags.length > 0 && (
-        <div className="te-filters">
-          <span className="te-filters-label">
-            กรองตามเหตุผล — เลือกได้หลายอัน (ต้องมีครบทุกอันที่เลือก)
-          </span>
-          <div className="te-filters-row">
-            {tags.map(([tag, entry]) => (
-              <button key={tag}
-                className={`${active.has(tag) ? "active" : ""} ${STRUCTURAL.has(tag) ? "structural" : ""}`}
-                onClick={() => toggle(tag)}>
-                {entry.label}<b>{entry.count}</b>
-              </button>
-            ))}
-            {active.size > 0 && (
-              <button onClick={() => setActive(new Set())} style={{ color: "#eb5a5a" }}>Clear</button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {error && <p className="te-note error">{error}</p>}
-      {loading && <p className="te-note">Loading…</p>}
-      {!loading && data?.note && (
-        <div className="te-empty"><b>{data.trading_date || "—"}</b><small>{data.note}</small></div>
-      )}
-
-      {rows.length > 0 && (
-        <>
-          <div className="te-stats">
-            <div><small>Ranked</small><b>{rows.length}</b></div>
-            <div><small>Rotation ≥2×</small>
-              <b style={{ color: rotated ? "#6e5ce7" : undefined }}>{rotated}</b></div>
-            <div><small>Held the move</small>
-              <b style={{ color: held ? "#35b06b" : undefined }}>{held}</b></div>
-            <div><small>No stored news</small><b>{silent}</b></div>
-          </div>
-          <div className="te-table-scroll">
-            <table className="te-table te-sortable">
-              <thead>
-                <tr>
-                  <SortHead label="Rank" col="rank" sort={sort} onSort={sortBy} plain />
-                  <th>Symbol</th>
-                  <th className="num">Close</th>
-                  <SortHead label="Change %" col="change" sort={sort} onSort={sortBy} />
-                  <SortHead label="Best" col="best" sort={sort} onSort={sortBy} />
-                  <SortHead label="Giveback" col="giveback" sort={sort} onSort={sortBy} />
-                  <SortHead label="Volume" col="volume" sort={sort} onSort={sortBy} />
-                  <SortHead label="RVol" col="rvol" sort={sort} onSort={sortBy} />
-                  <SortHead label="Float" col="float" sort={sort} onSort={sortBy} />
-                  <SortHead label="Rotation" col="rotation" sort={sort} onSort={sortBy} />
-                  <th>Why it ranked</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => {
-                  const gave = giveback(row);
-                  return (
-                    <tr key={row.ticker}>
-                      <td style={{ color: "#abacaf" }}>{row.rank}</td>
-                      <td>
-                        <div className="te-sym">{row.ticker}</div>
-                        {row.news_title && (
-                          <div className="te-row-news" title={row.news_title}>
-                            {row.news_title}
-                          </div>
-                        )}
-                      </td>
-                      <td className="num">{money(row.close, row.close < 1 ? 4 : 2)}</td>
-                      <td className="num te-up">{pct(row.change_pct, 1)}</td>
-                      <td className="num" style={{ color: "#7462eb" }}>
-                        {row.max_change_pct ? pct(row.max_change_pct, 1) : "—"}
-                      </td>
-                      <td className="num">
-                        {gave > 0 ? (
-                          // Red only past a third given back: some fade is normal,
-                          // and colouring all of it would make the column useless.
-                          <span style={{ color: gave >= 33 ? "#eb5a5a" : "#9b989a" }}>
-                            −{gave.toFixed(0)}%
-                          </span>
-                        ) : <span style={{ color: "#35b06b" }}>held</span>}
-                      </td>
-                      <td className="num">{compact(row.volume)}</td>
-                      <td className="num">
-                        {row.relative_volume ? `${row.relative_volume.toFixed(1)}×` : "—"}
-                      </td>
-                      <td className="num">{compact(row.float_shares)}</td>
-                      <td className="num">
-                        {row.float_rotation ? (
-                          <span className={`te-badge ${row.float_rotation >= 2 ? "purple" : "low"}`}>
-                            {row.float_rotation.toFixed(1)}×
-                          </span>
-                        ) : "—"}
-                      </td>
-                      <td>
-                        <div className="te-why">
-                          {row.reasons.map((reason) => (
-                            <i key={reason.tag}
-                              className={STRUCTURAL.has(reason.tag) ? "structural" : ""}>
-                              {reason.label}
-                            </i>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      {!loading && !data?.note && rows.length === 0 && (data?.rows?.length ?? 0) > 0 && (
-        <p className="te-note">ไม่มีตัวไหนตรงกับตัวกรองที่เลือก</p>
-      )}
-    </section>
-  );
-}
 
 /* ── scanner ───────────────────────────────────────────────────────────── */
 
