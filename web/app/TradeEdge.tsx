@@ -734,26 +734,31 @@ function GainersView() {
     <>
       <section className="te-card">
         <div className="te-card-head">
-          <h2>Gainers — {tradingDate || "—"}</h2>
-          <div className="te-spacer" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: "#898588" }}>
-              {dates.length} วันที่เก็บไว้
-            </span>
-            <select className="te-select" value={day} aria-label="Trading date"
-              onChange={(event) => setParam({ date: event.target.value || null })}>
-              <option value="">ล่าสุด</option>
-              {dates.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+          <h2>Gainers</h2>
+          <div className="te-spacer te-datepick">
+            <label>
+              <span>วันที่</span>
+              <input
+                type="date"
+                value={day || tradingDate}
+                min={dates.length ? dates[dates.length - 1] : undefined}
+                max={dates.length ? dates[0] : undefined}
+                onChange={(event) => setParam({ date: event.target.value || null })}
+              />
+            </label>
+            {/* A day with no capture is not an error, but it is worth saying
+                out loud rather than leaving three empty tabs to imply the
+                market was quiet. */}
+            {day && !dates.includes(day) && (
+              <em className="te-datepick-warn">ไม่มีข้อมูลที่เก็บไว้ของวันนี้</em>
+            )}
+            {day && (
+              <button className="te-ghost-btn" onClick={() => setParam({ date: null })}>
+                ล่าสุด
+              </button>
+            )}
+            <span className="te-datepick-count">{dates.length} วันที่เก็บไว้</span>
           </div>
-        </div>
-        <div className="te-daystrip">
-          {dates.slice(0, 14).map((value) => (
-            <button key={value}
-              className={value === tradingDate ? "on" : ""}
-              onClick={() => setParam({ date: value })}>
-              {value.slice(5).replace("-", "/")}
-            </button>
-          ))}
         </div>
       </section>
 

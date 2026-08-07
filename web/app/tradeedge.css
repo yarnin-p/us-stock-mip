@@ -499,21 +499,6 @@
 }
 
 /* Gainers: a day, then a name ------------------------------------------- */
-.te-daystrip {
-  display: flex; gap: 6px; padding: 14px 20px 18px; flex-wrap: wrap;
-}
-.te-daystrip button {
-  height: 28px; padding: 0 11px;
-  background: var(--te-card); border: 1px solid var(--te-border);
-  border-radius: 999px; font-size: 10px; color: #625f61; cursor: pointer;
-  font-variant-numeric: tabular-nums; transition: all 140ms ease;
-}
-.te-daystrip button:hover { background: #faf8f7; border-color: #ddd8d3; }
-.te-daystrip button.on {
-  background: var(--te-brand-bg); border-color: var(--te-brand); color: #6e5ce7;
-  font-weight: 600;
-}
-
 .te-session-head {
   display: flex; align-items: center; gap: 18px; width: 100%;
   padding: 16px 20px; border: 0; background: none; cursor: pointer;
@@ -620,3 +605,19 @@
   margin-left: auto; align-self: center; padding-bottom: 10px;
   font-size: 10px; color: #9b989a;
 }
+
+/* Date picker — one day, never a range: the capture is per session per day and
+   a range would imply an aggregate the table does not compute. */
+.te-datepick { display: flex; align-items: center; gap: 12px; }
+.te-datepick label { display: flex; align-items: center; gap: 8px; }
+.te-datepick label span { font-size: 10px; color: #898588; }
+.te-datepick input {
+  height: 34px; padding: 0 11px;
+  background: var(--te-card); border: 1px solid #ece8e5;
+  border-radius: var(--te-radius-control);
+  font-size: 12px; color: var(--te-text);
+  font-variant-numeric: tabular-nums;
+}
+.te-datepick input:hover { border-color: #ddd8d3; }
+.te-datepick-count { font-size: 10px; color: #9b989a; }
+.te-datepick-warn { font-style: normal; font-size: 10px; color: #d08a3f; }
