@@ -551,6 +551,76 @@ func appendNewsResults(
 	return items, nil
 }
 
+// SplitsInRange returns every split executing inside a date window, across the
+// whole market rather than for one ticker.
+//
+// It exists because a session's gainer list cannot be built without it. The
+// daily bars are stored unadjusted, so a one-for-eight reverse split reads as a
+// 700% gain when today's close is compared with yesterday's; ranking on that
+// puts a mechanical share consolidation at the top of a leaderboard meant for
+// names people actually bought.
+func (client *Client) SplitsInRange(
+	ctx context.Context,
+	from, to time.Time,
+) ([]SplitEvent, error) {
+	endpoint := client.baseURL.JoinPath("stocks", "v1", "splits")
+	values := endpoint.Query()
+	values.Set("execution_date.gte", from.Format(time.DateOnly))
+	values.Set("execution_date.lte", to.Format(time.DateOnly))
+	values.Set("limit", "1000")
+	values.Set("sort", "execution_date")
+	values.Set("order", "asc")
+	endpoint.RawQuery = values.Encode()
+
+	events := make([]SplitEvent, 0, 256)
+	for page := 0; endpoint != nil; page++ {
+		if page >= maxPages {
+			return nil, fmt.Errorf("fetching splits: pagination exceeded %d pages", maxPages)
+		}
+		var response splitResponse
+		if err := client.getJSON(ctx, endpoint, &response); err != nil {
+			return nil, fmt.Errorf("fetching splits: %w", err)
+		}
+		if len(events)+len(response.Results) > maxSplitItems {
+			return nil, fmt.Errorf("fetching splits: result exceeds %d items", maxSplitItems)
+		}
+		for _, result := range response.Results {
+			executionDate, err := time.Parse(time.DateOnly, result.ExecutionDate)
+			if err != nil {
+				return nil, fmt.Errorf("parsing split date: %w", err)
+			}
+			ticker, err := normalizeTicker(result.Ticker)
+			if err != nil {
+				// A malformed symbol is not worth failing the whole window for.
+				continue
+			}
+			events = append(events, SplitEvent{
+				Ticker: ticker, ExternalID: result.ID,
+				ExecutionDate: executionDate,
+				From:          result.SplitFrom, To: result.SplitTo,
+				Reverse: result.SplitTo < result.SplitFrom,
+			})
+		}
+		next, err := client.nextPageURL(response.NextURL)
+		if err != nil {
+			return nil, fmt.Errorf("fetching splits: %w", err)
+		}
+		endpoint = next
+	}
+	return events, nil
+}
+
+// SplitEvent is one split, carrying the ticker so a market-wide sync can store
+// it without a second lookup.
+type SplitEvent struct {
+	Ticker        string
+	ExternalID    string
+	ExecutionDate time.Time
+	From          float64
+	To            float64
+	Reverse       bool
+}
+
 func (client *Client) Splits(
 	ctx context.Context,
 	ticker string,
@@ -807,6 +877,7 @@ type newsResponse struct {
 type splitResponse struct {
 	Results []struct {
 		ID            string  `json:"id"`
+		Ticker        string  `json:"ticker"`
 		ExecutionDate string  `json:"execution_date"`
 		SplitFrom     float64 `json:"split_from"`
 		SplitTo       float64 `json:"split_to"`

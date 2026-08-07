@@ -27,7 +27,7 @@ func (store *Store) RegularSessionCandidates(
 		`WITH bar AS (
 			SELECT stock.ticker, stock.float_shares, stock.market_cap,
 			       today.open, today.high, today.low, today.close, today.volume,
-			       prior.close AS reference_price,
+			       prior.close * COALESCE(adjustment.ratio, 1) AS reference_price,
 			       avg20.average_volume
 			  FROM daily_prices today
 			  JOIN stocks stock ON stock.id = today.stock_id
@@ -37,6 +37,17 @@ func (store *Store) RegularSessionCandidates(
 			          AND earlier.trade_date < today.trade_date
 			        ORDER BY earlier.trade_date DESC LIMIT 1
 			  ) prior ON true
+			  -- Bars are stored unadjusted, so a split executing today makes
+			  -- yesterday's close incomparable: a one-for-eight consolidation
+			  -- reads as a 700% gain. The ratio restates the prior close in
+			  -- today's share terms.
+			  LEFT JOIN LATERAL (
+			       SELECT split.split_from / NULLIF(split.split_to, 0) AS ratio
+			         FROM stock_splits split
+			        WHERE split.ticker = stock.ticker
+			          AND split.execution_date = today.trade_date
+			        ORDER BY split.available_at DESC LIMIT 1
+			  ) adjustment ON true
 			  LEFT JOIN LATERAL (
 			       SELECT avg(volume) AS average_volume FROM daily_prices window20
 			        WHERE window20.stock_id = today.stock_id
@@ -154,9 +165,22 @@ func (store *Store) IntradaySessionCandidates(
 			 ORDER BY signal.ticker, signal.observed_at DESC
 		),
 		reference AS (
-			SELECT stock.ticker, bar.close, bar.volume AS reference_volume
+			-- After-hours measures from the same day's regular close, which
+			-- needs no adjustment. Pre-market measures from the prior close,
+			-- which does whenever a split executes on the day being ranked.
+			SELECT stock.ticker,
+			       bar.close * CASE WHEN $6 THEN 1
+			                        ELSE COALESCE(adjustment.ratio, 1) END AS close,
+			       bar.volume AS reference_volume
 			  FROM daily_prices bar
 			  JOIN stocks stock ON stock.id = bar.stock_id
+			  LEFT JOIN LATERAL (
+			       SELECT split.split_from / NULLIF(split.split_to, 0) AS ratio
+			         FROM stock_splits split
+			        WHERE split.ticker = stock.ticker
+			          AND split.execution_date = $1::date
+			        ORDER BY split.available_at DESC LIMIT 1
+			  ) adjustment ON true
 			 WHERE bar.trade_date = CASE WHEN $6 THEN $1::date ELSE (
 			         SELECT max(trade_date) FROM daily_prices
 			          WHERE trade_date < $1::date

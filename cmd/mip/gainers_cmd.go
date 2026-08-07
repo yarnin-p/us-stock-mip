@@ -8,8 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"net/http"
+
 	"github.com/momentum-intelligence-platform/mip/internal/config"
 	"github.com/momentum-intelligence-platform/mip/internal/gainers"
+	"github.com/momentum-intelligence-platform/mip/internal/massive"
 	"github.com/momentum-intelligence-platform/mip/internal/opening"
 	"github.com/momentum-intelligence-platform/mip/internal/postgres"
 )
@@ -36,6 +39,8 @@ func runGainers(args []string, stdout, stderr io.Writer) error {
 	flags.StringVar(&sessionRaw, "session", "",
 		"limit to one session (PRE_MARKET, REGULAR, AFTER_HOURS)")
 	limit := flags.Int("limit", 30, "how many gainers to keep per session")
+	skipSplits := flags.Bool("skip-splits", false,
+		"do not refresh split history before capturing")
 	minChange := flags.Float64("min-change", 0.10,
 		"smallest move that counts as a gainer")
 	if err := flags.Parse(args); err != nil {
@@ -66,6 +71,18 @@ func runGainers(args []string, stdout, stderr io.Writer) error {
 	}
 	defer pool.Close()
 	store := postgres.NewStore(pool)
+
+	// Splits are refreshed before ranking, never after. Bars are stored
+	// unadjusted, so a capture run without them ranks a one-for-eight reverse
+	// split as a 700% gain -- which is exactly what the first version of this
+	// command published.
+	if !*skipSplits {
+		synced, err := syncSplits(ctx, appConfig, store, dates[0], dates[len(dates)-1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "splits refreshed: %d\n", synced)
+	}
 
 	rankConfig := gainers.DefaultConfig()
 	rankConfig.Limit = *limit
@@ -128,4 +145,27 @@ func shortSession(session gainers.Session) string {
 	default:
 		return "reg"
 	}
+}
+
+// syncSplits refreshes the split window the capture is about to read. The
+// window is padded by a day on each side so a split executing on a boundary
+// date is still present when that date is ranked.
+func syncSplits(
+	ctx context.Context,
+	appConfig config.Config,
+	store *postgres.Store,
+	from, to time.Time,
+) (int64, error) {
+	client, err := massive.NewClient(
+		appConfig.MassiveAPIKey,
+		massive.WithHTTPClient(&http.Client{Timeout: appConfig.HTTPTimeout}),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("building the Massive client: %w", err)
+	}
+	events, err := client.SplitsInRange(ctx, from.AddDate(0, 0, -1), to.AddDate(0, 0, 1))
+	if err != nil {
+		return 0, err
+	}
+	return store.SaveSplits(ctx, events)
 }
