@@ -208,6 +208,7 @@ func runServe(args []string, stderr io.Writer) error {
 		StrategyPlans:      strategyPlans,
 		SpikeWatcher:       store,
 		NewsCatalysts:      store,
+		Gainers:            store,
 		RuntimeHealth:      runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.

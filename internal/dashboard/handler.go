@@ -34,6 +34,7 @@ type Options struct {
 	RuntimeHealth      func() []ComponentHealth
 	TicketLimits       TicketLimitSource
 	TicketUSDTHB       float64
+	Gainers            GainersSource
 }
 
 type Handler struct {
@@ -51,6 +52,7 @@ type Handler struct {
 	runtimeHealth      func() []ComponentHealth
 	ticketLimits       TicketLimitSource
 	usdTHB             float64
+	gainersSource      GainersSource
 }
 
 func NewHandler(repository Repository, options Options) *Handler {
@@ -68,11 +70,13 @@ func NewHandler(repository Repository, options Options) *Handler {
 		newsCatalysts:      options.NewsCatalysts,
 		runtimeHealth:      options.RuntimeHealth,
 		ticketLimits:       options.TicketLimits,
+		gainersSource:      options.Gainers,
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
 	handler.mux.HandleFunc("GET /scan", handler.scan)
 	handler.mux.HandleFunc("GET /candidates", handler.candidates)
+	handler.mux.HandleFunc("GET /gainers", handler.gainers)
 	handler.mux.HandleFunc("GET /watchlist", handler.watchlist)
 	handler.mux.HandleFunc("POST /watchlist", handler.upsertWatchlist)
 	handler.mux.HandleFunc("DELETE /watchlist/{ticker}", handler.deleteWatchlist)
