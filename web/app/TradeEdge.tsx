@@ -619,10 +619,46 @@ const STRUCTURAL = new Set([
   "EXTREME_RVOL", "HIGH_RVOL", "STRONG_CATALYST",
 ]);
 
+type SortKey = "rank" | "change" | "best" | "giveback" | "volume" | "rvol"
+  | "float" | "rotation";
+
+// Giveback is the distance between the best print the session offered and
+// where it finished. It is the number that separates a move worth entering
+// from one that only looked good on the leaderboard.
+const giveback = (row: GainerRow) => {
+  if (!row.max_change_pct || row.max_change_pct <= row.change_pct) return 0;
+  const high = 1 + row.max_change_pct / 100;
+  const close = 1 + row.change_pct / 100;
+  return ((high - close) / high) * 100;
+};
+
+function SortHead({
+  label, col, sort, onSort, plain,
+}: {
+  label: string;
+  col: SortKey;
+  sort: { key: SortKey; desc: boolean };
+  onSort: (key: SortKey) => void;
+  plain?: boolean;
+}) {
+  const on = sort.key === col;
+  return (
+    <th className={plain ? "" : "num"}>
+      <button className={`te-sort ${on ? "on" : ""}`} onClick={() => onSort(col)}>
+        {label}
+        <i aria-hidden="true">{on ? (sort.desc ? "\u25be" : "\u25b4") : ""}</i>
+      </button>
+    </th>
+  );
+}
+
 function GainersView() {
   const [session, setSession] = useState<string>("REGULAR");
   const [day, setDay] = useState("");
   const [active, setActive] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({
+    key: "rank", desc: true,
+  });
   const query = `/gainers?session=${session}${day ? `&date=${day}` : ""}`;
   const { data, error, loading } = useJSON<GainersPayload>(query);
 
@@ -640,20 +676,42 @@ function GainersView() {
 
   const rows = useMemo(() => {
     const all = data?.rows ?? [];
-    if (!active.size) return all;
-    // Every selected tag must be present: narrowing is the point, and a name
-    // that merely gapped is not the same as one that gapped on a micro float.
-    return all.filter((row) => {
+    const filtered = !active.size ? all : all.filter((row) => {
+      // Every selected tag must be present: narrowing is the point, and a name
+      // that merely gapped is not the same as one that gapped on a micro float.
       const present = new Set(row.reasons.map((reason) => reason.tag));
       return [...active].every((tag) => present.has(tag));
     });
-  }, [data, active]);
+    const pick = (row: GainerRow) => {
+      switch (sort.key) {
+        case "change": return row.change_pct;
+        case "best": return row.max_change_pct ?? 0;
+        case "giveback": return giveback(row);
+        case "volume": return row.volume ?? 0;
+        case "rvol": return row.relative_volume ?? 0;
+        case "float": return row.float_shares ?? 0;
+        case "rotation": return row.float_rotation ?? 0;
+        default: return -row.rank;
+      }
+    };
+    return filtered.slice().sort((a, b) =>
+      sort.desc ? pick(b) - pick(a) : pick(a) - pick(b));
+  }, [data, active, sort]);
 
   const toggle = useCallback((tag: string) => setActive((current) => {
     const next = new Set(current);
     if (next.has(tag)) next.delete(tag); else next.add(tag);
     return next;
   }), []);
+
+  const sortBy = useCallback((key: SortKey) => setSort((current) =>
+    current.key === key ? { key, desc: !current.desc } : { key, desc: true }), []);
+
+  // The character of the session, which is the question the history exists to
+  // answer: did the movers rotate their float, and did they hold the move?
+  const held = rows.filter((row) => giveback(row) <= 15).length;
+  const rotated = rows.filter((row) => (row.float_rotation ?? 0) >= 2).length;
+  const silent = rows.filter((row) => !row.has_news).length;
 
   return (
     <section className="te-card">
@@ -682,16 +740,21 @@ function GainersView() {
 
       {tags.length > 0 && (
         <div className="te-filters">
-          {tags.map(([tag, entry]) => (
-            <button key={tag}
-              className={`${active.has(tag) ? "active" : ""} ${STRUCTURAL.has(tag) ? "structural" : ""}`}
-              onClick={() => toggle(tag)}>
-              {entry.label}<b>{entry.count}</b>
-            </button>
-          ))}
-          {active.size > 0 && (
-            <button onClick={() => setActive(new Set())} style={{ color: "#eb5a5a" }}>Clear</button>
-          )}
+          <span className="te-filters-label">
+            กรองตามเหตุผล — เลือกได้หลายอัน (ต้องมีครบทุกอันที่เลือก)
+          </span>
+          <div className="te-filters-row">
+            {tags.map(([tag, entry]) => (
+              <button key={tag}
+                className={`${active.has(tag) ? "active" : ""} ${STRUCTURAL.has(tag) ? "structural" : ""}`}
+                onClick={() => toggle(tag)}>
+                {entry.label}<b>{entry.count}</b>
+              </button>
+            ))}
+            {active.size > 0 && (
+              <button onClick={() => setActive(new Set())} style={{ color: "#eb5a5a" }}>Clear</button>
+            )}
+          </div>
         </div>
       )}
 
@@ -702,62 +765,89 @@ function GainersView() {
       )}
 
       {rows.length > 0 && (
-        <div className="te-table-scroll">
-          <table className="te-table">
-            <thead>
-              <tr>
-                <th>Rank</th><th>Symbol</th><th className="num">Close</th>
-                <th className="num">Change %</th><th className="num">Best</th>
-                <th className="num">Volume</th><th className="num">RVol</th>
-                <th className="num">Float</th><th className="num">Rotation</th>
-                <th>Why it ranked</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.ticker}>
-                  <td style={{ color: "#abacaf" }}>{row.rank}</td>
-                  <td>
-                    <div className="te-sym">{row.ticker}</div>
-                    {row.news_title && (
-                      <div style={{
-                        fontSize: 10, color: "#9b989a", maxWidth: 260,
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }} title={row.news_title}>{row.news_title}</div>
-                    )}
-                  </td>
-                  <td className="num">{money(row.close, row.close < 1 ? 4 : 2)}</td>
-                  <td className="num te-up">{pct(row.change_pct, 1)}</td>
-                  <td className="num" style={{ color: "#7462eb" }}>
-                    {row.max_change_pct ? pct(row.max_change_pct, 1) : "—"}
-                  </td>
-                  <td className="num">{compact(row.volume)}</td>
-                  <td className="num">
-                    {row.relative_volume ? `${row.relative_volume.toFixed(1)}×` : "—"}
-                  </td>
-                  <td className="num">{compact(row.float_shares)}</td>
-                  <td className="num">
-                    {row.float_rotation ? (
-                      <span className={`te-badge ${row.float_rotation >= 2 ? "purple" : "low"}`}>
-                        {row.float_rotation.toFixed(1)}×
-                      </span>
-                    ) : "—"}
-                  </td>
-                  <td>
-                    <div className="te-why">
-                      {row.reasons.map((reason) => (
-                        <i key={reason.tag}
-                          className={STRUCTURAL.has(reason.tag) ? "structural" : ""}>
-                          {reason.label}
-                        </i>
-                      ))}
-                    </div>
-                  </td>
+        <>
+          <div className="te-stats">
+            <div><small>Ranked</small><b>{rows.length}</b></div>
+            <div><small>Rotation ≥2×</small>
+              <b style={{ color: rotated ? "#6e5ce7" : undefined }}>{rotated}</b></div>
+            <div><small>Held the move</small>
+              <b style={{ color: held ? "#35b06b" : undefined }}>{held}</b></div>
+            <div><small>No stored news</small><b>{silent}</b></div>
+          </div>
+          <div className="te-table-scroll">
+            <table className="te-table te-sortable">
+              <thead>
+                <tr>
+                  <SortHead label="Rank" col="rank" sort={sort} onSort={sortBy} plain />
+                  <th>Symbol</th>
+                  <th className="num">Close</th>
+                  <SortHead label="Change %" col="change" sort={sort} onSort={sortBy} />
+                  <SortHead label="Best" col="best" sort={sort} onSort={sortBy} />
+                  <SortHead label="Giveback" col="giveback" sort={sort} onSort={sortBy} />
+                  <SortHead label="Volume" col="volume" sort={sort} onSort={sortBy} />
+                  <SortHead label="RVol" col="rvol" sort={sort} onSort={sortBy} />
+                  <SortHead label="Float" col="float" sort={sort} onSort={sortBy} />
+                  <SortHead label="Rotation" col="rotation" sort={sort} onSort={sortBy} />
+                  <th>Why it ranked</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const gave = giveback(row);
+                  return (
+                    <tr key={row.ticker}>
+                      <td style={{ color: "#abacaf" }}>{row.rank}</td>
+                      <td>
+                        <div className="te-sym">{row.ticker}</div>
+                        {row.news_title && (
+                          <div className="te-row-news" title={row.news_title}>
+                            {row.news_title}
+                          </div>
+                        )}
+                      </td>
+                      <td className="num">{money(row.close, row.close < 1 ? 4 : 2)}</td>
+                      <td className="num te-up">{pct(row.change_pct, 1)}</td>
+                      <td className="num" style={{ color: "#7462eb" }}>
+                        {row.max_change_pct ? pct(row.max_change_pct, 1) : "—"}
+                      </td>
+                      <td className="num">
+                        {gave > 0 ? (
+                          // Red only past a third given back: some fade is normal,
+                          // and colouring all of it would make the column useless.
+                          <span style={{ color: gave >= 33 ? "#eb5a5a" : "#9b989a" }}>
+                            −{gave.toFixed(0)}%
+                          </span>
+                        ) : <span style={{ color: "#35b06b" }}>held</span>}
+                      </td>
+                      <td className="num">{compact(row.volume)}</td>
+                      <td className="num">
+                        {row.relative_volume ? `${row.relative_volume.toFixed(1)}×` : "—"}
+                      </td>
+                      <td className="num">{compact(row.float_shares)}</td>
+                      <td className="num">
+                        {row.float_rotation ? (
+                          <span className={`te-badge ${row.float_rotation >= 2 ? "purple" : "low"}`}>
+                            {row.float_rotation.toFixed(1)}×
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td>
+                        <div className="te-why">
+                          {row.reasons.map((reason) => (
+                            <i key={reason.tag}
+                              className={STRUCTURAL.has(reason.tag) ? "structural" : ""}>
+                              {reason.label}
+                            </i>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {!loading && !data?.note && rows.length === 0 && (data?.rows?.length ?? 0) > 0 && (

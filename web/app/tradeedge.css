@@ -327,11 +327,17 @@
 }
 
 /* Tabs / tables ---------------------------------------------------------- */
-.te-tabs { display: flex; gap: 18px; padding: 14px 20px 0; flex-wrap: wrap; }
+/* The tab strip carries a full-width hairline and the active underline sits on
+   top of it, so the row reads as one control rather than three floating words
+   with a stray dash beneath one of them. */
+.te-tabs {
+  display: flex; gap: 22px; padding: 16px 20px 0; flex-wrap: wrap;
+  border-bottom: 1px solid var(--te-border-soft);
+}
 .te-tabs button {
-  border: 0; background: none; cursor: pointer; padding: 0 0 9px;
-  font-size: 11px; font-weight: 500; color: #86828600;
-  color: #868286;
+  border: 0; background: none; cursor: pointer;
+  padding: 0 0 10px; margin-bottom: -1px;
+  font-size: 11px; font-weight: 500; color: #868286;
   border-bottom: 1.5px solid transparent;
 }
 .te-tabs button.active { color: #7664ea; border-bottom-color: #7664ea; }
@@ -410,13 +416,23 @@
   border-radius: 5px; background: var(--te-surface-subtle); color: #7b7879;
 }
 .te-why i.structural { background: var(--te-brand-bg); color: #6e5ce7; }
-.te-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 14px; }
+/* The chips are a second control, not a continuation of the tabs, so they get
+   their own breathing room and a label above them. Crowded against the tab
+   strip they read as one confusing two-row selector. */
+.te-filters { padding: 16px 20px 18px; }
+.te-filters-label {
+  display: block; font-size: 10px; color: #9b989a;
+  margin-bottom: 9px; letter-spacing: .02em;
+}
+.te-filters-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .te-filters button {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 26px; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 28px; padding: 0 12px;
   background: var(--te-card); border: 1px solid var(--te-border);
   border-radius: 999px; font-size: 10px; color: #625f61; cursor: pointer;
+  transition: all 140ms ease;
 }
+.te-filters button:hover { background: #faf8f7; border-color: #ddd8d3; }
 .te-filters button b { font-weight: 600; color: var(--te-muted); }
 .te-filters button.structural { border-color: var(--te-brand-soft); color: #6e5ce7; }
 .te-filters button.active {
@@ -458,4 +474,22 @@
   .te-header { padding: 0 16px; flex-wrap: wrap; gap: 10px; }
   .te-search { display: none; }
   .te-table-scroll { overflow-x: auto; }
+}
+
+/* Sortable table headers */
+.te-sortable th { padding: 0; }
+.te-sortable th:not(:has(.te-sort)) { padding: 10px 20px; }
+.te-sort {
+  width: 100%; border: 0; background: none; cursor: pointer;
+  padding: 10px 20px; font-size: 10px; font-weight: 500; color: #89868a;
+  display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end;
+  white-space: nowrap;
+}
+.te-sortable th:first-child .te-sort { justify-content: flex-start; }
+.te-sort:hover { color: #4e4a4d; }
+.te-sort.on { color: #6e5ce7; font-weight: 600; }
+.te-sort i { font-style: normal; font-size: 8px; width: 7px; }
+.te-row-news {
+  font-size: 10px; color: #9b989a; max-width: 250px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
