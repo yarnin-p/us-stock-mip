@@ -210,8 +210,34 @@ func runServe(args []string, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("wiring the bracket terminal: %w", err)
 	}
+	// One broker instance, shared. The service places the protective orders through
+	// it, the engine amends those same orders, and -- in paper -- it is the venue that
+	// fills them. Two instances would mean the engine amending orders the service
+	// never placed.
+	bracketBroker, err := buildOrderModifier(appConfig)
+	switch {
+	case err != nil:
+		// Not fatal. The dashboard is also the scanner, the gainers list and the
+		// research surface, and refusing to start all of that because a broker
+		// credential is missing would take away the screens that still work. Brackets
+		// can be planned and read; arming says why it cannot happen.
+		logger.Error(
+			"no broker for protective orders; brackets can be planned but not armed "+
+				"or trailed",
+			"mode", appConfig.TradingMode, "error", err,
+		)
+		bracketBroker = nil
+	default:
+		if protector, ok := bracketBroker.(bracket.Protector); ok {
+			bracketService = bracketService.WithBroker(protector, store, logger)
+		} else {
+			logger.Warn(
+				"this broker cannot place orders, so brackets can be planned but not armed",
+			)
+		}
+	}
 	bracketFeed, err := buildBracketFeed(
-		ctx, appConfig, store, bracketService, logger,
+		ctx, appConfig, store, bracketService, bracketBroker, logger,
 	)
 	if err != nil {
 		return fmt.Errorf("wiring the bracket price feed: %w", err)
@@ -355,6 +381,7 @@ func buildBracketFeed(
 	appConfig config.Config,
 	store *postgres.Store,
 	finisher bracket.Finisher,
+	modifier execution.OrderModifier,
 	logger *slog.Logger,
 ) (*bracket.Supervisor, error) {
 	if appConfig.BracketFeedAdapter == "none" {
@@ -364,11 +391,14 @@ func buildBracketFeed(
 		)
 		return nil, nil
 	}
-	provider, err := buildMarketDataProvider(ctx, appConfig, logger)
-	if err != nil {
-		return nil, err
+	if modifier == nil {
+		logger.Error(
+			"the bracket feed needs a broker that can amend orders; nothing will be " +
+				"trailed until one is configured",
+		)
+		return nil, nil
 	}
-	modifier, err := buildOrderModifier(appConfig)
+	provider, err := buildMarketDataProvider(ctx, appConfig, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -408,10 +438,26 @@ func buildBracketFeed(
 	if err != nil {
 		return nil, err
 	}
+	// In paper the broker is a fake venue, and a venue that cannot see the market
+	// fills everything on arrival: a protective target would be born filled and a
+	// stop would never trigger. Giving it the same ticks the engine reads is what
+	// makes a paper run a real test of the exits. The composition happens here
+	// because it is wiring -- the engine does not know a simulator exists.
+	handler := engine.HandleTick
+	if venue, ok := modifier.(*execution.PaperAdapter); ok {
+		logger.Info(
+			"paper venue is watching the bracket feed; stops and targets will fill " +
+				"when the price reaches them",
+		)
+		handler = func(handlerCtx context.Context, tick marketdata.Tick) error {
+			venue.Observe(tick.Ticker, tick.Price)
+			return engine.HandleTick(handlerCtx, tick)
+		}
+	}
 	supervisor, err := bracket.NewSupervisor(bracket.SupervisorOptions{
 		Lifetime: ctx,
 		Provider: provider,
-		Handler:  engine.HandleTick,
+		Handler:  handler,
 		Logger:   logger,
 	})
 	if err != nil {

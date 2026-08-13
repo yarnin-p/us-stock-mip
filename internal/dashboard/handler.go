@@ -106,6 +106,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 	handler.mux.HandleFunc("POST /brackets", handler.openBracket)
 	handler.mux.HandleFunc("GET /brackets/{id}", handler.bracketDetail)
 	handler.mux.HandleFunc("PATCH /brackets/{id}", handler.amendBracket)
+	handler.mux.HandleFunc("POST /brackets/{id}/arm", handler.armBracket)
 	handler.mux.HandleFunc("POST /brackets/{id}/close", handler.closeBracket)
 	if handler.spikeWatcher != nil {
 		handler.mux.HandleFunc("GET /spike-watch", handler.spikeWatch)

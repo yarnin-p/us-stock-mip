@@ -22,6 +22,14 @@ type BracketSource interface {
 	Mode() string
 }
 
+// BracketArmer is the part of the bracket service that reaches a broker. It is
+// asked for separately because a deployment wired without one can still plan and
+// read brackets, and the endpoint should say that plainly rather than fail on a
+// nil.
+type BracketArmer interface {
+	Arm(context.Context, int64, bracket.ArmInput) (bracket.Record, error)
+}
+
 // previewBracket sizes an intent and states its risk without touching a broker.
 // It is a pure calculation, so the terminal can call it on every keystroke.
 func (handler *Handler) previewBracket(
@@ -146,6 +154,42 @@ func (handler *Handler) amendBracket(
 type closeBracketRequest struct {
 	State string `json:"state"`
 	Note  string `json:"note,omitempty"`
+}
+
+// armBracket puts the protective orders into the market and turns the bracket on.
+// It is a separate call from opening one because the two happen at different
+// moments: a plan is written before the entry, and the levels that protect it can
+// only be derived from the price that actually filled.
+func (handler *Handler) armBracket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	id, ok := bracketID(response, request)
+	if !ok {
+		return
+	}
+	armer, ok := source.(BracketArmer)
+	if !ok {
+		writeAPIError(
+			response, http.StatusNotImplemented,
+			"this deployment cannot place protective orders",
+		)
+		return
+	}
+	var body bracket.ArmInput
+	if err := decodeJSON(response, request, &body); err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	record, err := armer.Arm(request.Context(), id, body)
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, record)
 }
 
 func (handler *Handler) closeBracket(

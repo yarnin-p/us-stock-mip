@@ -74,6 +74,24 @@ type BracketRecord = {
   config: BracketConfig;
 };
 
+/* An order as the execution service sees it. The states matter here: create,
+ * preview, approve and submit are four separate calls on purpose, and the approval
+ * is the gate. This screen walks them in order rather than collapsing them, so the
+ * click that spends money is its own click. */
+type ExecutionOrder = {
+  id: number;
+  ticker: string;
+  side: string;
+  quantity: number;
+  limit_price: number;
+  state: string;
+  estimated_cost: number;
+  estimated_fee: number;
+  filled_quantity: number;
+  average_fill_price: number;
+  risk?: { allowed?: boolean; reasons?: string[] };
+};
+
 type Adjustment = {
   id: number;
   trigger: string;
@@ -942,6 +960,7 @@ function Manage({
 
   if (!bracket) return null;
   const held = bracket.manual_hold === true;
+  const pending = bracket.state === "PENDING";
 
   return (
     <div className="tm-manage">
@@ -950,10 +969,13 @@ function Manage({
         {held && <span className="tm-held">คุณกำลังขับ</span>}
       </h3>
 
+      {pending && <Entry bracket={bracket} onChanged={onChanged} />}
+
       <div className="tm-manage-block">
         <p className="tm-hint">
           ย้ายเส้นตรงๆ · ปล่อยว่างไว้ = ไม่แตะเส้นนั้น ·
           engine ยังขับอยู่ถ้าไม่ได้กด hold
+          {pending && " · ไม้นี้ยัง PENDING — engine ยังไม่ได้ตามอะไร จนกด arm"}
         </p>
         <div className="tm-row">
           <label className="tm-field">
@@ -1031,6 +1053,192 @@ function Manage({
       {said && <p className="tm-said">{said}</p>}
       {error && <p className="tm-error">{error}</p>}
     </div>
+  );
+}
+
+/* Entry, then arm. These are the two steps that turn a saved plan into a position
+ * the engine is actually protecting, and they are separate because the second one
+ * needs a number that only exists after the first: the price that really filled.
+ *
+ * The send is not one button. Create and preview show what the broker says it will
+ * cost and whether the risk gate allows it; approve and submit are the click that
+ * spends the money. Collapsing those into one would remove the only moment at which
+ * a bad size is still free to cancel.
+ *
+ * Arming is what was missing before: a bracket that is never armed stays PENDING,
+ * and the engine skips anything that is not ACTIVE -- so the ladder above it would
+ * have been configuration that never ran. */
+function Entry({
+  bracket, onChanged,
+}: {
+  bracket: BracketRecord;
+  onChanged: () => void;
+}) {
+  const [order, setOrder] = useState<ExecutionOrder | null>(null);
+  const [fill, setFill] = useState("");
+  const [shares, setShares] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [said, setSaid] = useState("");
+
+  const call = useCallback(async (path: string, body?: unknown) => {
+    const response = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const answer = await response.json();
+    if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`);
+    return answer;
+  }, []);
+
+  // Create and preview together: a created order with no costing is not something
+  // anyone can decide on, so the two arrive as one step.
+  const draft = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    setSaid("");
+    try {
+      const created = (await call("/execution/orders", {
+        ticker: bracket.ticker,
+        side: "BUY",
+        order_type: "LIMIT",
+        quantity: bracket.quantity,
+        limit_price: bracket.requested_entry,
+        time_in_force: "DAY",
+        reason: `bracket ${bracket.id}`,
+      })) as ExecutionOrder;
+      let costed = created;
+      try {
+        costed = (await call(`/execution/orders/${created.id}/preview`)) as ExecutionOrder;
+      } catch (cause) {
+        // The order exists either way, and saying so matters: a failed costing that
+        // looked like a failed create would have someone create a second one.
+        setError(
+          `คำสั่งถูกสร้างแล้ว (#${created.id}) แต่ preview ไม่ผ่าน: ` +
+            (cause instanceof Error ? cause.message : "unknown"),
+        );
+      }
+      setOrder(costed);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "สร้างคำสั่งไม่ได้");
+    } finally {
+      setBusy(false);
+    }
+  }, [bracket, call]);
+
+  const send = useCallback(async () => {
+    if (!order) return;
+    setBusy(true);
+    setError("");
+    try {
+      await call(`/execution/orders/${order.id}/approve`);
+      const sent = (await call(`/execution/orders/${order.id}/submit`)) as ExecutionOrder;
+      setOrder(sent);
+      setSaid("ส่งแล้ว");
+      // Prefill from what actually happened, not from what was asked for.
+      if (sent.average_fill_price > 0) setFill(String(sent.average_fill_price));
+      if (sent.filled_quantity > 0) setShares(String(sent.filled_quantity));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "ส่งไม่สำเร็จ");
+    } finally {
+      setBusy(false);
+    }
+  }, [order, call]);
+
+  const arm = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await call(`/brackets/${bracket.id}/arm`, {
+        fill_price: Number(fill),
+        ...(Number(shares) > 0 ? { quantity: Number(shares) } : {}),
+      });
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "arm ไม่สำเร็จ");
+    } finally {
+      setBusy(false);
+    }
+  }, [bracket.id, fill, shares, call, onChanged]);
+
+  const blocked = order?.risk?.allowed === false;
+
+  return (
+    <>
+      <div className="tm-manage-block">
+        <p className="tm-hint">
+          ส่งคำสั่งซื้อผ่าน execution path — ผ่าน risk gate และ kill switch
+          {bracket.quantity.toLocaleString()} หุ้น @ ${money(bracket.requested_entry)}
+        </p>
+        {!order && (
+          <button type="button" className="tm-btn" disabled={busy} onClick={draft}>
+            เตรียมคำสั่ง + คิดค่าใช้จ่าย
+          </button>
+        )}
+        {order && (
+          <>
+            <div className="tm-numbers">
+              <Figure label="สถานะ" value={order.state} />
+              <Figure label="ต้นทุนประมาณ" value={`$${money(order.estimated_cost)}`} />
+              <Figure label="ค่าธรรมเนียม" value={`$${money(order.estimated_fee)}`} />
+              {order.filled_quantity > 0 && (
+                <Figure
+                  label="ได้จริง"
+                  value={`${order.filled_quantity.toLocaleString()} @ $${money(order.average_fill_price)}`}
+                  tone="reward"
+                />
+              )}
+            </div>
+            {blocked && (
+              <div className="tm-flag">
+                <strong>risk gate ไม่ให้ผ่าน</strong>
+                <p>{order.risk?.reasons?.join(" · ") || "ไม่ระบุเหตุผล"}</p>
+              </div>
+            )}
+            {order.filled_quantity <= 0 && (
+              <button
+                type="button" className="tm-btn danger" disabled={busy || blocked}
+                onClick={send}
+              >
+                ยืนยัน — อนุมัติและส่งจริง
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="tm-manage-block">
+        <p className="tm-hint">
+          <strong>arm</strong> = วาง SL/TP จริงที่โบรก แล้วเปิดให้ engine ตาม ·
+          ใส่ราคาที่<strong>ได้จริง</strong> ไม่ใช่ราคาที่ขอ เพราะทุกเส้นคิดจากราคานี้ ·
+          ซื้อมือที่โบรกเองก็กรอกตรงนี้ได้
+        </p>
+        <div className="tm-row">
+          <label className="tm-field">
+            <span>ราคาที่ได้จริง</span>
+            <input className="tm-input" value={fill} inputMode="decimal"
+              onChange={(event) => setFill(event.target.value)}
+              placeholder={String(bracket.requested_entry)} />
+          </label>
+          <label className="tm-field">
+            <span>จำนวนจริง (ว่าง = ตามแผน)</span>
+            <input className="tm-input" value={shares} inputMode="decimal"
+              onChange={(event) => setShares(event.target.value)}
+              placeholder={String(bracket.quantity)} />
+          </label>
+        </div>
+        <button
+          type="button" className="tm-btn" disabled={busy || !(Number(fill) > 0)}
+          onClick={arm}
+        >
+          arm — วาง SL/TP แล้วให้ engine ตาม
+        </button>
+      </div>
+
+      {said && <p className="tm-said">{said}</p>}
+      {error && <p className="tm-error">{error}</p>}
+    </>
   );
 }
 

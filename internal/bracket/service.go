@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+
+	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
 
 // OpenInput is one intent from the terminal: what to buy, how much money to put
@@ -161,6 +164,11 @@ type Service struct {
 	// a caller that only reads brackets -- a test, a report -- does not have to
 	// stand up a market-data connection to do it.
 	feed Feed
+	// protector and accounts are what arming needs. Both optional, and both absent
+	// together: a service wired without a broker can still plan, record and read.
+	protector Protector
+	accounts  AccountSource
+	log       *slog.Logger
 }
 
 func NewService(repository Repository, mode string) (*Service, error) {
@@ -181,6 +189,158 @@ func NewService(repository Repository, mode string) (*Service, error) {
 func (service *Service) WithFeed(feed Feed) *Service {
 	service.feed = feed
 	return service
+}
+
+// Protector puts the two orders that protect a filled position into the market.
+//
+// One method, because that is all this package needs from a broker here. It is the
+// same shape as the engine's SliceSeller and deliberately a separate name: the two
+// are different promises made at different moments, and each consumer stating its
+// own requirement is what keeps either from growing to fit the other.
+type Protector interface {
+	PlaceOrder(
+		context.Context, execution.BrokerOrderRequest,
+	) (execution.Submission, error)
+}
+
+// AccountSource names the broker account the protective orders belong to. Without
+// one every later amendment is refused by the broker for want of an account, so a
+// bracket is not armed until this has answered.
+type AccountSource interface {
+	DefaultBrokerAccount(context.Context) (string, error)
+}
+
+// WithBroker attaches the broker protective orders go to. Without it a bracket can
+// still be opened, previewed and read; it simply cannot be armed, and Arm says so
+// rather than reporting a position as protected by nothing.
+func (service *Service) WithBroker(
+	protector Protector, accounts AccountSource, logger *slog.Logger,
+) *Service {
+	service.protector = protector
+	service.accounts = accounts
+	service.log = logger
+	return service
+}
+
+func (service *Service) logger() *slog.Logger {
+	if service.log != nil {
+		return service.log
+	}
+	return slog.Default()
+}
+
+// ArmInput is the position as it actually turned out. FillPrice is what filled, not
+// what was asked for, and Quantity is what was really bought when that differs from
+// the plan -- a partial fill protected as though it were whole puts more stock into
+// the market on the way out than is held.
+type ArmInput struct {
+	FillPrice float64 `json:"fill_price"`
+	Quantity  float64 `json:"quantity,omitempty"`
+	Note      string  `json:"note,omitempty"`
+}
+
+// Arm places the stop and the target and turns the bracket on.
+//
+// This is the step that was missing, and without it the rest of this package did
+// nothing at all: a bracket sat in PENDING, the engine skips anything that is not
+// ACTIVE, and so no position was ever trailed however the ladder was configured.
+//
+// The stop goes first and its failure aborts everything. A target that fails to
+// place costs an exit that has to be taken by hand; a stop that fails to place and
+// is treated as placed is a position that believes it is protected and is not. If
+// only the stop makes it the bracket still arms, and the note records that the
+// target is missing -- otherwise a screen showing a target price with no order
+// behind it is discovered at the exact moment it was needed.
+func (service *Service) Arm(
+	ctx context.Context, id int64, input ArmInput,
+) (Record, error) {
+	if service.protector == nil || service.accounts == nil {
+		return Record{}, errors.New(
+			"no broker is wired for protective orders, so this bracket cannot be " +
+				"armed; arming it would claim to protect a position with nothing in " +
+				"the market",
+		)
+	}
+	if !(input.FillPrice > 0) {
+		return Record{}, errors.New("arming a bracket needs the price that filled")
+	}
+	record, err := service.repository.Bracket(ctx, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.State != StatePending {
+		return Record{}, fmt.Errorf(
+			"bracket %d is %s; only a pending one can be armed", id, record.State,
+		)
+	}
+	quantity := record.Quantity
+	if input.Quantity > 0 {
+		quantity = input.Quantity
+	}
+	if !(quantity > 0) {
+		return Record{}, errors.New("arming a bracket needs a positive quantity")
+	}
+	account, err := service.accounts.DefaultBrokerAccount(ctx)
+	if err != nil {
+		return Record{}, fmt.Errorf("resolving the broker account: %w", err)
+	}
+	if strings.TrimSpace(account) == "" {
+		return Record{}, errors.New(
+			"no broker account is configured, and every amendment would be refused " +
+				"for want of one",
+		)
+	}
+	stop, target, err := Levels(input.FillPrice, record.Config)
+	if err != nil {
+		return Record{}, err
+	}
+
+	stopID := fmt.Sprintf("bracket-%d-stop", id)
+	if _, err := service.protector.PlaceOrder(ctx, execution.BrokerOrderRequest{
+		AccountID: account, ClientOrderID: stopID,
+		Ticker: record.Ticker, Side: "SELL", OrderType: "STOP_LOSS",
+		TimeInForce: "GTC", TradingSession: "ALL",
+		Quantity: quantity, StopPrice: stop,
+	}); err != nil {
+		return Record{}, fmt.Errorf(
+			"placing the stop for %s at %.4f: %w -- the position is unprotected and "+
+				"the bracket was left pending", record.Ticker, stop, err,
+		)
+	}
+	note := strings.TrimSpace(input.Note)
+	targetID := fmt.Sprintf("bracket-%d-target", id)
+	if _, err := service.protector.PlaceOrder(ctx, execution.BrokerOrderRequest{
+		AccountID: account, ClientOrderID: targetID,
+		Ticker: record.Ticker, Side: "SELL", OrderType: "LIMIT",
+		TimeInForce: "GTC", TradingSession: "ALL",
+		Quantity: quantity, LimitPrice: target,
+	}); err != nil {
+		targetID = ""
+		service.logger().Warn(
+			"the target order did not place; the stop is in and the upside has to be "+
+				"taken by hand",
+			"ticker", record.Ticker, "bracket_id", id, "error", err,
+		)
+		note = strings.TrimSpace(note + " · target order failed: " + err.Error())
+	}
+
+	record.AccountID = account
+	record.Quantity = quantity
+	if note != "" {
+		record.Note = note
+	}
+	if _, err := service.repository.SaveBracket(ctx, record, AdjustmentRecord{
+		BracketID: id, Trigger: TriggerInitial,
+		NewStop: stop, NewTarget: target,
+		LastPrice: input.FillPrice, HighWater: input.FillPrice, Applied: true,
+		Reason: fmt.Sprintf(
+			"armed at %.4f for %.0f shares on account %s",
+			input.FillPrice, quantity, account,
+		),
+	}); err != nil {
+		return Record{}, fmt.Errorf("recording the armed bracket: %w", err)
+	}
+	return service.Activate(ctx, id, input.FillPrice, stopID, targetID)
 }
 
 // watch and unwatch keep the nil check in one place, so every lifecycle edge can
