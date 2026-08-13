@@ -17,7 +17,7 @@ type BracketSource interface {
 	Get(context.Context, int64) (bracket.Record, error)
 	Adjustments(context.Context, int64) ([]bracket.AdjustmentRecord, error)
 	Open(context.Context, bracket.OpenInput, string) (bracket.Record, error)
-	Amend(context.Context, int64, float64, float64) (bracket.Record, error)
+	Amend(context.Context, int64, bracket.AmendInput) (bracket.Record, error)
 	Close(context.Context, int64, bracket.State, string) (bracket.Record, error)
 	Mode() string
 }
@@ -119,11 +119,6 @@ func (handler *Handler) openBracket(
 	writeJSON(response, http.StatusCreated, record)
 }
 
-type amendBracketRequest struct {
-	StopPrice   float64 `json:"stop_price"`
-	TargetPrice float64 `json:"target_price"`
-}
-
 func (handler *Handler) amendBracket(
 	response http.ResponseWriter, request *http.Request,
 ) {
@@ -135,14 +130,12 @@ func (handler *Handler) amendBracket(
 	if !ok {
 		return
 	}
-	var body amendBracketRequest
+	var body bracket.AmendInput
 	if err := decodeJSON(response, request, &body); err != nil {
 		writeAPIError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	record, err := source.Amend(
-		request.Context(), id, body.StopPrice, body.TargetPrice,
-	)
+	record, err := source.Amend(request.Context(), id, body)
 	if err != nil {
 		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
 		return

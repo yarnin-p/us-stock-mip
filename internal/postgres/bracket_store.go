@@ -22,7 +22,7 @@ const bracketColumns = `id, mode, coalesce(account_id, ''), ticker, state,
 	break_even_after, break_even_floor, profit_lock_after, profit_lock_floor,
 	fee_round_trip_percent,
 	coalesce(entry_order_id, ''), coalesce(stop_order_id, ''),
-	coalesce(target_order_id, ''), risk_flags, coalesce(note, ''),
+	coalesce(target_order_id, ''), risk_flags, manual_hold, coalesce(note, ''),
 	opened_at, closed_at, updated_at`
 
 func (store *Store) CreateBracket(
@@ -105,6 +105,67 @@ func (store *Store) OpenBracketsForTicker(
 	)
 }
 
+// SaveBracket writes an operator's amendment: levels, the rules behind them and
+// whether the engine is being told to stand down, in one transaction with the row
+// that explains it. Splitting them would allow a bracket to run under rules no
+// audit row accounts for.
+func (store *Store) SaveBracket(
+	ctx context.Context,
+	record bracket.Record,
+	adjustment bracket.AdjustmentRecord,
+) (bracket.Record, error) {
+	transaction, err := store.pool.Begin(ctx)
+	if err != nil {
+		return bracket.Record{}, fmt.Errorf("beginning amendment: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+
+	row := transaction.QueryRow(
+		ctx,
+		`UPDATE brackets SET
+			stop_price = nullif($2, 0::numeric),
+			target_price = nullif($3, 0::numeric),
+			high_water = nullif($4, 0::numeric),
+			stop_loss_percent = $5,
+			take_profit_percent = $6,
+			trail_stop_after = $7,
+			trail_stop_distance = $8,
+			trail_target_after = $9,
+			trail_target_distance = $10,
+			minimum_step = $11,
+			break_even_after = $12,
+			break_even_floor = $13,
+			profit_lock_after = $14,
+			profit_lock_floor = $15,
+			fee_round_trip_percent = $16,
+			manual_hold = $17,
+			note = coalesce(nullif($18, ''), note),
+			updated_at = now()
+		  WHERE id = $1
+		  RETURNING `+bracketColumns,
+		record.ID, record.StopPrice, record.TargetPrice, record.HighWater,
+		record.Config.StopLossPercent, record.Config.TakeProfitPercent,
+		record.Config.TrailStopAfter, record.Config.TrailStopDistance,
+		record.Config.TrailTargetAfter, record.Config.TrailTargetDistance,
+		record.Config.MinimumStep,
+		record.Config.BreakEvenAfter, record.Config.BreakEvenFloor,
+		record.Config.ProfitLockAfter, record.Config.ProfitLockFloor,
+		record.Config.FeeRoundTripPercent,
+		record.ManualHold, record.Note,
+	)
+	updated, err := scanBracket(row)
+	if err != nil {
+		return bracket.Record{}, fmt.Errorf("saving amendment: %w", err)
+	}
+	if err := insertAdjustment(ctx, transaction, record.ID, adjustment); err != nil {
+		return bracket.Record{}, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return bracket.Record{}, fmt.Errorf("committing amendment: %w", err)
+	}
+	return updated, nil
+}
+
 // Brackets returns recent history including closed positions, which is what the
 // terminal lists.
 func (store *Store) Brackets(
@@ -157,31 +218,50 @@ func (store *Store) SaveLevels(
 		return bracket.Record{}, fmt.Errorf("updating bracket levels: %w", err)
 	}
 
-	if adjustment.LastPrice > 0 {
-		if _, err := transaction.Exec(
-			ctx,
-			`INSERT INTO bracket_adjustments (
-				bracket_id, trigger, previous_stop, new_stop,
-				previous_target, new_target, last_price, high_water,
-				applied, broker_error, reason
-			) VALUES (
-				$1, $2, nullif($3, 0::numeric), nullif($4, 0::numeric),
-				nullif($5, 0::numeric), nullif($6, 0::numeric), $7, $8,
-				$9, nullif($10, ''), nullif($11, '')
-			)`,
-			record.ID, string(adjustmentTrigger(adjustment)),
-			adjustment.PreviousStop, adjustment.NewStop,
-			adjustment.PreviousTarget, adjustment.NewTarget,
-			adjustment.LastPrice, adjustment.HighWater,
-			adjustment.Applied, adjustment.BrokerError, adjustment.Reason,
-		); err != nil {
-			return bracket.Record{}, fmt.Errorf("recording adjustment: %w", err)
-		}
+	if err := insertAdjustment(ctx, transaction, record.ID, adjustment); err != nil {
+		return bracket.Record{}, err
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return bracket.Record{}, fmt.Errorf("committing level update: %w", err)
 	}
 	return updated, nil
+}
+
+// insertAdjustment writes the audit row for one move. It is shared so the engine's
+// hot path and an operator's amendment cannot drift into recording the same thing
+// two different ways.
+//
+// An adjustment with no price is a high-water advance only and writes nothing:
+// recording every tick would bury the moves that matter.
+func insertAdjustment(
+	ctx context.Context,
+	transaction pgx.Tx,
+	bracketID int64,
+	adjustment bracket.AdjustmentRecord,
+) error {
+	if adjustment.LastPrice <= 0 {
+		return nil
+	}
+	if _, err := transaction.Exec(
+		ctx,
+		`INSERT INTO bracket_adjustments (
+			bracket_id, trigger, previous_stop, new_stop,
+			previous_target, new_target, last_price, high_water,
+			applied, broker_error, reason
+		) VALUES (
+			$1, $2, nullif($3, 0::numeric), nullif($4, 0::numeric),
+			nullif($5, 0::numeric), nullif($6, 0::numeric), $7, $8,
+			$9, nullif($10, ''), nullif($11, '')
+		)`,
+		bracketID, string(adjustmentTrigger(adjustment)),
+		adjustment.PreviousStop, adjustment.NewStop,
+		adjustment.PreviousTarget, adjustment.NewTarget,
+		adjustment.LastPrice, adjustment.HighWater,
+		adjustment.Applied, adjustment.BrokerError, adjustment.Reason,
+	); err != nil {
+		return fmt.Errorf("recording adjustment: %w", err)
+	}
+	return nil
 }
 
 // adjustmentTrigger keeps the audit row inside the check constraint. A
@@ -293,7 +373,7 @@ func scanBracket(row bracketRow) (bracket.Record, error) {
 		&record.Config.ProfitLockAfter, &record.Config.ProfitLockFloor,
 		&record.Config.FeeRoundTripPercent,
 		&record.EntryOrderID, &record.StopOrderID, &record.TargetOrderID,
-		&record.RiskFlags, &record.Note,
+		&record.RiskFlags, &record.ManualHold, &record.Note,
 		&record.OpenedAt, &closedAt, &record.UpdatedAt,
 	); err != nil {
 		return bracket.Record{}, err

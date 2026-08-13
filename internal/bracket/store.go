@@ -8,26 +8,30 @@ import (
 // Record is a bracket as it is stored: the domain shape plus the broker handles
 // and provenance the engine needs to recover after a restart.
 type Record struct {
-	ID             int64      `json:"id"`
-	Mode           string     `json:"mode"`
-	AccountID      string     `json:"account_id,omitempty"`
-	Ticker         string     `json:"ticker"`
-	State          State      `json:"state"`
-	Quantity       float64    `json:"quantity"`
-	RequestedEntry float64    `json:"requested_entry"`
-	EntryPrice     float64    `json:"entry_price,omitempty"`
-	StopPrice      float64    `json:"stop_price,omitempty"`
-	TargetPrice    float64    `json:"target_price,omitempty"`
-	HighWater      float64    `json:"high_water,omitempty"`
-	Config         Config     `json:"config"`
-	EntryOrderID   string     `json:"entry_order_id,omitempty"`
-	StopOrderID    string     `json:"stop_order_id,omitempty"`
-	TargetOrderID  string     `json:"target_order_id,omitempty"`
-	RiskFlags      []string   `json:"risk_flags"`
-	Note           string     `json:"note,omitempty"`
-	OpenedAt       time.Time  `json:"opened_at"`
-	ClosedAt       *time.Time `json:"closed_at,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID             int64    `json:"id"`
+	Mode           string   `json:"mode"`
+	AccountID      string   `json:"account_id,omitempty"`
+	Ticker         string   `json:"ticker"`
+	State          State    `json:"state"`
+	Quantity       float64  `json:"quantity"`
+	RequestedEntry float64  `json:"requested_entry"`
+	EntryPrice     float64  `json:"entry_price,omitempty"`
+	StopPrice      float64  `json:"stop_price,omitempty"`
+	TargetPrice    float64  `json:"target_price,omitempty"`
+	HighWater      float64  `json:"high_water,omitempty"`
+	Config         Config   `json:"config"`
+	EntryOrderID   string   `json:"entry_order_id,omitempty"`
+	StopOrderID    string   `json:"stop_order_id,omitempty"`
+	TargetOrderID  string   `json:"target_order_id,omitempty"`
+	RiskFlags      []string `json:"risk_flags"`
+	// ManualHold means the operator has taken the wheel: the engine records what it
+	// would have done and sends nothing. It exists because a stop typed by hand and
+	// then moved by the engine leaves nobody able to say which of them is driving.
+	ManualHold bool       `json:"manual_hold"`
+	Note       string     `json:"note,omitempty"`
+	OpenedAt   time.Time  `json:"opened_at"`
+	ClosedAt   *time.Time `json:"closed_at,omitempty"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 
 	// LastPrice and UnrealizedPnL are filled by the reader for display and are
 	// not persisted; they come from the quote feed at read time.
@@ -86,6 +90,10 @@ type Repository interface {
 	// adjustment that produced them, so the audit trail can never disagree with
 	// the state it describes.
 	SaveLevels(context.Context, Record, AdjustmentRecord) (Record, error)
+	// SaveBracket persists levels, configuration and the manual-hold flag together
+	// with the row explaining them. The engine uses SaveLevels for its hot path; a
+	// human changing the rules goes through here, so one amendment is one write.
+	SaveBracket(context.Context, Record, AdjustmentRecord) (Record, error)
 	SaveBracketState(context.Context, int64, State, string) (Record, error)
 	BracketAdjustments(context.Context, int64) ([]AdjustmentRecord, error)
 }

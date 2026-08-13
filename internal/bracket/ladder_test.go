@@ -226,3 +226,46 @@ func runPath(t *testing.T, config Config, gains []float64) pathResult {
 	repository.mutex.Unlock()
 	return result
 }
+
+func TestAHeldBracketIsRecordedButNeverSent(t *testing.T) {
+	record := activeRecord()
+	record.Config = ladderConfig()
+	record.ManualHold = true
+	stop, target, err := Levels(record.EntryPrice, record.Config)
+	if err != nil {
+		t.Fatalf("levels: %v", err)
+	}
+	record.StopPrice, record.TargetPrice = stop, target
+
+	repository := newStubRepository(record)
+	modifier := &stubModifier{}
+	engine := newTestEngine(repository, modifier)
+
+	// +6% would arm the profit lock on an unheld bracket.
+	if err := engine.HandleTick(
+		context.Background(), tickAt(record.Ticker, 10.60),
+	); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("the broker was called on a held bracket: %+v", calls)
+	}
+	if stored := repository.stored(t, record.ID); stored.StopPrice != stop {
+		t.Fatalf("stop moved to %.4f on a held bracket", stored.StopPrice)
+	}
+	// The trail must still be visible in the audit trail, or releasing the hold
+	// leaves no record of what the engine wanted to do meanwhile.
+	if repository.auditCount() != 1 {
+		t.Fatalf("adjustments = %d, want the suppressed move recorded",
+			repository.auditCount())
+	}
+	repository.mutex.Lock()
+	entry := repository.adjustments[0]
+	repository.mutex.Unlock()
+	if entry.Applied {
+		t.Fatal("a suppressed move was recorded as applied")
+	}
+	if entry.BrokerError == "" {
+		t.Fatal("the suppression did not record why")
+	}
+}

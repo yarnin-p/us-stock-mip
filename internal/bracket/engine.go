@@ -121,6 +121,13 @@ func (engine *Engine) HandleTick(
 		if record.State != StateActive {
 			continue
 		}
+		if record.ManualHold {
+			// Recorded, not sent -- the same treatment as an unamendable session. A
+			// held bracket that left no trail would make it impossible to see later
+			// what the engine would have done while the operator was driving.
+			engine.holdBack(ctx, record, tick.Price)
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -137,6 +144,19 @@ func (engine *Engine) HandleTick(
 		}
 	}
 	return failures
+}
+
+// holdBack records what the engine would have moved while the operator holds the
+// wheel. It is a record and nothing else: no broker call, no level change.
+func (engine *Engine) holdBack(
+	ctx context.Context, record Record, lastPrice float64,
+) {
+	adjustment, err := Plan(record.Bracket(), lastPrice)
+	if err != nil || !adjustment.Changed {
+		return
+	}
+	engine.record(ctx, record, adjustment, lastPrice, false,
+		"manual hold is on; the operator is driving this bracket")
 }
 
 // lockFor returns the serialising lock for one symbol, creating it on first

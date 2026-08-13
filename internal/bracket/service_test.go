@@ -199,7 +199,8 @@ func TestAmendLetsTheOperatorWidenAStopDeliberately(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Below the derived 6.99 stop: the ratchet does not bind a human.
-	amended, err := service.Amend(context.Background(), created.ID, 6.50, 12.00)
+	amended, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 6.50, TargetPrice: 12.00})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,18 +218,23 @@ func TestAmendStillRefusesCrossedLevels(t *testing.T) {
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := service.Amend(context.Background(), created.ID, 12, 10); err == nil {
+	if _, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 12, TargetPrice: 10}); err == nil {
 		t.Fatal("a stop above the target was accepted")
 	}
-	if _, err := service.Amend(context.Background(), created.ID, 0, 10); err == nil {
-		t.Fatal("a zero stop was accepted")
+	// A zero stop now means "leave it", so crossing has to be tested by naming a
+	// target under the stop the bracket already carries.
+	if _, err := service.Amend(context.Background(), created.ID,
+		AmendInput{TargetPrice: 1}); err == nil {
+		t.Fatal("a target below the standing stop was accepted")
 	}
 }
 
 func TestAmendRequiresAnActiveBracket(t *testing.T) {
 	service, _ := newTestService(t)
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
-	if _, err := service.Amend(context.Background(), created.ID, 7, 10); err == nil {
+	if _, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 7, TargetPrice: 10}); err == nil {
 		t.Fatal("a pending bracket accepted an amendment")
 	}
 }
@@ -261,5 +267,100 @@ func TestNewServiceDefaultsToPaper(t *testing.T) {
 	}
 	if service.Mode() != "paper" {
 		t.Fatalf("mode = %q, want paper", service.Mode())
+	}
+}
+
+func TestAmendCanChangeTheRulesInFlight(t *testing.T) {
+	service, repository := newTestService(t)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	if _, err := service.Activate(
+		context.Background(), created.ID, 10, "stop-1", "target-1",
+	); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	// A position that starts running is worth a different ladder than one that has
+	// not moved, and the operator must be able to say so without closing it.
+	tighter := DefaultConfig()
+	tighter.BreakEvenAfter = 0.02
+	tighter.BreakEvenFloor = 0.01
+	tighter.ProfitLockAfter = 0.05
+	tighter.ProfitLockFloor = 0.025
+	tighter.FeeRoundTripPercent = 0.014
+	amended, err := service.Amend(context.Background(), created.ID, AmendInput{
+		Config: &tighter, Note: "it is running; tighten the ladder",
+	})
+	if err != nil {
+		t.Fatalf("amend: %v", err)
+	}
+	if amended.Config.ProfitLockFloor != 0.025 ||
+		amended.Config.FeeRoundTripPercent != 0.014 {
+		t.Fatalf("config did not take: %+v", amended.Config)
+	}
+	if stored := repository.records[created.ID]; stored.Config.BreakEvenAfter != 0.02 {
+		t.Fatalf("config was not persisted: %+v", stored.Config)
+	}
+}
+
+func TestAmendRefusesALadderWhoseRungsAreOutOfOrder(t *testing.T) {
+	service, _ := newTestService(t)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	if _, err := service.Activate(
+		context.Background(), created.ID, 10, "stop-1", "target-1",
+	); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	broken := DefaultConfig()
+	broken.BreakEvenAfter = 0.03
+	broken.BreakEvenFloor = 0.05 // above its own trigger
+	if _, err := service.Amend(context.Background(), created.ID, AmendInput{
+		Config: &broken,
+	}); err == nil {
+		t.Fatal("an out-of-order ladder was accepted in flight")
+	}
+}
+
+func TestHoldAndReleasePutTheOperatorInCharge(t *testing.T) {
+	service, repository := newTestService(t)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	if _, err := service.Activate(
+		context.Background(), created.ID, 10, "stop-1", "target-1",
+	); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	hold := true
+	held, err := service.Amend(context.Background(), created.ID, AmendInput{
+		StopPrice: 9.50, Hold: &hold,
+	})
+	if err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+	if !held.ManualHold {
+		t.Fatal("the hold did not take")
+	}
+
+	// Amending a level again must not silently change who is driving.
+	still, err := service.Amend(context.Background(), created.ID, AmendInput{
+		StopPrice: 9.60,
+	})
+	if err != nil {
+		t.Fatalf("second amend: %v", err)
+	}
+	if !still.ManualHold {
+		t.Fatal("a level change cleared the hold")
+	}
+
+	release := false
+	released, err := service.Amend(context.Background(), created.ID, AmendInput{
+		Hold: &release,
+	})
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if released.ManualHold {
+		t.Fatal("the release did not take")
+	}
+	if stored := repository.records[created.ID]; stored.ManualHold {
+		t.Fatal("the release was not persisted")
 	}
 }

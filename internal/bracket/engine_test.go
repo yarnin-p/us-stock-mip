@@ -107,6 +107,21 @@ func (repository *stubRepository) SaveLevels(
 	return record, nil
 }
 
+func (repository *stubRepository) SaveBracket(
+	_ context.Context, record Record, adjustment AdjustmentRecord,
+) (Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if repository.saveErr != nil {
+		return Record{}, repository.saveErr
+	}
+	repository.records[record.ID] = record
+	if adjustment.LastPrice > 0 {
+		repository.adjustments = append(repository.adjustments, adjustment)
+	}
+	return record, nil
+}
+
 func (repository *stubRepository) SaveBracketState(
 	_ context.Context, id int64, state State, _ string,
 ) (Record, error) {

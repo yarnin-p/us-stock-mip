@@ -260,8 +260,34 @@ func (service *Service) Activate(
 // Amend sets the levels by hand. The ratchet does not apply here -- an operator
 // is allowed to widen a stop deliberately -- but crossing the two orders is
 // still refused, because that shape cannot be sent to any broker.
+// AmendInput is what the terminal sends when the operator changes their mind.
+//
+// Levels and rules travel together because they are one decision: moving a stop to
+// a level the ladder will immediately override is not an amendment, it is a
+// surprise. Config is a whole replacement rather than a patch -- the terminal
+// renders every field, so a partial update could only mean "leave the rest", and a
+// pointer per field would let a caller build a ladder out of order one call at a
+// time.
+type AmendInput struct {
+	// StopPrice and TargetPrice are absolute. Zero leaves the level alone.
+	StopPrice   float64 `json:"stop_price,omitempty"`
+	TargetPrice float64 `json:"target_price,omitempty"`
+	// Config replaces the rules wholesale when present, and is validated before it
+	// is stored, so a ladder whose rungs are out of order cannot be persisted.
+	Config *Config `json:"config,omitempty"`
+	// Hold takes the wheel when true and gives it back when false. Nil leaves it as
+	// it was, so amending a level does not silently change who is driving.
+	Hold *bool  `json:"hold,omitempty"`
+	Note string `json:"note,omitempty"`
+}
+
+// Amend applies an operator's changes to a live bracket.
+//
+// A hand-set stop is not required to be below the market. That guard belongs to
+// the engine, which must never place a stop that fires on arrival; a human setting
+// one there is asking to be filled now, which is the whole of a forced exit.
 func (service *Service) Amend(
-	ctx context.Context, id int64, stopPrice, targetPrice float64,
+	ctx context.Context, id int64, input AmendInput,
 ) (Record, error) {
 	record, err := service.repository.Bracket(ctx, id)
 	if err != nil {
@@ -272,23 +298,57 @@ func (service *Service) Amend(
 			"bracket %d is %s and has no live protective orders", id, record.State,
 		)
 	}
-	if stopPrice <= 0 || targetPrice <= 0 {
+
+	previousStop, previousTarget := record.StopPrice, record.TargetPrice
+	if input.StopPrice > 0 {
+		record.StopPrice = roundToCent(input.StopPrice)
+	}
+	if input.TargetPrice > 0 {
+		record.TargetPrice = roundToCent(input.TargetPrice)
+	}
+	if record.StopPrice <= 0 || record.TargetPrice <= 0 {
 		return Record{}, errors.New("stop and target must both be positive")
 	}
-	if stopPrice >= targetPrice {
+	if record.StopPrice >= record.TargetPrice {
 		return Record{}, fmt.Errorf(
-			"stop %.4f must be below target %.4f", stopPrice, targetPrice,
+			"stop %.4f must be below target %.4f",
+			record.StopPrice, record.TargetPrice,
 		)
 	}
-	previousStop, previousTarget := record.StopPrice, record.TargetPrice
-	record.StopPrice = roundToCent(stopPrice)
-	record.TargetPrice = roundToCent(targetPrice)
-	return service.repository.SaveLevels(ctx, record, AdjustmentRecord{
+	if input.Config != nil {
+		config := *input.Config
+		if config.MinimumStep == 0 {
+			config.MinimumStep = DefaultMinimumStep
+		}
+		if err := config.Validate(); err != nil {
+			return Record{}, fmt.Errorf("bracket config: %w", err)
+		}
+		record.Config = config
+	}
+	if input.Hold != nil {
+		record.ManualHold = *input.Hold
+	}
+	if note := strings.TrimSpace(input.Note); note != "" {
+		record.Note = note
+	}
+
+	reason := "set by hand from the terminal"
+	if input.Config != nil {
+		reason = "levels and rules set by hand from the terminal"
+	}
+	if input.Hold != nil {
+		if *input.Hold {
+			reason += "; engine held"
+		} else {
+			reason += "; engine released"
+		}
+	}
+	return service.repository.SaveBracket(ctx, record, AdjustmentRecord{
 		BracketID: id, Trigger: TriggerManual,
 		PreviousStop: previousStop, NewStop: record.StopPrice,
 		PreviousTarget: previousTarget, NewTarget: record.TargetPrice,
 		LastPrice: record.HighWater, HighWater: record.HighWater,
-		Applied: true, Reason: "set by hand from the terminal",
+		Applied: true, Reason: reason,
 	})
 }
 
