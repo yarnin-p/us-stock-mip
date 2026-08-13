@@ -8,6 +8,7 @@ export const NAV = [
   { key: "market", label: "Market Overview", icon: "M3 3v18h18|M7 14l3-4 3 3 5-7" },
   { key: "scanner", label: "Daily Scanner", icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z|M20 20l-4-4" },
   { key: "gainers", label: "Gainers", icon: "M3 17l6-6 4 4 8-8|M15 7h6v6" },
+  { key: "terminal", label: "Order Terminal", icon: "M3 5h18v14H3z|M7 10l2 2-2 2|M12 14h5" },
   { key: "watchlist", label: "Watchlist", icon: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z|M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" },
   { key: "positions", label: "Positions", icon: "M3 7h18v12H3z|M3 7l3-4h12l3 4" },
   { key: "orders", label: "Orders", icon: "M8 6h12|M8 12h12|M8 18h12|M3 6h.01|M3 12h.01|M3 18h.01" },

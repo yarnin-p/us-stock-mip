@@ -1,0 +1,476 @@
+/* Terminal — the order ticket, on the same warm-white surface as the rest of the
+ * console.
+ *
+ * An earlier version made this whole screen dark to mark it as the dangerous
+ * room. That was the wrong instrument: it broke the reading surface for the sake
+ * of a signal that belongs on the rail. The rail item carries the emphasis now,
+ * and the content stays consistent with every other screen.
+ *
+ * What still gets colour here is risk. Money at stake reads red, money to be made
+ * reads green, and a structural warning gets a full sentence rather than a badge —
+ * a three-letter tag is easy to scroll past, a sentence about a stop that may not
+ * fill is not.
+ */
+
+.tm {
+  color: var(--te-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: var(--te-gap);
+}
+
+.tm-title {
+  margin: 0;
+  font-size: 1.32rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.tm-sub {
+  margin: 5px 0 0;
+  color: var(--te-text-2);
+  font-size: 0.86rem;
+}
+
+.tm-mode {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--te-border);
+  background: var(--te-surface-subtle);
+  color: var(--te-text-2);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  flex: none;
+}
+
+/* Live mode has to be unmistakable at a glance. */
+.tm-mode.live {
+  border-color: var(--te-red);
+  background: var(--te-red-bg);
+  color: var(--te-red);
+}
+
+.tm-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: var(--te-gap);
+}
+
+@media (max-width: 980px) {
+  .tm-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.tm-card {
+  background: var(--te-card);
+  border: 1px solid var(--te-border);
+  border-radius: var(--te-radius-card);
+  box-shadow: var(--te-shadow);
+  padding: 20px;
+}
+
+.tm-card + .tm-card,
+.tm-grid + .tm-card { margin-top: var(--te-gap); }
+
+.tm-card-title {
+  margin: 0 0 16px;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--te-muted);
+}
+
+.tm-field { display: block; margin-bottom: 15px; }
+
+.tm-field > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  font-weight: 550;
+  color: var(--te-text-2);
+}
+
+.tm-subfield { display: block; }
+
+.tm-subfield > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  color: var(--te-muted);
+}
+
+.tm-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.tm-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--te-radius-control);
+  border: 1px solid var(--te-border);
+  background: var(--te-bg-warm);
+  color: var(--te-text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.tm-input:focus-visible {
+  outline: 2px solid var(--te-brand);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.tm-input-ticker {
+  font-size: 1.14rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.tm-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--te-muted);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.tm-hint-strong {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--te-radius-control);
+  border: 1px solid var(--te-border);
+  background: var(--te-surface-subtle);
+  color: var(--te-text-2);
+}
+
+.tm-toggle {
+  display: inline-flex;
+  padding: 3px;
+  margin-bottom: 9px;
+  border-radius: var(--te-radius-control);
+  border: 1px solid var(--te-border);
+  background: var(--te-surface-subtle);
+}
+
+.tm-toggle button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--te-text-2);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.tm-toggle button.on {
+  background: var(--te-card);
+  color: var(--te-text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(52, 45, 40, .08);
+}
+
+/* Echoes the unit that is not being typed, so the level and the rule are both
+   visible without switching back and forth. */
+.tm-mirror {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--te-brand-bg);
+  color: var(--te-text-2);
+}
+
+.tm-mirror strong { color: #6e5ce7; font-weight: 640; }
+
+.tm-disclose {
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #6e5ce7;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.tm-advanced {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--te-border);
+}
+
+/* ── preview ──────────────────────────────────────────────────────────── */
+
+.tm-numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.tm-figure {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--te-border);
+  background: var(--te-bg-warm);
+}
+
+.tm-figure.tone-risk { border-color: var(--te-red); background: var(--te-red-bg); }
+.tm-figure.tone-reward { border-color: var(--te-green-soft); background: var(--te-green-bg); }
+
+.tm-figure-label {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--te-muted);
+}
+
+.tm-figure-value {
+  display: block;
+  margin-top: 5px;
+  font-size: 1.14rem;
+  font-weight: 650;
+}
+
+.tm-figure.tone-risk .tm-figure-value { color: var(--te-red); }
+.tm-figure.tone-reward .tm-figure-value { color: var(--te-green); }
+
+.tm-figure-note {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.72rem;
+  color: var(--te-text-2);
+}
+
+/* The ladder puts the three prices in the order they sit on a chart, so the
+   distance between them is read rather than calculated. */
+.tm-ladder {
+  margin: 16px 0;
+  border: 1px solid var(--te-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tm-rung {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 13px;
+  background: var(--te-card);
+}
+
+.tm-rung + .tm-rung { border-top: 1px solid var(--te-border-soft); }
+.tm-rung.tone-reward { background: var(--te-green-bg); }
+.tm-rung.tone-risk { background: var(--te-red-bg); }
+
+.tm-rung-label {
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  color: var(--te-text-2);
+}
+
+.tm-rung.tone-reward .tm-rung-label { color: var(--te-green); }
+.tm-rung.tone-risk .tm-rung-label { color: var(--te-red); }
+
+.tm-rung-price { font-size: 1.02rem; font-weight: 620; }
+
+.tm-ratio {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.tm-ratio > div {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--te-bg-warm);
+  border: 1px solid var(--te-border);
+}
+
+.tm-ratio-value { display: block; font-size: 1.12rem; font-weight: 650; }
+
+.tm-ratio-label {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.74rem;
+  color: var(--te-muted);
+  line-height: 1.45;
+}
+
+.tm-ratio-label strong { color: var(--te-text-2); }
+
+.tm-warn,
+.tm-flag {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--te-orange-soft);
+  background: var(--te-orange-bg);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--te-text);
+}
+
+.tm-flag { border-color: #f6bcbc; background: var(--te-red-bg); }
+.tm-flag strong { display: block; margin-bottom: 4px; color: #c93f3f; }
+.tm-flag p { margin: 0; color: var(--te-text-2); }
+.tm-warn { margin-bottom: 0; }
+
+.tm-submit {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px;
+  border: 0;
+  border-radius: var(--te-radius-control);
+  background: var(--te-brand);
+  color: #fff;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.tm-submit:hover:not(:disabled) { background: var(--te-brand-hover); }
+.tm-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.tm-empty,
+.tm-error {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--te-muted);
+}
+
+.tm-error { color: var(--te-red); }
+
+/* ── table ────────────────────────────────────────────────────────────── */
+
+.tm-table-wrap { overflow-x: auto; }
+
+.tm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.tm-table th {
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 0.71rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--te-muted);
+  border-bottom: 1px solid var(--te-border);
+  white-space: nowrap;
+}
+
+.tm-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--te-border-soft);
+  white-space: nowrap;
+}
+
+.tm-table tbody tr:hover { background: var(--te-bg-warm); }
+.tm-table .num { text-align: right; }
+.tm-table td.tone-risk { color: var(--te-red); }
+.tm-table td.tone-reward { color: var(--te-green); }
+
+.tm-cell-ticker { font-weight: 650; letter-spacing: 0.04em; }
+
+.tm-pending {
+  color: var(--te-muted);
+  font-size: 0.74rem;
+  font-style: normal;
+}
+
+.tm-state {
+  padding: 3px 8px;
+  border-radius: var(--te-radius-badge);
+  border: 1px solid var(--te-border);
+  background: var(--te-surface-subtle);
+  font-size: 0.7rem;
+  font-weight: 620;
+  letter-spacing: 0.04em;
+  color: var(--te-text-2);
+}
+
+.tm-state.s-ACTIVE { border-color: var(--te-green-soft); background: var(--te-green-bg); color: var(--te-green); }
+.tm-state.s-STOPPED { border-color: #f6bcbc; background: var(--te-red-bg); color: var(--te-red); }
+.tm-state.s-TARGETED { border-color: var(--te-brand-soft); background: var(--te-brand-bg); color: #6e5ce7; }
+
+.tm-flag-count {
+  display: inline-block;
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--te-red-bg);
+  color: var(--te-red);
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+.tm-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #6e5ce7;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+/* ── history ──────────────────────────────────────────────────────────── */
+
+.tm-history {
+  margin-top: 14px;
+  border-top: 1px solid var(--te-border);
+  padding-top: 12px;
+}
+
+.tm-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  font-size: 0.82rem;
+  border-bottom: 1px solid var(--te-border-soft);
+}
+
+/* A refused amendment means the position is protected at a stale price. It gets
+   a red edge so it cannot be skimmed past. */
+.tm-history-row.failed {
+  border-left: 3px solid var(--te-red);
+  padding-left: 10px;
+  background: var(--te-red-bg);
+}
+
+.tm-history-when { color: var(--te-muted); font-size: 0.76rem; }
+
+.tm-trigger {
+  padding: 2px 7px;
+  border-radius: var(--te-radius-badge);
+  border: 1px solid var(--te-border);
+  background: var(--te-surface-subtle);
+  font-size: 0.68rem;
+  font-weight: 620;
+  letter-spacing: 0.04em;
+  color: var(--te-text-2);
+}
+
+.tm-trigger.t-TRAIL_STOP { border-color: var(--te-green-soft); background: var(--te-green-bg); color: var(--te-green); }
+.tm-trigger.t-TRAIL_TARGET { border-color: var(--te-brand-soft); background: var(--te-brand-bg); color: #6e5ce7; }
+.tm-trigger.t-MANUAL { border-color: var(--te-orange-soft); background: var(--te-orange-bg); color: #b9762e; }
+
+.tm-history-price { color: var(--te-muted); }
+.tm-history-error { color: var(--te-red); font-size: 0.78rem; }
