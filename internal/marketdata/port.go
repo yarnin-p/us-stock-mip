@@ -2,44 +2,44 @@ package marketdata
 
 import "context"
 
-// Source answers the price of a symbol on demand. Its signature matches the
-// quote port the bracket engine already declares, so an adapter written against
-// this package satisfies that engine without the engine changing.
-type Source interface {
-	LastPrice(ctx context.Context, ticker string) (float64, error)
+// Provider is a venue that can be watched. Subscribe takes one symbol because
+// that is the unit the domain reasons about — a position is opened and closed one
+// name at a time, and tying a subscription's lifetime to a position's makes
+// "stop paying for this feed" a cancel rather than a set difference computed
+// somewhere else. An adapter that must talk to its venue in batches is free to
+// multiplex internally; that is its problem, not the caller's.
+type Provider interface {
+	Subscribe(ctx context.Context, ticker string) (Subscription, error)
 }
 
-// TickHandler receives one observed print. Returning an error tells the streamer
-// the tick was not consumed; a streamer logs and continues rather than dropping
-// the subscription, because one engine refusing a tick is not a feed failure.
+// Subscription is a live feed for one symbol, shaped like the standard library's
+// scanners: range the channel, then ask why it ended.
+//
+// Errors do not travel on the channel. A tick is a price and nothing else, so a
+// consumer ranging over Ticks never has to unwrap a union type on the hot path.
+// A transport failure closes the channel and is reported by Err, which means the
+// loop that reads prices and the code that handles outages stay separate.
+type Subscription interface {
+	// Ticks delivers every print until the feed ends, then closes. Calling it
+	// twice returns the same channel.
+	Ticks() <-chan Tick
+	// Err reports why Ticks closed. It is nil for a clean shutdown — a cancelled
+	// context or a Close — and is only meaningful once the channel is drained.
+	Err() error
+	// Close releases the subscription. It is safe to call more than once, so a
+	// deferred Close beside an explicit one is not a bug.
+	Close() error
+}
+
+// TickHandler consumes one print. It names the shape an orchestrator exposes so a
+// composition root can hand a subscription to one without either side importing
+// the other.
 type TickHandler func(ctx context.Context, tick Tick) error
 
-// Streamer pushes prints as they happen for a chosen set of symbols.
-//
-// Subscribe replaces the set rather than adding to it. Venues bill and throttle
-// by subscription count, and the caller — which knows exactly which positions
-// are live — is the only layer that can keep the set to the minimum. An additive
-// API would leave symbols subscribed after the position closed, and nothing
-// downstream would know they were stale.
-type Streamer interface {
-	// Subscribe makes symbols the complete set this streamer follows. Passing an
-	// empty set is legal and means "follow nothing", which is what a flat book
-	// should cost.
-	Subscribe(ctx context.Context, tickers []string) error
-	// OnTick registers the handler invoked for every print. Calling it a second
-	// time replaces the handler, so a restart cannot end up with two engines
-	// ratcheting the same stop.
-	OnTick(handler TickHandler)
-	// Run drives the subscription until ctx ends. It returns nil on a clean
-	// shutdown so a caller can distinguish "asked to stop" from "feed died".
-	Run(ctx context.Context) error
-}
-
-// StreamingSource is the shape an adapter reaches when it serves both halves of
-// the contract: a live subscription that also answers on demand from its own
-// most recent tick. Orchestrators should depend on Source or Streamer, never on
-// this composite — it exists to name what a complete adapter provides.
-type StreamingSource interface {
-	Source
-	Streamer
+// Source answers the price of a symbol on demand, for the read paths that want a
+// number rather than a stream — a screen rendering an open position, say. It is
+// deliberately separate from Provider: an orchestrator that pulls prices has put
+// the venue's cadence inside itself, and no orchestrator should depend on this.
+type Source interface {
+	LastPrice(ctx context.Context, ticker string) (float64, error)
 }

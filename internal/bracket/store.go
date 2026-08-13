@@ -74,7 +74,9 @@ type AdjustmentRecord struct {
 type Repository interface {
 	CreateBracket(context.Context, Record) (Record, error)
 	Bracket(context.Context, int64) (Record, error)
-	OpenBrackets(context.Context, string) ([]Record, error)
+	// OpenBracketsForTicker is what a pushed price needs: the engine is handed one
+	// symbol and must not read the whole book to find out whether it cares.
+	OpenBracketsForTicker(context.Context, string, string) ([]Record, error)
 	Brackets(context.Context, string, int) ([]Record, error)
 	// SaveLevels persists new levels and the high-water mark together with the
 	// adjustment that produced them, so the audit trail can never disagree with
@@ -84,8 +86,3 @@ type Repository interface {
 	BracketAdjustments(context.Context, int64) ([]AdjustmentRecord, error)
 }
 
-// QuoteSource is the last traded price for a ticker. The engine needs nothing
-// else from the market: trailing follows price, not the book.
-type QuoteSource interface {
-	LastPrice(context.Context, string) (float64, error)
-}

@@ -30,15 +30,15 @@ import (
 type Feed struct {
 	Ticker string
 	Prices []float64
-	// Interval spaces the observation timestamps. It does not pace Run unless
-	// the adapter is built with RealTime.
+	// Interval spaces the observation timestamps. It only paces delivery when the
+	// adapter is built with RealTime.
 	Interval time.Duration
 }
 
 // Path builds a feed from an entry price and the gains to visit, expressed as
 // fractions: Path("AAA", 10, 0, 0.03, 0.12, 0) walks 10.00 -> 10.30 -> 11.20 and
-// back to 10.00. Writing a scenario as the gains it passes through keeps the
-// test readable against a ladder that is also configured in gains.
+// back to 10.00. Writing a scenario as the gains it passes through keeps the test
+// readable against a ladder that is also configured in gains.
 func Path(ticker string, entry float64, gains ...float64) Feed {
 	prices := make([]float64, 0, len(gains))
 	for _, gain := range gains {
@@ -81,32 +81,41 @@ func StartingAt(start time.Time) Option {
 	return func(adapter *Adapter) { adapter.start = start }
 }
 
-// RealTime makes Run sleep for each feed's Interval between prints. Shadow mode
-// wants it so a day plays out at the speed the engine will meet live; a unit
-// test does not, and pays a real second per tick if it asks.
+// RealTime paces delivery by each feed's Interval. Shadow mode wants it so a day
+// plays out at the speed the engine will meet live; a unit test does not, and pays
+// a real second per tick if it asks.
 func RealTime() Option {
 	return func(adapter *Adapter) { adapter.realTime = true }
 }
 
-// Adapter serves both halves of the marketdata contract from a scripted feed.
-type Adapter struct {
-	mutex    sync.RWMutex
-	feeds    map[string]Feed
-	followed map[string]struct{}
-	latest   map[string]marketdata.Tick
-	handler  marketdata.TickHandler
-	start    time.Time
-	realTime bool
+// WithBuffer buffers each subscription's channel. The default is unbuffered,
+// which makes a scripted feed wait for its consumer — the behaviour a test wants,
+// because it means every print is observed. A live adapter would buffer and drop.
+func WithBuffer(size int) Option {
+	return func(adapter *Adapter) {
+		if size > 0 {
+			adapter.buffer = size
+		}
+	}
 }
 
-// New builds an adapter over the given feeds. Nothing is followed until
-// Subscribe names it, matching a venue that bills per subscription.
+// Adapter hands out subscriptions over scripted feeds.
+type Adapter struct {
+	feeds    map[string]Feed
+	start    time.Time
+	realTime bool
+	buffer   int
+
+	mutex  sync.RWMutex
+	latest map[string]marketdata.Tick
+}
+
+// New builds an adapter over the given feeds.
 func New(feeds []Feed, options ...Option) (*Adapter, error) {
 	adapter := &Adapter{
-		feeds:    make(map[string]Feed, len(feeds)),
-		followed: make(map[string]struct{}),
-		latest:   make(map[string]marketdata.Tick),
-		start:    time.Date(2026, time.January, 2, 14, 30, 0, 0, time.UTC),
+		feeds:  make(map[string]Feed, len(feeds)),
+		latest: make(map[string]marketdata.Tick),
+		start:  time.Date(2026, time.January, 2, 14, 30, 0, 0, time.UTC),
 	}
 	for _, feed := range feeds {
 		ticker := strings.ToUpper(strings.TrimSpace(feed.Ticker))
@@ -136,37 +145,29 @@ func New(feeds []Feed, options ...Option) (*Adapter, error) {
 	return adapter, nil
 }
 
-// Subscribe replaces the followed set. A symbol with no feed is an error rather
-// than a silent no-op: a test that misspells a ticker should fail loudly instead
+// Subscribe starts walking one feed. A symbol with no feed is an error rather
+// than an empty stream: a test that misspells a ticker should fail loudly instead
 // of watching a position that never prints.
-func (adapter *Adapter) Subscribe(_ context.Context, tickers []string) error {
-	followed := make(map[string]struct{}, len(tickers))
-	for _, raw := range tickers {
-		ticker := strings.ToUpper(strings.TrimSpace(raw))
-		if ticker == "" {
-			continue
-		}
-		if _, known := adapter.feeds[ticker]; !known {
-			return fmt.Errorf("synthetic: no feed for %s", ticker)
-		}
-		followed[ticker] = struct{}{}
+func (adapter *Adapter) Subscribe(
+	ctx context.Context, ticker string,
+) (marketdata.Subscription, error) {
+	key := strings.ToUpper(strings.TrimSpace(ticker))
+	feed, known := adapter.feeds[key]
+	if !known {
+		return nil, fmt.Errorf("synthetic: no feed for %s", key)
 	}
-	adapter.mutex.Lock()
-	adapter.followed = followed
-	adapter.mutex.Unlock()
-	return nil
+	streamCtx, cancel := context.WithCancel(ctx)
+	subscription := &subscription{
+		ticks:  make(chan marketdata.Tick, adapter.buffer),
+		cancel: cancel,
+	}
+	go subscription.walk(streamCtx, adapter, feed)
+	return subscription, nil
 }
 
-// OnTick registers the handler, replacing any previous one.
-func (adapter *Adapter) OnTick(handler marketdata.TickHandler) {
-	adapter.mutex.Lock()
-	adapter.handler = handler
-	adapter.mutex.Unlock()
-}
-
-// LastPrice answers from the newest tick already delivered. It reports
-// ErrNoPrice until Run has published one, so a caller cannot mistake an
-// unstarted feed for a flat market.
+// LastPrice answers from the newest tick published on any subscription. It
+// reports ErrNoPrice until one has been, so a caller cannot mistake an unstarted
+// feed for a flat market.
 func (adapter *Adapter) LastPrice(
 	_ context.Context, ticker string,
 ) (float64, error) {
@@ -180,76 +181,75 @@ func (adapter *Adapter) LastPrice(
 	return tick.Price, nil
 }
 
-// Run walks every followed feed in lockstep and publishes each print, returning
-// nil once all feeds are exhausted or the context ends. Feeds advance together
-// so a two-symbol scenario stays aligned in time.
-func (adapter *Adapter) Run(ctx context.Context) error {
-	longest := 0
-	adapter.mutex.RLock()
-	order := make([]string, 0, len(adapter.followed))
-	for ticker := range adapter.followed {
-		order = append(order, ticker)
-		if length := len(adapter.feeds[ticker].Prices); length > longest {
-			longest = length
-		}
-	}
-	adapter.mutex.RUnlock()
-	sortStrings(order)
-
-	for step := range longest {
-		for _, ticker := range order {
-			feed := adapter.feeds[ticker]
-			if step >= len(feed.Prices) {
-				continue
-			}
-			tick := marketdata.Tick{
-				Ticker:     ticker,
-				Price:      feed.Prices[step],
-				ObservedAt: adapter.start.Add(time.Duration(step) * feed.Interval),
-			}
-			if err := adapter.publish(ctx, tick); err != nil {
-				return err
-			}
-			if adapter.realTime {
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-time.After(feed.Interval):
-				}
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return nil
-		}
-	}
-	return nil
-}
-
-// publish records the tick before handing it on, so LastPrice is already correct
-// if the handler turns around and asks.
-func (adapter *Adapter) publish(ctx context.Context, tick marketdata.Tick) error {
-	if err := tick.Validate(); err != nil {
-		return err
-	}
+// remember records a tick before it is delivered, so LastPrice is already correct
+// if the consumer turns around and asks while handling it.
+func (adapter *Adapter) remember(tick marketdata.Tick) {
 	adapter.mutex.Lock()
+	defer adapter.mutex.Unlock()
 	if previous, found := adapter.latest[tick.Ticker]; !found ||
 		!previous.ObservedAt.After(tick.ObservedAt) {
 		adapter.latest[tick.Ticker] = tick
 	}
-	handler := adapter.handler
-	adapter.mutex.Unlock()
-	if handler == nil {
-		return nil
-	}
-	return handler(ctx, tick)
 }
 
-// sortStrings keeps publication order stable without pulling in sort for one
-// call on a handful of tickers.
-func sortStrings(values []string) {
-	for outer := 1; outer < len(values); outer++ {
-		for inner := outer; inner > 0 && values[inner] < values[inner-1]; inner-- {
-			values[inner], values[inner-1] = values[inner-1], values[inner]
+type subscription struct {
+	ticks  chan marketdata.Tick
+	cancel context.CancelFunc
+	once   sync.Once
+
+	mutex sync.Mutex
+	err   error
+}
+
+func (sub *subscription) Ticks() <-chan marketdata.Tick { return sub.ticks }
+
+func (sub *subscription) Err() error {
+	sub.mutex.Lock()
+	defer sub.mutex.Unlock()
+	return sub.err
+}
+
+func (sub *subscription) Close() error {
+	sub.once.Do(sub.cancel)
+	return nil
+}
+
+// walk publishes the feed and closes the channel when it ends, which is the only
+// signal a ranging consumer needs. A malformed price is reported through Err
+// rather than delivered, because a zero or NaN reaching a high-water mark is
+// worse than a truncated feed.
+func (sub *subscription) walk(
+	ctx context.Context, adapter *Adapter, feed Feed,
+) {
+	defer close(sub.ticks)
+	for step, price := range feed.Prices {
+		tick := marketdata.Tick{
+			Ticker:     feed.Ticker,
+			Price:      price,
+			ObservedAt: adapter.start.Add(time.Duration(step) * feed.Interval),
+		}
+		if err := tick.Validate(); err != nil {
+			sub.fail(err)
+			return
+		}
+		adapter.remember(tick)
+		select {
+		case sub.ticks <- tick:
+		case <-ctx.Done():
+			return
+		}
+		if adapter.realTime {
+			select {
+			case <-time.After(feed.Interval):
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
+}
+
+func (sub *subscription) fail(err error) {
+	sub.mutex.Lock()
+	sub.err = err
+	sub.mutex.Unlock()
 }

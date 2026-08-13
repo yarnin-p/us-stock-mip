@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -67,17 +68,18 @@ func (store *Store) Bracket(
 	return result, err
 }
 
-// OpenBrackets returns what still has money at risk. The engine reads this every
-// pass, so it is deliberately narrow.
-func (store *Store) OpenBrackets(
-	ctx context.Context, mode string,
+// OpenBracketsForTicker answers the question a pushed price asks. The engine is
+// handed one symbol at whatever rate the feed produces, so this is the hot path:
+// it stays a narrow indexed lookup rather than a filter over the whole book.
+func (store *Store) OpenBracketsForTicker(
+	ctx context.Context, mode, ticker string,
 ) ([]bracket.Record, error) {
 	return store.queryBrackets(
 		ctx,
 		`SELECT `+bracketColumns+` FROM brackets
-		  WHERE mode = $1 AND state IN ('PENDING', 'ACTIVE')
+		  WHERE mode = $1 AND ticker = $2 AND state IN ('PENDING', 'ACTIVE')
 		  ORDER BY opened_at DESC`,
-		mode,
+		mode, strings.ToUpper(strings.TrimSpace(ticker)),
 	)
 }
 

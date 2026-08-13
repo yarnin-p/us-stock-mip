@@ -10,43 +10,51 @@ import (
 	"time"
 
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
+	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
 )
 
 // Engine keeps the protective orders of every active bracket where the domain
 // says they belong.
+//
+// Prices are pushed to it, never pulled. Whether the feed behind HandleTick is a
+// websocket printing every trade or a poller waking every fifteen minutes is the
+// adapter's business; the engine holds no timer, no schedule and no opinion about
+// when the next price is due. It decides from the price it was handed and stops.
+// Reaching out for a quote itself would put the venue's cadence inside the
+// orchestrator, and then swapping the feed would mean editing this file.
 //
 // It amends rather than replaces. A broker that can only cancel-then-place
 // leaves the position naked between the two calls, and that gap is exactly when
 // a halted name reopens through the level -- so a broker without OrderModifier
 // is refused at construction instead of being papered over.
 //
-// Every pass is idempotent. Plan returns no change unless a level has genuinely
-// moved past the minimum step, so running the engine twice on the same tick
-// sends nothing the second time.
+// Handling is idempotent. Plan returns no change unless a level has genuinely
+// moved past the minimum step, so the same price arriving twice sends nothing the
+// second time.
 type Engine struct {
 	repository Repository
-	quotes     QuoteSource
 	modifier   execution.OrderModifier
 	logger     *slog.Logger
 	mode       string
-	clock      func() time.Time
-	// session reports whether native stop amendments are accepted right now.
-	// Webull takes them only in the core session.
+	// session reports whether native stop amendments are accepted at a given
+	// time. Webull takes them only in the core session.
 	session func(time.Time) bool
 
-	mutex   sync.Mutex
-	running bool
+	mutex sync.Mutex
+	// locks serialises per ticker rather than globally. Two prints for the same
+	// symbol computing against the same stored levels would send two amendments
+	// for one move; two prints for different symbols have nothing to race over
+	// and must not queue behind each other.
+	locks map[string]*sync.Mutex
 }
 
-// EngineOptions wires the engine. Repository, quotes and modifier are required;
-// the rest have working defaults.
+// EngineOptions wires the engine. Repository and modifier are required; the rest
+// have working defaults.
 type EngineOptions struct {
 	Repository Repository
-	Quotes     QuoteSource
 	Modifier   execution.OrderModifier
 	Logger     *slog.Logger
 	Mode       string
-	Clock      func() time.Time
 	// AmendableAt gates amendments to the sessions the broker accepts them in.
 	// The default allows every session, which is correct for paper and wrong for
 	// Webull -- the caller wiring a live adapter must pass the real gate.
@@ -56,9 +64,6 @@ type EngineOptions struct {
 func NewEngine(options EngineOptions) (*Engine, error) {
 	if options.Repository == nil {
 		return nil, errors.New("bracket engine requires a repository")
-	}
-	if options.Quotes == nil {
-		return nil, errors.New("bracket engine requires a quote source")
 	}
 	if options.Modifier == nil {
 		return nil, errors.New(
@@ -72,18 +77,14 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 	}
 	engine := &Engine{
 		repository: options.Repository,
-		quotes:     options.Quotes,
 		modifier:   options.Modifier,
 		logger:     options.Logger,
 		mode:       mode,
-		clock:      options.Clock,
 		session:    options.AmendableAt,
+		locks:      make(map[string]*sync.Mutex),
 	}
 	if engine.logger == nil {
 		engine.logger = slog.Default()
-	}
-	if engine.clock == nil {
-		engine.clock = func() time.Time { return time.Now().UTC() }
 	}
 	if engine.session == nil {
 		engine.session = func(time.Time) bool { return true }
@@ -91,82 +92,69 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 	return engine, nil
 }
 
-// Result summarises one pass, so a caller can log or surface it without reading
-// the audit table.
-type Result struct {
-	Examined int
-	Adjusted int
-	Skipped  int
-	Failed   int
-	Errors   []string
-}
-
-// Run makes one pass over the active brackets. It never returns early on a
-// single failure: one ticker with a stale quote must not stop the others from
-// having their stops raised.
-func (engine *Engine) Run(ctx context.Context) (Result, error) {
-	// A second concurrent pass would compute both plans against the same stored
-	// levels and send two amendments for one move.
-	engine.mutex.Lock()
-	if engine.running {
-		engine.mutex.Unlock()
-		return Result{}, errors.New("bracket engine pass is already running")
+// HandleTick moves the protective orders of every active bracket on the tick's
+// symbol. It satisfies marketdata.TickHandler, so any adapter can drive it.
+//
+// The amendable-session question is asked of the tick's own observation time, not
+// of the wall clock. A replayed or delayed feed then reaches the same verdict it
+// would have reached live, which is what makes a shadow run comparable.
+func (engine *Engine) HandleTick(
+	ctx context.Context, tick marketdata.Tick,
+) error {
+	if err := tick.Validate(); err != nil {
+		return err
 	}
-	engine.running = true
-	engine.mutex.Unlock()
-	defer func() {
-		engine.mutex.Lock()
-		engine.running = false
-		engine.mutex.Unlock()
-	}()
+	lock := engine.lockFor(tick.Ticker)
+	lock.Lock()
+	defer lock.Unlock()
 
-	records, err := engine.repository.OpenBrackets(ctx, engine.mode)
+	records, err := engine.repository.OpenBracketsForTicker(
+		ctx, engine.mode, tick.Ticker,
+	)
 	if err != nil {
-		return Result{}, fmt.Errorf("loading open brackets: %w", err)
+		return fmt.Errorf("loading brackets for %s: %w", tick.Ticker, err)
 	}
+	amendable := engine.session(tick.ObservedAt)
 
-	now := engine.clock()
-	amendable := engine.session(now)
-	result := Result{}
+	var failures error
 	for _, record := range records {
 		if record.State != StateActive {
 			continue
 		}
-		result.Examined++
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return err
 		}
-		adjusted, err := engine.advance(ctx, record, amendable)
-		switch {
-		case err != nil:
-			result.Failed++
-			result.Errors = append(
-				result.Errors, fmt.Sprintf("%s: %v", record.Ticker, err),
+		// One bracket failing must not deny the others on this symbol their move,
+		// so the errors are joined rather than returned at the first one.
+		if _, err := engine.advance(ctx, record, tick.Price, amendable); err != nil {
+			failures = errors.Join(
+				failures, fmt.Errorf("bracket %d: %w", record.ID, err),
 			)
 			engine.logger.Error(
 				"bracket adjustment failed",
 				"ticker", record.Ticker, "bracket_id", record.ID, "error", err,
 			)
-		case adjusted:
-			result.Adjusted++
-		default:
-			result.Skipped++
 		}
 	}
-	return result, nil
+	return failures
+}
+
+// lockFor returns the serialising lock for one symbol, creating it on first
+// sight. The map only ever grows by the number of symbols actually traded.
+func (engine *Engine) lockFor(ticker string) *sync.Mutex {
+	engine.mutex.Lock()
+	defer engine.mutex.Unlock()
+	lock, found := engine.locks[ticker]
+	if !found {
+		lock = &sync.Mutex{}
+		engine.locks[ticker] = lock
+	}
+	return lock
 }
 
 func (engine *Engine) advance(
-	ctx context.Context, record Record, amendable bool,
+	ctx context.Context, record Record, lastPrice float64, amendable bool,
 ) (bool, error) {
-	lastPrice, err := engine.quotes.LastPrice(ctx, record.Ticker)
-	if err != nil {
-		return false, fmt.Errorf("quoting %s: %w", record.Ticker, err)
-	}
-	if lastPrice <= 0 {
-		return false, fmt.Errorf("no usable price for %s", record.Ticker)
-	}
-
 	adjustment, err := Plan(record.Bracket(), lastPrice)
 	if err != nil {
 		return false, err

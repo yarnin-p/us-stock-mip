@@ -6,13 +6,21 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
+	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
 )
 
+// sessionTime is inside the window a broker accepts amendments in, and every tick
+// carries it. The engine reads the tick rather than the clock, so a test never
+// depends on when it runs.
+var sessionTime = time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
+
 type stubRepository struct {
+	mutex       sync.Mutex
 	records     map[int64]Record
 	adjustments []AdjustmentRecord
 	saveErr     error
@@ -29,6 +37,8 @@ func newStubRepository(records ...Record) *stubRepository {
 func (repository *stubRepository) CreateBracket(
 	_ context.Context, record Record,
 ) (Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
 	record.ID = int64(len(repository.records) + 1)
 	repository.records[record.ID] = record
 	return record, nil
@@ -37,6 +47,8 @@ func (repository *stubRepository) CreateBracket(
 func (repository *stubRepository) Bracket(
 	_ context.Context, id int64,
 ) (Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
 	record, ok := repository.records[id]
 	if !ok {
 		return Record{}, errors.New("not found")
@@ -44,28 +56,41 @@ func (repository *stubRepository) Bracket(
 	return record, nil
 }
 
-func (repository *stubRepository) OpenBrackets(
-	_ context.Context, mode string,
+func (repository *stubRepository) OpenBracketsForTicker(
+	_ context.Context, mode, ticker string,
 ) ([]Record, error) {
+	return repository.open(mode, ticker), nil
+}
+
+func (repository *stubRepository) open(mode, ticker string) []Record {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
 	result := make([]Record, 0, len(repository.records))
 	for _, record := range repository.records {
-		if record.Mode == mode &&
-			(record.State == StateActive || record.State == StatePending) {
+		if record.Mode != mode {
+			continue
+		}
+		if ticker != "" && record.Ticker != ticker {
+			continue
+		}
+		if record.State == StateActive || record.State == StatePending {
 			result = append(result, record)
 		}
 	}
-	return result, nil
+	return result
 }
 
 func (repository *stubRepository) Brackets(
 	_ context.Context, mode string, _ int,
 ) ([]Record, error) {
-	return repository.OpenBrackets(context.Background(), mode)
+	return repository.open(mode, ""), nil
 }
 
 func (repository *stubRepository) SaveLevels(
 	_ context.Context, record Record, adjustment AdjustmentRecord,
 ) (Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
 	if repository.saveErr != nil {
 		return Record{}, repository.saveErr
 	}
@@ -79,6 +104,8 @@ func (repository *stubRepository) SaveLevels(
 func (repository *stubRepository) SaveBracketState(
 	_ context.Context, id int64, state State, _ string,
 ) (Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
 	record := repository.records[id]
 	record.State = state
 	repository.records[id] = record
@@ -88,6 +115,8 @@ func (repository *stubRepository) SaveBracketState(
 func (repository *stubRepository) BracketAdjustments(
 	_ context.Context, id int64,
 ) ([]AdjustmentRecord, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
 	result := make([]AdjustmentRecord, 0)
 	for _, adjustment := range repository.adjustments {
 		if adjustment.BracketID == id {
@@ -97,21 +126,21 @@ func (repository *stubRepository) BracketAdjustments(
 	return result, nil
 }
 
-type stubQuotes struct {
-	prices map[string]float64
-	err    error
+func (repository *stubRepository) stored(t *testing.T, id int64) Record {
+	t.Helper()
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	return repository.records[id]
 }
 
-func (quotes stubQuotes) LastPrice(
-	_ context.Context, ticker string,
-) (float64, error) {
-	if quotes.err != nil {
-		return 0, quotes.err
-	}
-	return quotes.prices[ticker], nil
+func (repository *stubRepository) auditCount() int {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	return len(repository.adjustments)
 }
 
 type stubModifier struct {
+	mutex    sync.Mutex
 	requests []execution.ModifyOrderRequest
 	err      error
 }
@@ -119,8 +148,16 @@ type stubModifier struct {
 func (modifier *stubModifier) ModifyOrder(
 	_ context.Context, request execution.ModifyOrderRequest,
 ) error {
+	modifier.mutex.Lock()
+	defer modifier.mutex.Unlock()
 	modifier.requests = append(modifier.requests, request)
 	return modifier.err
+}
+
+func (modifier *stubModifier) calls() []execution.ModifyOrderRequest {
+	modifier.mutex.Lock()
+	defer modifier.mutex.Unlock()
+	return append([]execution.ModifyOrderRequest(nil), modifier.requests...)
 }
 
 func quietLogger() *slog.Logger {
@@ -137,12 +174,11 @@ func activeRecord() Record {
 }
 
 func newTestEngine(
-	repository Repository, quotes QuoteSource, modifier execution.OrderModifier,
+	repository Repository, modifier execution.OrderModifier,
 ) *Engine {
 	engine, err := NewEngine(EngineOptions{
-		Repository: repository, Quotes: quotes, Modifier: modifier,
+		Repository: repository, Modifier: modifier,
 		Logger: quietLogger(), Mode: "paper",
-		Clock: func() time.Time { return time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		panic(err)
@@ -150,9 +186,19 @@ func newTestEngine(
 	return engine
 }
 
+func tickAt(ticker string, price float64) marketdata.Tick {
+	return marketdata.Tick{
+		Ticker: ticker, Price: price, ObservedAt: sessionTime,
+	}
+}
+
+// The engine must be drivable by any adapter without either side knowing the
+// other, so the handler shape is asserted at compile time.
+var _ marketdata.TickHandler = (&Engine{}).HandleTick
+
 func TestNewEngineRefusesABrokerThatCannotAmend(t *testing.T) {
 	_, err := NewEngine(EngineOptions{
-		Repository: newStubRepository(), Quotes: stubQuotes{}, Modifier: nil,
+		Repository: newStubRepository(), Modifier: nil,
 	})
 	if err == nil {
 		t.Fatal("an engine without OrderModifier was accepted")
@@ -162,136 +208,123 @@ func TestNewEngineRefusesABrokerThatCannotAmend(t *testing.T) {
 	}
 }
 
-func TestRunRaisesTheStopAndAmendsAtTheBroker(t *testing.T) {
+func TestHandleTickRaisesTheStopAndAmendsAtTheBroker(t *testing.T) {
 	repository := newStubRepository(activeRecord())
 	modifier := &stubModifier{}
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 12}}, modifier,
-	)
-	result, err := engine.Run(context.Background())
-	if err != nil {
+	engine := newTestEngine(repository, modifier)
+
+	if err := engine.HandleTick(context.Background(), tickAt("TEST", 12)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Adjusted != 1 {
-		t.Fatalf("adjusted = %d, want 1 (result %+v)", result.Adjusted, result)
+	calls := modifier.calls()
+	if len(calls) != 1 {
+		t.Fatalf("broker calls = %d, want 1", len(calls))
 	}
-	if len(modifier.requests) != 1 {
-		t.Fatalf("broker calls = %d, want 1", len(modifier.requests))
+	if calls[0].OrderType != "STOP_LOSS" || calls[0].StopPrice != 10.8 {
+		t.Fatalf("unexpected amendment: %+v", calls[0])
 	}
-	request := modifier.requests[0]
-	if request.OrderType != "STOP_LOSS" || request.StopPrice != 10.8 {
-		t.Fatalf("unexpected amendment: %+v", request)
+	if calls[0].ClientOrderID != "stop-1" || calls[0].Quantity != 100 {
+		t.Fatalf("amendment lost its handle or size: %+v", calls[0])
 	}
-	if request.ClientOrderID != "stop-1" || request.Quantity != 100 {
-		t.Fatalf("amendment lost its handle or size: %+v", request)
-	}
-	if stored := repository.records[1]; stored.StopPrice != 10.8 {
+	if stored := repository.stored(t, 1); stored.StopPrice != 10.8 {
 		t.Fatalf("stored stop = %v, want 10.8", stored.StopPrice)
 	}
 }
 
-func TestRunIsIdempotentOnTheSamePrice(t *testing.T) {
+func TestHandleTickIsIdempotentOnTheSamePrice(t *testing.T) {
 	repository := newStubRepository(activeRecord())
 	modifier := &stubModifier{}
-	quotes := stubQuotes{prices: map[string]float64{"TEST": 12}}
-	engine := newTestEngine(repository, quotes, modifier)
-	if _, err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	if _, err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-	if len(modifier.requests) != 1 {
-		t.Fatalf("broker calls = %d, want 1 across two identical passes",
-			len(modifier.requests))
-	}
-}
+	engine := newTestEngine(repository, modifier)
+	ctx := context.Background()
 
-func TestRunAmendsBothSidesWhenBothMove(t *testing.T) {
-	repository := newStubRepository(activeRecord())
-	modifier := &stubModifier{}
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 20}}, modifier,
-	)
-	if _, err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(modifier.requests) != 2 {
-		t.Fatalf("broker calls = %d, want 2", len(modifier.requests))
-	}
-	kinds := map[string]float64{}
-	for _, request := range modifier.requests {
-		if request.OrderType == "STOP_LOSS" {
-			kinds["stop"] = request.StopPrice
-		} else {
-			kinds["target"] = request.LimitPrice
+	for pass := range 2 {
+		if err := engine.HandleTick(ctx, tickAt("TEST", 12)); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
 		}
 	}
-	if kinds["stop"] != 18 || kinds["target"] != 23 {
-		t.Fatalf("unexpected levels: %+v", kinds)
+	if calls := modifier.calls(); len(calls) != 1 {
+		t.Fatalf("broker calls = %d, want 1 across two identical ticks", len(calls))
 	}
 }
 
-func TestRunHoldsTheStopWhenPriceFallsBack(t *testing.T) {
+func TestHandleTickAmendsBothSidesWhenBothMove(t *testing.T) {
+	repository := newStubRepository(activeRecord())
+	modifier := &stubModifier{}
+	engine := newTestEngine(repository, modifier)
+
+	if err := engine.HandleTick(context.Background(), tickAt("TEST", 20)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	calls := modifier.calls()
+	if len(calls) != 2 {
+		t.Fatalf("broker calls = %d, want 2", len(calls))
+	}
+	levels := map[string]float64{}
+	for _, request := range calls {
+		if request.OrderType == "STOP_LOSS" {
+			levels["stop"] = request.StopPrice
+		} else {
+			levels["target"] = request.LimitPrice
+		}
+	}
+	if levels["stop"] != 18 || levels["target"] != 23 {
+		t.Fatalf("unexpected levels: %+v", levels)
+	}
+}
+
+func TestHandleTickHoldsTheStopWhenPriceFallsBack(t *testing.T) {
 	record := activeRecord()
 	record.HighWater = 14
 	record.StopPrice = 12.6
 	record.TargetPrice = 16.1
 	repository := newStubRepository(record)
 	modifier := &stubModifier{}
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 10.5}}, modifier,
-	)
-	result, err := engine.Run(context.Background())
-	if err != nil {
+	engine := newTestEngine(repository, modifier)
+
+	if err := engine.HandleTick(context.Background(), tickAt("TEST", 10.5)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Adjusted != 0 || len(modifier.requests) != 0 {
-		t.Fatalf("levels moved on a pullback: %+v %+v", result, modifier.requests)
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("levels moved on a pullback: %+v", calls)
 	}
-	if stored := repository.records[1]; stored.StopPrice != 12.6 {
+	if stored := repository.stored(t, 1); stored.StopPrice != 12.6 {
 		t.Fatalf("stored stop = %v, want it held at 12.6", stored.StopPrice)
 	}
 }
 
-func TestRunAdvancesTheHighWaterWithoutMovingLevels(t *testing.T) {
+func TestHandleTickAdvancesTheHighWaterWithoutMovingLevels(t *testing.T) {
 	repository := newStubRepository(activeRecord())
 	modifier := &stubModifier{}
+	engine := newTestEngine(repository, modifier)
+
 	// Up 5%: short of the 10% trail activation, but a new high all the same.
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 10.5}}, modifier,
-	)
-	if _, err := engine.Run(context.Background()); err != nil {
+	if err := engine.HandleTick(context.Background(), tickAt("TEST", 10.5)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(modifier.requests) != 0 {
-		t.Fatalf("broker was called before activation: %+v", modifier.requests)
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("broker was called before activation: %+v", calls)
 	}
-	if stored := repository.records[1]; stored.HighWater != 10.5 {
+	if stored := repository.stored(t, 1); stored.HighWater != 10.5 {
 		t.Fatalf("stored high water = %v, want 10.5", stored.HighWater)
 	}
 }
 
-func TestRunRecordsARefusedAmendmentAndKeepsTheOldLevels(t *testing.T) {
+func TestHandleTickRecordsARefusedAmendmentAndKeepsTheOldLevels(t *testing.T) {
 	repository := newStubRepository(activeRecord())
 	modifier := &stubModifier{err: errors.New("broker rejected the amendment")}
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 12}}, modifier,
-	)
-	result, err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run should survive a broker failure: %v", err)
-	}
-	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1 (result %+v)", result.Failed, result)
+	engine := newTestEngine(repository, modifier)
+
+	err := engine.HandleTick(context.Background(), tickAt("TEST", 12))
+	if err == nil {
+		t.Fatal("a broker refusal must be reported to the caller")
 	}
 	// The stored level must still describe what is actually at the broker.
-	if stored := repository.records[1]; stored.StopPrice != 9 {
+	if stored := repository.stored(t, 1); stored.StopPrice != 9 {
 		t.Fatalf("stored stop = %v, want it left at 9", stored.StopPrice)
 	}
-	if len(repository.adjustments) != 1 {
+	if repository.auditCount() != 1 {
 		t.Fatalf("adjustments = %d, want the refusal recorded",
-			len(repository.adjustments))
+			repository.auditCount())
 	}
 	entry := repository.adjustments[0]
 	if entry.Applied {
@@ -302,26 +335,33 @@ func TestRunRecordsARefusedAmendmentAndKeepsTheOldLevels(t *testing.T) {
 	}
 }
 
-func TestRunRecordsButDoesNotSendOutsideTheAmendableSession(t *testing.T) {
+func TestHandleTickAsksTheSessionAboutTheTickNotTheClock(t *testing.T) {
 	repository := newStubRepository(activeRecord())
 	modifier := &stubModifier{}
+	var asked time.Time
 	engine, err := NewEngine(EngineOptions{
-		Repository: repository,
-		Quotes:     stubQuotes{prices: map[string]float64{"TEST": 12}},
-		Modifier:   modifier, Logger: quietLogger(), Mode: "paper",
-		AmendableAt: func(time.Time) bool { return false },
+		Repository: repository, Modifier: modifier,
+		Logger: quietLogger(), Mode: "paper",
+		AmendableAt: func(at time.Time) bool {
+			asked = at
+			return false
+		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := engine.Run(context.Background()); err != nil {
+	observed := time.Date(2026, 8, 10, 9, 15, 0, 0, time.UTC)
+	tick := marketdata.Tick{Ticker: "TEST", Price: 12, ObservedAt: observed}
+	if err := engine.HandleTick(context.Background(), tick); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(modifier.requests) != 0 {
-		t.Fatalf("broker was called outside the amendable session: %+v",
-			modifier.requests)
+	if !asked.Equal(observed) {
+		t.Fatalf("session was asked about %s, want the tick's %s", asked, observed)
 	}
-	if len(repository.adjustments) != 1 {
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("broker was called outside the amendable session: %+v", calls)
+	}
+	if repository.auditCount() != 1 {
 		t.Fatal("the skipped adjustment was not recorded")
 	}
 	if repository.adjustments[0].Applied {
@@ -329,84 +369,131 @@ func TestRunRecordsButDoesNotSendOutsideTheAmendableSession(t *testing.T) {
 	}
 }
 
-func TestRunRefusesToMoveALevelWithNoOrderBehindIt(t *testing.T) {
+func TestHandleTickRefusesToMoveALevelWithNoOrderBehindIt(t *testing.T) {
 	record := activeRecord()
 	record.StopOrderID = ""
 	repository := newStubRepository(record)
 	modifier := &stubModifier{}
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 12}}, modifier,
-	)
-	result, err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	engine := newTestEngine(repository, modifier)
+
+	err := engine.HandleTick(context.Background(), tickAt("TEST", 12))
+	if err == nil {
+		t.Fatal("moving a level with no order behind it must be reported")
 	}
-	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
-	}
-	if len(result.Errors) == 0 ||
-		!strings.Contains(result.Errors[0], "nothing is protecting it") {
-		t.Fatalf("error does not name the exposure: %+v", result.Errors)
+	if !strings.Contains(err.Error(), "nothing is protecting it") {
+		t.Fatalf("error does not name the exposure: %v", err)
 	}
 }
 
-func TestRunSurvivesOneBadQuoteAndStillHelpsTheOthers(t *testing.T) {
-	first := activeRecord()
-	second := activeRecord()
-	second.ID = 2
-	second.Ticker = "OTHER"
-	second.StopOrderID = "stop-2"
-	second.TargetOrderID = "target-2"
-	repository := newStubRepository(first, second)
+func TestHandleTickHelpsEverySoundBracketOnTheSymbol(t *testing.T) {
+	broken := activeRecord()
+	broken.StopOrderID = ""
+	sound := activeRecord()
+	sound.ID = 2
+	sound.StopOrderID = "stop-2"
+	sound.TargetOrderID = "target-2"
+	repository := newStubRepository(broken, sound)
 	modifier := &stubModifier{}
-	// TEST quotes zero, which is unusable; OTHER must still be adjusted.
-	engine := newTestEngine(repository, stubQuotes{
-		prices: map[string]float64{"TEST": 0, "OTHER": 12},
-	}, modifier)
-	result, err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	engine := newTestEngine(repository, modifier)
+
+	err := engine.HandleTick(context.Background(), tickAt("TEST", 12))
+	if err == nil {
+		t.Fatal("the broken bracket should still be reported")
 	}
-	if result.Failed != 1 || result.Adjusted != 1 {
-		t.Fatalf("unexpected result: %+v", result)
-	}
-	if len(modifier.requests) != 1 ||
-		modifier.requests[0].Ticker != "OTHER" {
-		t.Fatalf("the healthy bracket was not adjusted: %+v", modifier.requests)
+	calls := modifier.calls()
+	if len(calls) != 1 || calls[0].ClientOrderID != "stop-2" {
+		t.Fatalf("the sound bracket was not adjusted: %+v", calls)
 	}
 }
 
-func TestRunSkipsBracketsThatAreNotActive(t *testing.T) {
+func TestHandleTickIgnoresOtherSymbols(t *testing.T) {
+	repository := newStubRepository(activeRecord())
+	modifier := &stubModifier{}
+	engine := newTestEngine(repository, modifier)
+
+	if err := engine.HandleTick(context.Background(), tickAt("OTHER", 99)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("a tick for another symbol moved this bracket: %+v", calls)
+	}
+}
+
+func TestHandleTickSkipsBracketsThatAreNotActive(t *testing.T) {
 	record := activeRecord()
 	record.State = StatePending
 	repository := newStubRepository(record)
 	modifier := &stubModifier{}
-	engine := newTestEngine(
-		repository, stubQuotes{prices: map[string]float64{"TEST": 12}}, modifier,
-	)
-	result, err := engine.Run(context.Background())
-	if err != nil {
+	engine := newTestEngine(repository, modifier)
+
+	if err := engine.HandleTick(context.Background(), tickAt("TEST", 12)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Examined != 0 || len(modifier.requests) != 0 {
-		t.Fatalf("a pending bracket was adjusted: %+v", result)
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("a pending bracket was adjusted: %+v", calls)
 	}
 }
 
-func TestRunReportsAQuoteFeedOutage(t *testing.T) {
+func TestHandleTickRejectsATickThatWouldCorruptTheHighWater(t *testing.T) {
 	repository := newStubRepository(activeRecord())
 	modifier := &stubModifier{}
-	engine := newTestEngine(
-		repository, stubQuotes{err: errors.New("feed down")}, modifier,
-	)
-	result, err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	engine := newTestEngine(repository, modifier)
+	ctx := context.Background()
+
+	for name, tick := range map[string]marketdata.Tick{
+		"zero price":   {Ticker: "TEST", Price: 0, ObservedAt: sessionTime},
+		"negative":     {Ticker: "TEST", Price: -1, ObservedAt: sessionTime},
+		"no ticker":    {Price: 12, ObservedAt: sessionTime},
+		"no timestamp": {Ticker: "TEST", Price: 12},
+	} {
+		if err := engine.HandleTick(ctx, tick); err == nil {
+			t.Errorf("%s: expected the tick to be refused", name)
+		}
 	}
-	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("the broker was called on a bad tick: %+v", calls)
 	}
-	if len(modifier.requests) != 0 {
-		t.Fatal("the broker was called without a price")
+	if stored := repository.stored(t, 1); stored.HighWater != 10 {
+		t.Fatalf("high water = %v, a bad tick moved it", stored.HighWater)
+	}
+}
+
+// Two prints for one symbol arriving together must not each compute against the
+// same stored levels and send the same move twice.
+func TestConcurrentTicksForOneSymbolSendOneAmendment(t *testing.T) {
+	repository := newStubRepository(activeRecord())
+	modifier := &stubModifier{}
+	engine := newTestEngine(repository, modifier)
+	ctx := context.Background()
+
+	var waiting sync.WaitGroup
+	for range 8 {
+		waiting.Go(func() {
+			if err := engine.HandleTick(ctx, tickAt("TEST", 12)); err != nil {
+				t.Errorf("concurrent tick: %v", err)
+			}
+		})
+	}
+	waiting.Wait()
+
+	if calls := modifier.calls(); len(calls) != 1 {
+		t.Fatalf("broker calls = %d, want exactly 1 for one move", len(calls))
+	}
+}
+
+func TestHandleTickStopsWhenTheContextEnds(t *testing.T) {
+	repository := newStubRepository(activeRecord())
+	modifier := &stubModifier{}
+	engine := newTestEngine(repository, modifier)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := engine.HandleTick(ctx, tickAt("TEST", 12)); !errors.Is(
+		err, context.Canceled,
+	) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if calls := modifier.calls(); len(calls) != 0 {
+		t.Fatalf("the broker was called after cancellation: %+v", calls)
 	}
 }

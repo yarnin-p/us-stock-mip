@@ -6,23 +6,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/momentum-intelligence-platform/mip/internal/bracket"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata/synthetic"
 )
 
-// The adapter is only useful if it drops straight into the engine that already
-// exists, so the contract is asserted at compile time rather than described.
+// The adapter is only useful if it drops straight into the ports the
+// orchestrators depend on, so the contract is asserted at compile time rather
+// than described.
 var (
-	_ marketdata.StreamingSource = (*synthetic.Adapter)(nil)
-	_ bracket.QuoteSource        = (*synthetic.Adapter)(nil)
+	_ marketdata.Provider = (*synthetic.Adapter)(nil)
+	_ marketdata.Source   = (*synthetic.Adapter)(nil)
 )
 
 func TestPathBuildsPricesFromGains(t *testing.T) {
 	feed := synthetic.Path("aaa", 10, 0, 0.03, 0.12, -0.10)
-	if feed.Ticker != "aaa" {
-		t.Fatalf("ticker = %q", feed.Ticker)
-	}
 	want := []float64{10, 10.30, 11.20, 9}
 	if len(feed.Prices) != len(want) {
 		t.Fatalf("prices = %v", feed.Prices)
@@ -36,14 +33,10 @@ func TestPathBuildsPricesFromGains(t *testing.T) {
 
 func TestNewRejectsUnusableFeeds(t *testing.T) {
 	for name, feeds := range map[string][]synthetic.Feed{
-		"no ticker": {{Ticker: " ", Prices: []float64{1}}},
-		"no prices": {{Ticker: "AAA"}},
-		"zero price": {
-			{Ticker: "AAA", Prices: []float64{10, 0}},
-		},
-		"negative price": {
-			{Ticker: "AAA", Prices: []float64{10, -1}},
-		},
+		"no ticker":      {{Ticker: " ", Prices: []float64{1}}},
+		"no prices":      {{Ticker: "AAA"}},
+		"zero price":     {{Ticker: "AAA", Prices: []float64{10, 0}}},
+		"negative price": {{Ticker: "AAA", Prices: []float64{10, -1}}},
 	} {
 		if _, err := synthetic.New(feeds); err == nil {
 			t.Errorf("%s: expected an error", name)
@@ -51,54 +44,22 @@ func TestNewRejectsUnusableFeeds(t *testing.T) {
 	}
 }
 
-func TestSubscribeReplacesRatherThanAdds(t *testing.T) {
-	adapter := newAdapter(t,
-		synthetic.Path("AAA", 10, 0, 0.05),
-		synthetic.Path("BBB", 20, 0, 0.05),
-	)
-	ctx := context.Background()
-	if err := adapter.Subscribe(ctx, []string{"AAA", "BBB"}); err != nil {
-		t.Fatalf("subscribing to both: %v", err)
-	}
-	if err := adapter.Subscribe(ctx, []string{"BBB"}); err != nil {
-		t.Fatalf("narrowing to one: %v", err)
-	}
-
-	seen := map[string]int{}
-	adapter.OnTick(func(_ context.Context, tick marketdata.Tick) error {
-		seen[tick.Ticker]++
-		return nil
-	})
-	if err := adapter.Run(ctx); err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if seen["AAA"] != 0 {
-		t.Errorf("AAA was still followed after being replaced: %d ticks", seen["AAA"])
-	}
-	if seen["BBB"] == 0 {
-		t.Error("BBB should still be followed")
-	}
-}
-
 func TestSubscribeRejectsUnknownTicker(t *testing.T) {
 	adapter := newAdapter(t, synthetic.Path("AAA", 10, 0))
-	if err := adapter.Subscribe(context.Background(), []string{"TYPO"}); err == nil {
+	if _, err := adapter.Subscribe(context.Background(), "TYPO"); err == nil {
 		t.Fatal("a misspelt ticker must fail rather than watch nothing")
 	}
 }
 
 func TestLastPriceReportsNoPriceBeforeFirstTick(t *testing.T) {
 	adapter := newAdapter(t, synthetic.Path("AAA", 10, 0, 0.05))
-	if err := adapter.Subscribe(context.Background(), []string{"AAA"}); err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
 	_, err := adapter.LastPrice(context.Background(), "AAA")
 	if !errors.Is(err, marketdata.ErrNoPrice) {
 		t.Fatalf("err = %v, want ErrNoPrice", err)
 	}
 }
 
-func TestRunPublishesInOrderAndTracksLastPrice(t *testing.T) {
+func TestSubscriptionDeliversTheScriptedPathThenCloses(t *testing.T) {
 	start := time.Date(2026, time.August, 13, 13, 30, 0, 0, time.UTC)
 	adapter, err := synthetic.New(
 		[]synthetic.Feed{synthetic.Path("AAA", 10, 0, 0.03, 0.12)},
@@ -108,83 +69,122 @@ func TestRunPublishesInOrderAndTracksLastPrice(t *testing.T) {
 		t.Fatalf("new: %v", err)
 	}
 	ctx := context.Background()
-	if err := adapter.Subscribe(ctx, []string{"AAA"}); err != nil {
+	sub, err := adapter.Subscribe(ctx, "AAA")
+	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
+	defer func() { _ = sub.Close() }()
 
 	prices := make([]float64, 0, 3)
 	stamps := make([]time.Time, 0, 3)
-	adapter.OnTick(func(handlerCtx context.Context, tick marketdata.Tick) error {
+	// Ranging to completion is the whole point of the channel shape: the consumer
+	// owns the loop and learns the feed ended by the close, not by a callback.
+	// LastPrice is the read path, not the loop's input. It answers "the newest
+	// price known", which a running producer is entitled to have moved past the
+	// tick in hand -- so the only safe assertion while ranging is that it never
+	// goes backwards. A consumer needing the price it is handling reads tick.Price.
+	seen := 0.0
+	for tick := range sub.Ticks() {
 		prices = append(prices, tick.Price)
 		stamps = append(stamps, tick.ObservedAt)
-		// LastPrice must already reflect this tick while the handler runs, or an
-		// engine that reads the port instead of the argument sees a stale price.
-		last, err := adapter.LastPrice(handlerCtx, tick.Ticker)
-		if err != nil {
-			t.Errorf("LastPrice inside handler: %v", err)
+		last, lookupErr := adapter.LastPrice(ctx, tick.Ticker)
+		if lookupErr != nil {
+			t.Errorf("LastPrice while ranging: %v", lookupErr)
 		}
-		if last != tick.Price {
-			t.Errorf("LastPrice = %.4f during tick %.4f", last, tick.Price)
+		if last < seen {
+			t.Errorf("LastPrice went backwards: %.4f after %.4f", last, seen)
 		}
-		return nil
-	})
-	if err := adapter.Run(ctx); err != nil {
-		t.Fatalf("run: %v", err)
+		seen = last
 	}
-
+	if err := sub.Err(); err != nil {
+		t.Fatalf("a completed feed reported an error: %v", err)
+	}
 	if len(prices) != 3 {
 		t.Fatalf("prices = %v", prices)
 	}
 	if prices[0] != 10 || prices[2] <= prices[1] {
 		t.Errorf("prices are not the scripted path: %v", prices)
 	}
-	if !stamps[0].Equal(start) {
-		t.Errorf("first stamp = %s, want %s", stamps[0], start)
+	if !stamps[0].Equal(start) || !stamps[1].Equal(start.Add(time.Second)) {
+		t.Errorf("stamps are not spaced by the interval: %v", stamps)
 	}
-	if !stamps[1].Equal(start.Add(time.Second)) {
-		t.Errorf("second stamp = %s", stamps[1])
-	}
+	// Once the feed is drained there is no producer left to race, so the read path
+	// must settle on the last print.
 	last, err := adapter.LastPrice(ctx, "AAA")
 	if err != nil {
-		t.Fatalf("LastPrice after run: %v", err)
+		t.Fatalf("LastPrice after drain: %v", err)
 	}
-	if last != prices[2] {
-		t.Errorf("LastPrice = %.4f, want the final print %.4f", last, prices[2])
+	if last != prices[len(prices)-1] {
+		t.Errorf("LastPrice = %.4f, want the final print %.4f",
+			last, prices[len(prices)-1])
 	}
 }
 
-func TestHandlerErrorStopsTheRun(t *testing.T) {
-	adapter := newAdapter(t, synthetic.Path("AAA", 10, 0, 0.03, 0.12))
+func TestTwoSymbolsGetIndependentSubscriptions(t *testing.T) {
+	adapter := newAdapter(t,
+		synthetic.Path("AAA", 10, 0, 0.05),
+		synthetic.Path("BBB", 20, 0, 0.05, 0.10),
+	)
 	ctx := context.Background()
-	if err := adapter.Subscribe(ctx, []string{"AAA"}); err != nil {
-		t.Fatalf("subscribe: %v", err)
+	first, err := adapter.Subscribe(ctx, "AAA")
+	if err != nil {
+		t.Fatalf("subscribe AAA: %v", err)
 	}
-	boom := errors.New("engine refused the tick")
-	delivered := 0
-	adapter.OnTick(func(context.Context, marketdata.Tick) error {
-		delivered++
-		return boom
-	})
-	if err := adapter.Run(ctx); !errors.Is(err, boom) {
-		t.Fatalf("run err = %v, want the handler error", err)
+	second, err := adapter.Subscribe(ctx, "BBB")
+	if err != nil {
+		t.Fatalf("subscribe BBB: %v", err)
 	}
-	if delivered != 1 {
-		t.Errorf("delivered %d ticks, want to stop on the first", delivered)
+
+	counts := map[string]int{}
+	for tick := range first.Ticks() {
+		counts[tick.Ticker]++
+	}
+	for tick := range second.Ticks() {
+		counts[tick.Ticker]++
+	}
+	if counts["AAA"] != 2 || counts["BBB"] != 3 {
+		t.Fatalf("counts = %v, want AAA 2 and BBB 3", counts)
 	}
 }
 
-func TestCancelledContextEndsRunCleanly(t *testing.T) {
-	adapter := newAdapter(t, synthetic.Path("AAA", 10, 0, 0.03, 0.12))
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := adapter.Subscribe(ctx, []string{"AAA"}); err != nil {
+func TestCloseEndsTheSubscriptionAndIsIdempotent(t *testing.T) {
+	adapter := newAdapter(t, synthetic.Path("AAA", 10, 0, 0.03, 0.12, 0.20))
+	sub, err := adapter.Subscribe(context.Background(), "AAA")
+	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	adapter.OnTick(func(context.Context, marketdata.Tick) error {
-		cancel()
-		return nil
-	})
-	if err := adapter.Run(ctx); err != nil {
-		t.Fatalf("a cancelled run is a clean stop, got %v", err)
+	if _, open := <-sub.Ticks(); !open {
+		t.Fatal("no first tick")
+	}
+	if err := sub.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := sub.Close(); err != nil {
+		t.Fatalf("a second close must be safe, got %v", err)
+	}
+	// Draining after Close must terminate rather than block for ever.
+	for range sub.Ticks() {
+	}
+	if err := sub.Err(); err != nil {
+		t.Fatalf("a closed feed is a clean stop, got %v", err)
+	}
+}
+
+func TestCancellingTheContextEndsTheSubscriptionCleanly(t *testing.T) {
+	adapter := newAdapter(t, synthetic.Path("AAA", 10, 0, 0.03, 0.12, 0.20))
+	ctx, cancel := context.WithCancel(context.Background())
+	sub, err := adapter.Subscribe(ctx, "AAA")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if _, open := <-sub.Ticks(); !open {
+		t.Fatal("no first tick")
+	}
+	cancel()
+	for range sub.Ticks() {
+	}
+	if err := sub.Err(); err != nil {
+		t.Fatalf("a cancelled feed is a clean stop, got %v", err)
 	}
 }
 
@@ -211,9 +211,7 @@ func TestRandomWalkIsReproducible(t *testing.T) {
 }
 
 func TestTickValidateRejectsCorruptingPrices(t *testing.T) {
-	base := marketdata.Tick{
-		Ticker: "AAA", Price: 10, ObservedAt: time.Now(),
-	}
+	base := marketdata.Tick{Ticker: "AAA", Price: 10, ObservedAt: time.Now()}
 	if err := base.Validate(); err != nil {
 		t.Fatalf("a good tick was rejected: %v", err)
 	}
@@ -244,14 +242,18 @@ func TestTickValidateRejectsCorruptingPrices(t *testing.T) {
 func TestNewerIgnoresDifferentSymbols(t *testing.T) {
 	now := time.Now()
 	older := marketdata.Tick{Ticker: "AAA", Price: 1, ObservedAt: now}
-	newer := marketdata.Tick{Ticker: "AAA", Price: 2, ObservedAt: now.Add(time.Second)}
+	newer := marketdata.Tick{
+		Ticker: "AAA", Price: 2, ObservedAt: now.Add(time.Second),
+	}
 	if !newer.Newer(older) {
 		t.Error("a later tick for the same symbol should supersede")
 	}
 	if older.Newer(newer) {
 		t.Error("an earlier tick must not supersede")
 	}
-	crossed := marketdata.Tick{Ticker: "BBB", Price: 2, ObservedAt: now.Add(time.Hour)}
+	crossed := marketdata.Tick{
+		Ticker: "BBB", Price: 2, ObservedAt: now.Add(time.Hour),
+	}
 	if crossed.Newer(older) {
 		t.Error("ticks for different symbols are not comparable")
 	}
