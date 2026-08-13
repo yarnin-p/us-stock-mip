@@ -24,7 +24,8 @@ const bracketColumns = `id, mode, coalesce(account_id, ''), ticker, state,
 	coalesce(entry_order_id, ''), coalesce(stop_order_id, ''),
 	coalesce(target_order_id, ''), risk_flags, manual_hold,
 	partial_tp_after, partial_tp_fraction, partial_tp_min_shares,
-	partial_taken_quantity, coalesce(partial_order_id, ''), coalesce(note, ''),
+	partial_taken_quantity, coalesce(partial_order_id, ''), stop_generation,
+	stop_fired, coalesce(note, ''),
 	opened_at, closed_at, updated_at`
 
 func (store *Store) CreateBracket(
@@ -222,7 +223,10 @@ func (store *Store) SaveLevels(
 			stop_price = nullif($2, 0::numeric),
 			target_price = nullif($3, 0::numeric),
 			high_water = nullif($4, 0::numeric),
-			stop_order_id = coalesce(nullif($5, ''), stop_order_id),
+			-- Not coalesced, unlike the target: a session handover clears this handle
+			-- deliberately when the resting order is withdrawn, and coalescing would
+			-- leave the engine pointing at an order the broker no longer has.
+			stop_order_id = nullif($5, ''),
 			target_order_id = coalesce(nullif($6, ''), target_order_id),
 			-- The engine reduces the position when it sells a slice, so the size and
 			-- the sale that shrank it travel with the levels they now protect.
@@ -233,13 +237,17 @@ func (store *Store) SaveLevels(
 			-- coalesced because every later write goes through this same statement.
 			entry_price = coalesce(nullif($10, 0::numeric), entry_price),
 			account_id = coalesce(nullif($11, ''), account_id),
+			stop_generation = greatest(stop_generation, $12),
+			-- Only ever set, never cleared here: a bracket whose exit has been sent must
+			-- not be talked back into sending another by a later write.
+			stop_fired = stop_fired OR $13,
 			updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+bracketColumns,
 		record.ID, record.StopPrice, record.TargetPrice, record.HighWater,
 		record.StopOrderID, record.TargetOrderID,
 		record.Quantity, record.PartialTakenQuantity, record.PartialOrderID,
-		record.EntryPrice, record.AccountID,
+		record.EntryPrice, record.AccountID, record.StopGeneration, record.StopFired,
 	)
 	updated, err := scanBracket(row)
 	if err != nil {
@@ -404,7 +412,8 @@ func scanBracket(row bracketRow) (bracket.Record, error) {
 		&record.RiskFlags, &record.ManualHold,
 		&record.Config.PartialTPAfter, &record.Config.PartialTPFraction,
 		&record.Config.PartialTPMinShares,
-		&record.PartialTakenQuantity, &record.PartialOrderID, &record.Note,
+		&record.PartialTakenQuantity, &record.PartialOrderID,
+		&record.StopGeneration, &record.StopFired, &record.Note,
 		&record.OpenedAt, &closedAt, &record.UpdatedAt,
 	); err != nil {
 		return bracket.Record{}, err

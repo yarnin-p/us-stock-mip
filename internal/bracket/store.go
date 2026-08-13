@@ -33,12 +33,25 @@ type Record struct {
 	// PartialOrderID is the sale that did it. A quantity rather than a flag, because
 	// the remainder is what the stop still protects and a boolean could not say how
 	// much that is.
-	PartialTakenQuantity float64    `json:"partial_taken_quantity,omitempty"`
-	PartialOrderID       string     `json:"partial_order_id,omitempty"`
-	Note                 string     `json:"note,omitempty"`
-	OpenedAt             time.Time  `json:"opened_at"`
-	ClosedAt             *time.Time `json:"closed_at,omitempty"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	PartialTakenQuantity float64 `json:"partial_taken_quantity,omitempty"`
+	PartialOrderID       string  `json:"partial_order_id,omitempty"`
+	// StopGeneration counts how many times a stop order has been rested at the broker
+	// for this bracket. A stop that changes hands with the session is placed and
+	// withdrawn once a day at least, and a broker that keys on client_order_id would
+	// refuse a second order reusing the handle of one cancelled hours earlier.
+	StopGeneration int `json:"stop_generation,omitempty"`
+	// StopFired says the engine has already sent the protective sell for this bracket.
+	//
+	// An explicit fact rather than something inferred from the order handle, because
+	// two different things wear that handle: a stop resting at the broker, and the
+	// limit sell this engine fired. Confusing them let the session handover cancel the
+	// exit that was in flight and then sell again -- which does not just cost money, it
+	// can leave the position short.
+	StopFired bool       `json:"stop_fired,omitempty"`
+	Note      string     `json:"note,omitempty"`
+	OpenedAt  time.Time  `json:"opened_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 
 	// LastPrice and UnrealizedPnL are filled by the reader for display and are
 	// not persisted; they come from the quote feed at read time.

@@ -27,13 +27,18 @@ func TestEveryTriggerIsAllowedByTheSchema(t *testing.T) {
 	if len(allowed) == 0 {
 		t.Fatal("no trigger constraint found in the migrations")
 	}
-	// Listed by hand rather than reflected over, so adding a Trigger constant and
-	// forgetting the migration fails here rather than passing quietly.
-	for _, trigger := range []Trigger{
-		TriggerInitial, TriggerBreakEven, TriggerProfitLock, TriggerPartialTP,
-		TriggerTrailStop, TriggerTrailTarget, TriggerFilled, TriggerManual,
-	} {
-		if !allowed[string(trigger)] {
+	// Read from the source rather than listed here. The first version of this test
+	// hand-listed the constants "so that forgetting the migration fails loudly", and
+	// then STOP_FIRED was added and the list was not updated: the test passed while
+	// the database was refusing the new trigger, which is the exact failure it exists
+	// to prevent. A list that has to be maintained is a second place to forget.
+	declared := declaredTriggers(t)
+	if len(declared) < 8 {
+		t.Fatalf("only found %d trigger constants; the parser has lost track of them",
+			len(declared))
+	}
+	for _, trigger := range declared {
+		if !allowed[trigger] {
 			t.Errorf(
 				"the database will refuse trigger %q, and the refusal takes the level "+
 					"update down with it; widen the check constraint in a new migration",
@@ -41,6 +46,24 @@ func TestEveryTriggerIsAllowedByTheSchema(t *testing.T) {
 			)
 		}
 	}
+}
+
+// declaredTriggers reads the Trigger constants out of the domain source. Parsing is
+// crude on purpose: it cannot be fooled by a constant nobody remembered to list, and
+// it needs neither a database nor reflection over a running binary.
+func declaredTriggers(t *testing.T) []string {
+	t.Helper()
+	body, err := os.ReadFile("bracket.go")
+	if err != nil {
+		t.Fatalf("reading bracket.go: %v", err)
+	}
+	pattern := regexp.MustCompile(`Trigger[A-Za-z]+\s+Trigger\s*=\s*"([A-Z_]+)"`)
+	matches := pattern.FindAllSubmatch(body, -1)
+	triggers := make([]string, 0, len(matches))
+	for _, match := range matches {
+		triggers = append(triggers, string(match[1]))
+	}
+	return triggers
 }
 
 // allowedTriggers reads the constraint as Postgres last saw it: the newest

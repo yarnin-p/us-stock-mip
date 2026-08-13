@@ -65,6 +65,12 @@ type Config struct {
 	// the released limit can fail to fill at all. The default is the plain stop, so
 	// nothing changes its risk profile without being asked.
 	BracketStopOrderType string
+	// BracketStopEnforcement says who holds the stop: "broker" rests an order at the
+	// venue, "engine" keeps the level here and sells on a breach, and "session" -- the
+	// default -- gives each session the strongest protection it can have. Webull
+	// accepts no stop order of any kind outside the regular session, so premarket
+	// there is nothing to rest; inside it, a broker-held stop outlives this process.
+	BracketStopEnforcement string
 	// BracketStopLimitOffsetPercent is how far under the trigger the released limit
 	// sits, as a fraction. Only read for a stop-limit.
 	BracketStopLimitOffsetPercent  float64
@@ -850,6 +856,17 @@ func load(requireMassive bool) (Config, error) {
 		return Config{}, fmt.Errorf(
 			"unsupported BRACKET_STOP_ORDER_TYPE %q; use STOP_LOSS or STOP_LOSS_LIMIT",
 			config.BracketStopOrderType,
+		)
+	}
+	config.BracketStopEnforcement = strings.ToLower(strings.TrimSpace(
+		envOrDefault("BRACKET_STOP_ENFORCEMENT", "session"),
+	))
+	switch config.BracketStopEnforcement {
+	case "broker", "engine", "session":
+	default:
+		return Config{}, fmt.Errorf(
+			"unsupported BRACKET_STOP_ENFORCEMENT %q; use broker, engine or session",
+			config.BracketStopEnforcement,
 		)
 	}
 	config.BracketStopLimitOffsetPercent, err = floatEnv(

@@ -313,14 +313,37 @@ func (service *Service) Arm(
 		return Record{}, err
 	}
 
-	stopID := fmt.Sprintf("bracket-%d-stop", id)
 	shape := service.shape()
-	if _, err := service.protector.PlaceOrder(ctx, execution.BrokerOrderRequest{
-		AccountID: account, ClientOrderID: stopID,
-		Ticker: record.Ticker, Side: "SELL", OrderType: shape.OrderType,
-		TimeInForce: "GTC", TradingSession: "ALL",
-		Quantity: quantity, StopPrice: stop, LimitPrice: shape.LimitFor(stop),
-	}); err != nil {
+	stopID := fmt.Sprintf("bracket-%d-stop", id)
+	// At arming time the session decides nothing yet: a bracket armed premarket has its
+	// stop taken by the engine, and the engine hands it to the broker at the open. What
+	// matters here is only whether a stop should rest at the broker right now.
+	if shape.HeldByEngine(false) {
+		// Nothing rests at the broker. Webull will not take a stop of any kind outside
+		// the regular session, so the level stays here and the engine sends a limit
+		// sell when a print breaches it.
+		//
+		// Said at WARN and written into the note, because the difference is not a
+		// detail: while this process is down the position has no protection at all,
+		// and that is the one fact an operator must not have to go looking for.
+		stopID = ""
+		service.logger().Warn(
+			"this bracket's stop is held by the engine, not the broker: it works in "+
+				"every session and only while this process is running and receiving prices",
+			"ticker", record.Ticker, "bracket_id", id, "stop", stop,
+		)
+		note := strings.TrimSpace(input.Note)
+		input.Note = strings.TrimSpace(
+			note + " · stop held by the engine; no protection while MIP is down",
+		)
+	} else if _, err := service.protector.PlaceOrder(
+		ctx, execution.BrokerOrderRequest{
+			AccountID: account, ClientOrderID: stopID,
+			Ticker: record.Ticker, Side: "SELL", OrderType: shape.OrderType,
+			TimeInForce: "GTC", TradingSession: "ALL",
+			Quantity: quantity, StopPrice: stop, LimitPrice: shape.LimitFor(stop),
+		},
+	); err != nil {
 		return Record{}, fmt.Errorf(
 			"placing the stop for %s at %.4f: %w -- the position is unprotected and "+
 				"the bracket was left pending", record.Ticker, stop, err,

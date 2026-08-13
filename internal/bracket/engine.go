@@ -38,11 +38,15 @@ type Engine struct {
 	inspector  execution.OrderInspector
 	finisher   Finisher
 	stopShape  StopShape
+	canceller  StopCanceller
 	logger     *slog.Logger
 	mode       string
 	// session reports whether native stop amendments are accepted at a given
 	// time. Webull takes them only in the core session.
 	session func(time.Time) bool
+	// regular reports whether the regular session is open. See RegularSessionAt for
+	// why this is not the same question.
+	regular func(time.Time) bool
 
 	mutex sync.Mutex
 	// locks serialises per ticker rather than globally. Two prints for the same
@@ -65,6 +69,14 @@ type SliceSeller interface {
 	) (execution.Submission, error)
 }
 
+// StopCanceller withdraws an order this engine placed. It is needed only by a stop
+// that changes hands with the session: at the close the broker stops honouring a
+// resting stop order, and leaving it there would make the engine believe the position
+// is covered by something that has quietly stopped working.
+type StopCanceller interface {
+	CancelOrder(ctx context.Context, accountID, clientOrderID string) error
+}
+
 // EngineOptions wires the engine. Repository and modifier are required; the rest
 // have working defaults.
 type EngineOptions struct {
@@ -85,12 +97,24 @@ type EngineOptions struct {
 	// were a plain stop drops the limit the broker is holding, and the venue either
 	// refuses it or quietly turns the protection into a market order.
 	StopShape StopShape
+	// Canceller is required only when the stop changes hands with the session.
+	Canceller StopCanceller
 	Logger    *slog.Logger
 	Mode      string
 	// AmendableAt gates amendments to the sessions the broker accepts them in.
 	// The default allows every session, which is correct for paper and wrong for
 	// Webull -- the caller wiring a live adapter must pass the real gate.
 	AmendableAt func(time.Time) bool
+	// RegularSessionAt reports whether the regular session is open, which is a fact
+	// about the clock rather than about the broker in use.
+	//
+	// It is deliberately separate from AmendableAt. For a live Webull the two coincide,
+	// which is exactly why conflating them was easy and wrong: a paper venue accepts
+	// amendments at any hour, so reading the amendable signal as the session made the
+	// engine hand every stop to the broker at three in the morning and never exercise
+	// the arrangement it is supposed to be rehearsing. The default is the honest one --
+	// nothing is the regular session unless a real clock says so.
+	RegularSessionAt func(time.Time) bool
 }
 
 func NewEngine(options EngineOptions) (*Engine, error) {
@@ -117,6 +141,20 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 	if err := shape.Validate(); err != nil {
 		return nil, err
 	}
+	if shape.SwitchesBySession() && options.Canceller == nil {
+		return nil, errors.New(
+			"a stop that changes hands with the session needs a broker that can cancel: " +
+				"at the close the resting stop order has to be withdrawn, or the engine " +
+				"believes the position is covered by an order the broker no longer honours",
+		)
+	}
+	if shape.SwitchesBySession() && options.Seller == nil {
+		return nil, errors.New(
+			"a stop that changes hands with the session needs a broker that can place " +
+				"orders, both to rest one at the open and to sell when it fires outside " +
+				"the session",
+		)
+	}
 	mode := strings.TrimSpace(options.Mode)
 	if mode == "" {
 		mode = "paper"
@@ -128,9 +166,11 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 		inspector:  options.Inspector,
 		finisher:   options.Finisher,
 		stopShape:  shape,
+		canceller:  options.Canceller,
 		logger:     options.Logger,
 		mode:       mode,
 		session:    options.AmendableAt,
+		regular:    options.RegularSessionAt,
 		locks:      make(map[string]*sync.Mutex),
 	}
 	if engine.logger == nil {
@@ -138,6 +178,11 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 	}
 	if engine.session == nil {
 		engine.session = func(time.Time) bool { return true }
+	}
+	if engine.regular == nil {
+		// Never assume the regular session. A stop handed to a broker that is not
+		// honouring it is the failure this whole arrangement exists to avoid.
+		engine.regular = func(time.Time) bool { return false }
 	}
 	return engine, nil
 }
@@ -165,6 +210,7 @@ func (engine *Engine) HandleTick(
 		return fmt.Errorf("loading brackets for %s: %w", tick.Ticker, err)
 	}
 	amendable := engine.session(tick.ObservedAt)
+	regularSession := engine.regular(tick.ObservedAt)
 
 	var failures error
 	for _, record := range records {
@@ -194,6 +240,41 @@ func (engine *Engine) HandleTick(
 			continue
 		}
 		record = updated
+		// Whoever should be holding the stop in this session has to be holding it
+		// before anything else is decided.
+		if handed, err := engine.handOverStop(ctx, record, regularSession); err != nil {
+			failures = errors.Join(
+				failures, fmt.Errorf("bracket %d: %w", record.ID, err),
+			)
+		} else {
+			record = handed
+		}
+		// A stop this engine is holding has to be acted on before the ladder is
+		// replanned: the position is below its level right now, and moving a floor is
+		// not the response to that.
+		if engine.stopShape.HeldByEngine(regularSession) && !record.StopFired &&
+			record.StopOrderID == "" &&
+			record.StopPrice > 0 && tick.Price <= record.StopPrice {
+			if err := engine.fireStop(ctx, record, tick); err != nil {
+				failures = errors.Join(
+					failures, fmt.Errorf("bracket %d: %w", record.ID, err),
+				)
+				engine.logger.Error(
+					"the engine holds this stop and could not send the sell; the position "+
+						"is below its stop and nothing is protecting it",
+					"ticker", record.Ticker, "bracket_id", record.ID,
+					"stop", record.StopPrice, "price", tick.Price, "error", err,
+				)
+			}
+			continue
+		}
+		if record.StopFired {
+			// The exit is in flight. Ratcheting a floor now would move a level that is no
+			// longer protecting anything and leave a stored stop that never applied to
+			// this position, which is worse than no row at all when the trail is read
+			// back later to ask what happened.
+			continue
+		}
 		if record.ManualHold {
 			// Recorded, not sent -- the same treatment as an unamendable session. A
 			// held bracket that left no trail would make it impossible to see later
@@ -203,7 +284,7 @@ func (engine *Engine) HandleTick(
 		}
 		// One bracket failing must not deny the others on this symbol their move,
 		// so the errors are joined rather than returned at the first one.
-		if _, err := engine.advance(ctx, record, tick.Price, amendable); err != nil {
+		if _, err := engine.advance(ctx, record, tick.Price, amendable, regularSession); err != nil {
 			failures = errors.Join(
 				failures, fmt.Errorf("bracket %d: %w", record.ID, err),
 			)
@@ -214,6 +295,169 @@ func (engine *Engine) HandleTick(
 		}
 	}
 	return failures
+}
+
+// handOverStop moves the stop to whichever side can hold it in this session.
+//
+// At the open it rests a real stop order at the broker, which outlives this process.
+// At the close it withdraws that order, because the broker stops honouring it and a
+// stop believed to be at the broker after the broker stopped honouring it is worse
+// than no arrangement at all -- the engine would sit watching an order that cannot
+// trigger and never fire its own.
+//
+// Both directions are attempted on every tick and are idempotent, so a failure is
+// retried on the next print rather than leaving the position in the gap. The order
+// matters within each direction: place before claiming the broker holds it, and clear
+// the handle only after the cancel is confirmed.
+func (engine *Engine) handOverStop(
+	ctx context.Context, record Record, regularSession bool,
+) (Record, error) {
+	if !engine.stopShape.SwitchesBySession() || record.StopPrice <= 0 {
+		return record, nil
+	}
+	if record.StopFired {
+		// The exit is already in flight. Withdrawing it here would cancel the sell that
+		// is protecting the position and then let the engine send another, which does
+		// not merely cost money -- it can leave the position short.
+		return record, nil
+	}
+	switch {
+	case regularSession && record.StopOrderID == "":
+		// The stop generation makes the handle unique per placement: a broker that keys
+		// on client_order_id would refuse a second order reusing the handle of one
+		// cancelled hours earlier.
+		orderID := fmt.Sprintf(
+			"bracket-%d-stop-r%d", record.ID, record.StopGeneration+1,
+		)
+		limit := engine.stopShape.LimitFor(record.StopPrice)
+		if _, err := engine.seller.PlaceOrder(ctx, execution.BrokerOrderRequest{
+			AccountID: record.AccountID, ClientOrderID: orderID,
+			Ticker: record.Ticker, Side: "SELL", OrderType: engine.stopShape.OrderType,
+			TimeInForce: "GTC", TradingSession: "ALL",
+			Quantity: record.Quantity, StopPrice: record.StopPrice, LimitPrice: limit,
+		}); err != nil {
+			// The engine keeps holding it. That is the safe failure: protection stays
+			// where it already was rather than moving to something that did not arrive.
+			return record, fmt.Errorf(
+				"resting the stop at the broker for the regular session: %w", err,
+			)
+		}
+		record.StopOrderID = orderID
+		record.StopGeneration++
+		engine.record(ctx, record, Adjustment{
+			Trigger: TriggerStopHandover, HighWater: record.HighWater,
+			StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+			Reason: fmt.Sprintf(
+				"regular session: stop handed to the broker as %s at %.4f",
+				orderID, record.StopPrice,
+			),
+		}, record.StopPrice, true, "")
+		engine.logger.Info(
+			"stop handed to the broker for the regular session",
+			"ticker", record.Ticker, "bracket_id", record.ID, "order", orderID,
+		)
+		return record, nil
+
+	case !regularSession && record.StopOrderID != "":
+		if err := engine.canceller.CancelOrder(
+			ctx, record.AccountID, record.StopOrderID,
+		); err != nil {
+			// Retried on the next print. Until it succeeds the engine does not fire its
+			// own sell, because the broker order may still be live and two sells for one
+			// position can leave it short.
+			return record, fmt.Errorf(
+				"withdrawing the resting stop %s now the session has closed: %w",
+				record.StopOrderID, err,
+			)
+		}
+		withdrawn := record.StopOrderID
+		record.StopOrderID = ""
+		engine.record(ctx, record, Adjustment{
+			Trigger: TriggerStopHandover, HighWater: record.HighWater,
+			StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+			Reason: fmt.Sprintf(
+				"outside the regular session: %s withdrawn, the engine holds the stop at "+
+					"%.4f and will sell if a print breaches it",
+				withdrawn, record.StopPrice,
+			),
+		}, record.StopPrice, true, "")
+		engine.logger.Warn(
+			"stop taken back from the broker outside the regular session; it is now held "+
+				"by this process only",
+			"ticker", record.Ticker, "bracket_id", record.ID, "withdrawn", withdrawn,
+		)
+		return record, nil
+	}
+	return record, nil
+}
+
+// fireStop sends the protective sell for a stop this engine is holding.
+//
+// It exists because Webull accepts no stop order of any kind outside the regular
+// session -- not a stop, not a stop-limit -- while it accepts a limit order in every
+// session. So the level lives in this process and the sell is sent on the print that
+// breaches it.
+//
+// The sell is a limit, not a market order: a market sale of a whole position in a
+// thin name walks its own book down, and the offset says how much worse than the
+// trigger is acceptable. It buys protection in the sessions the broker offers none
+// and gives it up whenever this process is not running, which is why arming says so
+// out loud.
+//
+// The order is recorded under the same handle a broker-held stop would use, so
+// everything downstream -- settle, the close, the audit trail -- works unchanged.
+func (engine *Engine) fireStop(
+	ctx context.Context, record Record, tick marketdata.Tick,
+) error {
+	if engine.seller == nil {
+		return errors.New(
+			"the engine holds this stop but has no broker that can place the sell",
+		)
+	}
+	limit := engine.stopShape.LimitFor(record.StopPrice)
+	if limit <= 0 {
+		limit = roundToCent(record.StopPrice)
+	}
+	orderID := fmt.Sprintf("bracket-%d-stop", record.ID)
+	// The whole remaining position: a partial slice may already have gone, and the
+	// quantity on the record is what is still held.
+	if _, err := engine.seller.PlaceOrder(ctx, execution.BrokerOrderRequest{
+		AccountID: record.AccountID, ClientOrderID: orderID,
+		Ticker: record.Ticker, Side: "SELL", OrderType: "LIMIT",
+		TimeInForce: "DAY", TradingSession: "ALL",
+		Quantity: record.Quantity, LimitPrice: limit,
+	}); err != nil {
+		engine.record(ctx, record, Adjustment{
+			Trigger: TriggerStopFired, HighWater: record.HighWater,
+			StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+			Reason: fmt.Sprintf(
+				"engine-held stop breached at %.4f; the sell at %.4f was refused",
+				tick.Price, limit,
+			),
+		}, tick.Price, false, err.Error())
+		return fmt.Errorf("sending the protective sell for %s: %w", record.Ticker, err)
+	}
+	// Recorded under the handle settle already looks for, so the fill closes the
+	// bracket through exactly the same path a broker-held stop would. StopFired is
+	// what stops a second sell, and it is persisted: a restart mid-exit must not send
+	// another one.
+	record.StopOrderID = orderID
+	record.StopFired = true
+	engine.record(ctx, record, Adjustment{
+		Trigger: TriggerStopFired, HighWater: record.HighWater,
+		StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+		Reason: fmt.Sprintf(
+			"engine-held stop breached at %.4f; sold %.0f at limit %.4f",
+			tick.Price, record.Quantity, limit,
+		),
+	}, tick.Price, true, "")
+	engine.logger.Warn(
+		"engine-held stop fired",
+		"ticker", record.Ticker, "bracket_id", record.ID,
+		"stop", record.StopPrice, "price", tick.Price,
+		"limit", limit, "shares", record.Quantity,
+	)
+	return nil
 }
 
 // settle asks the broker what became of this bracket's orders, and acts on the
@@ -242,7 +486,9 @@ func (engine *Engine) settle(
 	// The slice first: it changes the size the other two orders should cover, and
 	// amending them with a stale size is the mistake that leaves stock unguarded.
 	if record.PartialOrderID != "" && record.PartialTakenQuantity <= 0 {
-		updated, err := engine.settleSlice(ctx, record)
+		updated, err := engine.settleSlice(
+			ctx, record, engine.regular(tick.ObservedAt),
+		)
 		if err != nil {
 			failures = errors.Join(failures, err)
 		}
@@ -329,7 +575,7 @@ func (engine *Engine) settleExit(
 // tick the stop covers more than is held, which the broker refuses rather than
 // acts on.
 func (engine *Engine) settleSlice(
-	ctx context.Context, record Record,
+	ctx context.Context, record Record, regularSession bool,
 ) (Record, error) {
 	outcome, err := engine.inspector.OrderOutcome(
 		ctx, record.AccountID, record.PartialOrderID,
@@ -378,7 +624,7 @@ func (engine *Engine) settleSlice(
 	// covers leaves that choice exactly where they put it.
 	stopErr := engine.amend(
 		ctx, record, record.StopOrderID, engine.stopShape.OrderType,
-		record.StopPrice, true,
+		record.StopPrice, !engine.stopShape.HeldByEngine(regularSession),
 	)
 	targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT", record.TargetPrice, true,
@@ -477,7 +723,10 @@ func (engine *Engine) lockFor(ticker string) *sync.Mutex {
 }
 
 func (engine *Engine) advance(
-	ctx context.Context, record Record, lastPrice float64, amendable bool,
+	ctx context.Context,
+	record Record,
+	lastPrice float64,
+	amendable, regularSession bool,
 ) (bool, error) {
 	adjustment, err := Plan(record.Bracket(), lastPrice)
 	if err != nil {
@@ -535,9 +784,16 @@ func (engine *Engine) advance(
 		}
 	}
 
+	// An engine-held stop has nothing at the broker to amend: the level is the record,
+	// and saving it is the amendment. That is also why it needs no amendable session.
 	stopErr := engine.amend(
 		ctx, record, record.StopOrderID, engine.stopShape.OrderType,
-		adjustment.StopPrice, adjustment.StopPrice != record.StopPrice,
+		adjustment.StopPrice,
+		// Who *should* be holding it, not whether a handle happens to exist. A broker-held
+		// stop with no handle is a position with nothing protecting it, and amend is what
+		// says so; treating a missing handle as "the engine has it" would bury that.
+		!engine.stopShape.HeldByEngine(regularSession) &&
+			adjustment.StopPrice != record.StopPrice,
 	)
 	targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT",

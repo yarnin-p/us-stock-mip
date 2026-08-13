@@ -45,6 +45,10 @@ const (
 	TriggerTrailTarget Trigger = "TRAIL_TARGET" // target extended above a new high
 	TriggerManual      Trigger = "MANUAL"       // operator typed new levels
 	TriggerFilled      Trigger = "FILLED"       // a protective order ended the position
+	TriggerStopFired   Trigger = "STOP_FIRED"   // the engine sent the sell itself
+	// TriggerStopHandover records the stop changing hands between the broker and this
+	// engine as the session opens or closes.
+	TriggerStopHandover Trigger = "STOP_HANDOVER"
 )
 
 // Config is the risk shape of one bracket, expressed as fractions of the entry
@@ -264,6 +268,43 @@ func (config Config) minimumStep() float64 {
 	return config.MinimumStep
 }
 
+// StopEnforcement says who is holding the stop.
+//
+// Webull is explicit that outside the regular session only limit orders can be
+// placed: its overnight page names Market, Stop, Stop Limit and Trailing Stop as
+// unavailable, and its pre-market and after-hours page says limit orders only. So a
+// resting protective stop of any kind simply does not exist premarket, which is the
+// session this account trades. There is no configuration that changes that.
+//
+// What does exist is a limit order, in every session. So the level can live here
+// instead of at the broker: the engine already reads every print, and when one
+// breaches the level it sends the limit sell itself.
+//
+// The trade is honest and has to be stated. A broker-held stop survives this process
+// dying, a power cut, a lost connection. An engine-held stop is only as good as the
+// engine being up and receiving prices. It buys protection in the sessions where the
+// broker offers none, and gives up protection in the moments this program is not
+// running.
+type StopEnforcement string
+
+const (
+	// StopAtBroker rests a stop order at the venue. Regular session only, and the
+	// only kind that outlives this process.
+	StopAtBroker StopEnforcement = "broker"
+	// StopInEngine keeps the level here and sends a limit sell when a print breaches
+	// it. Works in every session, and only while this is running.
+	StopInEngine StopEnforcement = "engine"
+	// StopBySession hands the stop to whichever can actually hold it: the broker
+	// during the regular session, where a resting stop order survives this process
+	// dying, and the engine outside it, where the broker will not take one at all.
+	//
+	// Each session gets the strongest protection available in it, which is strictly
+	// better than choosing one for the whole day. The cost is the handoff, and the
+	// handoff is the part that has to be right: a stop believed to be at the broker
+	// after the broker stopped honouring it is worse than either arrangement.
+	StopBySession StopEnforcement = "session"
+)
+
 // StopShape says how the protective stop is expressed at the broker.
 //
 // A plain stop releases a market order when it triggers. Extended hours does not
@@ -276,22 +317,75 @@ func (config Config) minimumStep() float64 {
 // exit at a bad price; a stop-limit risks no exit. In a halted microcap that reopens
 // forty per cent lower, those are very different outcomes.
 type StopShape struct {
-	// OrderType is "STOP_LOSS" or "STOP_LOSS_LIMIT".
+	// Enforcement says whether the broker or this engine holds the stop.
+	Enforcement StopEnforcement
+	// OrderType is "STOP_LOSS" or "STOP_LOSS_LIMIT". Only read when the broker holds
+	// it; an engine-held stop is sent as a plain limit, because that is the only
+	// thing the extended sessions accept.
 	OrderType string
-	// LimitOffsetPercent is how far below the trigger the released limit sits, as a
-	// fraction. Only read for a stop-limit. Zero puts the limit at the trigger, which
-	// is the least likely to fill.
+	// LimitOffsetPercent is how far below the trigger the limit sits, as a fraction:
+	// the released limit of a stop-limit, or the price the engine sells at when it
+	// fires. Zero puts it at the trigger, which is the least likely to fill.
 	LimitOffsetPercent float64
+}
+
+// HeldByEngine reports whether this engine is the thing standing between the
+// position and a loss, given whether the regular session is open.
+func (shape StopShape) HeldByEngine(regularSession bool) bool {
+	switch shape.Enforcement {
+	case "":
+		return false
+	case StopInEngine:
+		return true
+	case StopBySession:
+		return !regularSession
+	default:
+		return false
+	}
+}
+
+// SwitchesBySession reports whether the holder changes with the session, which is
+// what obliges the engine to hand the stop over at the open and take it back at the
+// close.
+func (shape StopShape) SwitchesBySession() bool {
+	return shape.Enforcement == StopBySession
 }
 
 // DefaultStopShape is the plain stop. Unchanged from what this system has always
 // sent, so nothing switches to a different risk profile by accident.
 func DefaultStopShape() StopShape {
-	return StopShape{OrderType: "STOP_LOSS"}
+	return StopShape{Enforcement: StopAtBroker, OrderType: "STOP_LOSS"}
 }
 
 // Validate refuses a shape that cannot protect anything.
 func (shape StopShape) Validate() error {
+	if shape.Enforcement == StopBySession {
+		// Both halves have to be valid: the broker order it places at the open and the
+		// limit it sends outside the session.
+		return StopShape{
+			Enforcement: StopAtBroker, OrderType: shape.OrderType,
+			LimitOffsetPercent: brokerOffset(shape.OrderType, shape.LimitOffsetPercent),
+		}.Validate()
+	}
+	if shape.Enforcement == StopInEngine {
+		// No order type: it goes out as a plain limit, which is the whole point.
+		if shape.LimitOffsetPercent < 0 || shape.LimitOffsetPercent >= 0.5 {
+			return errors.New(
+				"the engine-held stop offset must be a fraction below 0.5; further than " +
+					"that and the sell is not protecting the position, it is guessing",
+			)
+		}
+		return nil
+	}
+	// An unset enforcement is the broker, which is what this system did before the
+	// choice existed. A zero value that means "nobody chose" should land on the
+	// arrangement that does not depend on this process staying up.
+	if shape.Enforcement != StopAtBroker && shape.Enforcement != "" {
+		return fmt.Errorf(
+			"unsupported stop enforcement %q; use broker, engine or session",
+			shape.Enforcement,
+		)
+	}
 	switch shape.OrderType {
 	case "STOP_LOSS":
 		if shape.LimitOffsetPercent != 0 {
@@ -315,9 +409,18 @@ func (shape StopShape) Validate() error {
 	return nil
 }
 
-// LimitFor returns the price the released order carries, given the trigger.
+// brokerOffset drops the offset for a plain stop, which has no limit to place it on,
+// while keeping it for a stop-limit.
+func brokerOffset(orderType string, offset float64) float64 {
+	if orderType == "STOP_LOSS_LIMIT" {
+		return offset
+	}
+	return 0
+}
+
+// LimitFor returns the price the protective sell carries, given the trigger.
 func (shape StopShape) LimitFor(trigger float64) float64 {
-	if shape.OrderType != "STOP_LOSS_LIMIT" {
+	if shape.Enforcement == StopAtBroker && shape.OrderType != "STOP_LOSS_LIMIT" {
 		return 0
 	}
 	return roundToCent(trigger * (1 - shape.LimitOffsetPercent))

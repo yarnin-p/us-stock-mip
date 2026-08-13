@@ -420,6 +420,7 @@ func buildBracketFeed(
 	// without the other, and a broker that cannot report a fill says so here
 	// instead of looking protected.
 	inspector, _ := modifier.(execution.OrderInspector)
+	canceller, _ := modifier.(bracket.StopCanceller)
 	settle := finisher
 	if inspector == nil {
 		settle = nil
@@ -436,10 +437,20 @@ func buildBracketFeed(
 		Finisher:   settle,
 		// The same shape the service placed with. Amending a stop-limit as a plain
 		// stop would drop the limit the broker is holding.
-		StopShape:   bracketStopShape(appConfig),
+		StopShape: bracketStopShape(appConfig),
+		// Withdrawing the resting stop at the close is half of the session handover, so
+		// the engine refuses that arrangement without a broker that can cancel.
+		Canceller:   canceller,
 		Logger:      logger,
 		Mode:        appConfig.TradingMode,
 		AmendableAt: bracketAmendableAt(appConfig),
+		// The clock, never the broker. In paper the broker accepts an amendment at any
+		// hour, and reading that as "the session is open" would hand every stop to the
+		// venue at three in the morning -- so a paper run would rehearse the one
+		// arrangement production never uses.
+		RegularSessionAt: func(at time.Time) bool {
+			return market.SessionAt(at) == market.SessionRegular
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -479,8 +490,14 @@ func buildBracketFeed(
 // bracketStopShape reads how the protective stop should be expressed. Named once so
 // the service that places it and the engine that amends it cannot disagree.
 func bracketStopShape(appConfig config.Config) bracket.StopShape {
-	shape := bracket.StopShape{OrderType: appConfig.BracketStopOrderType}
-	if shape.OrderType == "STOP_LOSS_LIMIT" {
+	shape := bracket.StopShape{
+		Enforcement: bracket.StopEnforcement(appConfig.BracketStopEnforcement),
+		OrderType:   appConfig.BracketStopOrderType,
+	}
+	// The offset prices the limit: the one a stop-limit releases, and the one the
+	// engine sells at when it fires. A plain broker stop has no limit to place.
+	if shape.OrderType == "STOP_LOSS_LIMIT" ||
+		shape.Enforcement != bracket.StopAtBroker {
 		shape.LimitOffsetPercent = appConfig.BracketStopLimitOffsetPercent
 	}
 	return shape
