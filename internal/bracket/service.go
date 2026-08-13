@@ -168,6 +168,7 @@ type Service struct {
 	// together: a service wired without a broker can still plan, record and read.
 	protector Protector
 	accounts  AccountSource
+	stopShape StopShape
 	log       *slog.Logger
 }
 
@@ -220,6 +221,23 @@ func (service *Service) WithBroker(
 	service.accounts = accounts
 	service.log = logger
 	return service
+}
+
+// WithStopShape chooses how the protective stop is expressed. It must match what the
+// engine amends with, or the amendment drops the limit the broker is holding.
+func (service *Service) WithStopShape(shape StopShape) (*Service, error) {
+	if err := shape.Validate(); err != nil {
+		return nil, err
+	}
+	service.stopShape = shape
+	return service, nil
+}
+
+func (service *Service) shape() StopShape {
+	if strings.TrimSpace(service.stopShape.OrderType) == "" {
+		return DefaultStopShape()
+	}
+	return service.stopShape
 }
 
 func (service *Service) logger() *slog.Logger {
@@ -296,11 +314,12 @@ func (service *Service) Arm(
 	}
 
 	stopID := fmt.Sprintf("bracket-%d-stop", id)
+	shape := service.shape()
 	if _, err := service.protector.PlaceOrder(ctx, execution.BrokerOrderRequest{
 		AccountID: account, ClientOrderID: stopID,
-		Ticker: record.Ticker, Side: "SELL", OrderType: "STOP_LOSS",
+		Ticker: record.Ticker, Side: "SELL", OrderType: shape.OrderType,
 		TimeInForce: "GTC", TradingSession: "ALL",
-		Quantity: quantity, StopPrice: stop,
+		Quantity: quantity, StopPrice: stop, LimitPrice: shape.LimitFor(stop),
 	}); err != nil {
 		return Record{}, fmt.Errorf(
 			"placing the stop for %s at %.4f: %w -- the position is unprotected and "+

@@ -126,8 +126,7 @@ func runWebullProbe(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stdout,
 		"\nwhich sessions each order type is allowed in (previews only -- nothing is placed)")
-	stopWorks := make([]string, 0, 4)
-	limitWorks := make([]string, 0, 4)
+	works := map[string][]string{}
 	for _, probe := range sessions {
 		fmt.Fprintf(
 			stdout, "  %-10s support_trading_session=%-10s %s\n",
@@ -139,24 +138,32 @@ func runWebullProbe(args []string, stdout, stderr io.Writer) error {
 			}
 			continue
 		}
-		if probe.OrderType == "STOP_LOSS" {
-			stopWorks = append(stopWorks, probe.Session)
-		} else {
-			limitWorks = append(limitWorks, probe.Session)
-		}
+		works[probe.OrderType] = append(works[probe.OrderType], probe.Session)
 	}
-	fmt.Fprintf(stdout, "\nLIMIT accepted with: %s\n", orNone(limitWorks))
-	fmt.Fprintf(stdout, "STOP_LOSS accepted with: %s\n", orNone(stopWorks))
-	if len(stopWorks) == 0 {
+	fmt.Fprintln(stdout)
+	for _, orderType := range []string{"LIMIT", "STOP_LOSS", "STOP_LOSS_LIMIT"} {
+		fmt.Fprintf(
+			stdout, "%-16s accepted with: %s\n", orderType, orNone(works[orderType]),
+		)
+	}
+	switch {
+	case len(works["STOP_LOSS"]) > 0:
 		fmt.Fprintln(stdout,
-			"no session value was accepted for a native stop. Either stops really are "+
-				"regular-hours only, or every value tried was wrong -- read the refusals "+
-				"above before concluding either.")
-	} else {
+			"\na plain stop is accepted. Send the value above and widen the engine's "+
+				"session gate to match it.")
+	case len(works["STOP_LOSS_LIMIT"]) > 0:
 		fmt.Fprintln(stdout,
-			"a native stop is accepted, so the value above is the one the adapter should "+
-				"send. If it covers the extended sessions, premarket trailing is possible "+
-				"and the engine's session gate should be widened to match.")
+			"\na plain stop is refused and a stop-limit is not. That is the restriction "+
+				"doing what it is for: a stop releases a market order and extended hours "+
+				"does not take those, while a stop-limit releases a limit. Set "+
+				"BRACKET_STOP_ORDER_TYPE=STOP_LOSS_LIMIT to protect a position outside the "+
+				"regular session -- and read what it costs first: through a gap a limit can "+
+				"fail to fill at all, and the position keeps falling.")
+	default:
+		fmt.Fprintln(stdout,
+			"\nno protective order was accepted under any value. Read the refusals above: "+
+				"if none of them names the session or the order type, the account is being "+
+				"refused for something else entirely and this says nothing about sessions.")
 	}
 	switch {
 	case verified:

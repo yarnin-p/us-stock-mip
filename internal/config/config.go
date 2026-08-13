@@ -57,7 +57,17 @@ type Config struct {
 	// price. The default is calm enough that a ladder configured for real momentum
 	// names never arms, which makes a dry run look like a broken engine rather than
 	// a quiet market; raising it is how the rungs get exercised before the open.
-	BracketFeedWalkVolatility      float64
+	BracketFeedWalkVolatility float64
+	// BracketStopOrderType is how the protective stop is expressed: STOP_LOSS, which
+	// releases a market order, or STOP_LOSS_LIMIT, which releases a limit. Extended
+	// hours does not accept market orders, so the second is the only one that can
+	// protect a position outside the regular session -- at the cost that through a gap
+	// the released limit can fail to fill at all. The default is the plain stop, so
+	// nothing changes its risk profile without being asked.
+	BracketStopOrderType string
+	// BracketStopLimitOffsetPercent is how far under the trigger the released limit
+	// sits, as a fraction. Only read for a stop-limit.
+	BracketStopLimitOffsetPercent  float64
 	MaxPositionValue               float64
 	MaxGrossExposure               float64
 	MaxCapitalAllocation           float64
@@ -829,6 +839,29 @@ func load(requireMassive bool) (Config, error) {
 		config.BracketFeedWalkVolatility > 0.5 {
 		return Config{}, errors.New(
 			"BRACKET_FEED_WALK_VOLATILITY must be a fraction between 0 and 0.5",
+		)
+	}
+	config.BracketStopOrderType = strings.ToUpper(strings.TrimSpace(
+		envOrDefault("BRACKET_STOP_ORDER_TYPE", "STOP_LOSS"),
+	))
+	switch config.BracketStopOrderType {
+	case "STOP_LOSS", "STOP_LOSS_LIMIT":
+	default:
+		return Config{}, fmt.Errorf(
+			"unsupported BRACKET_STOP_ORDER_TYPE %q; use STOP_LOSS or STOP_LOSS_LIMIT",
+			config.BracketStopOrderType,
+		)
+	}
+	config.BracketStopLimitOffsetPercent, err = floatEnv(
+		"BRACKET_STOP_LIMIT_OFFSET_PERCENT", 0.01,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.BracketStopLimitOffsetPercent < 0 ||
+		config.BracketStopLimitOffsetPercent >= 0.5 {
+		return Config{}, errors.New(
+			"BRACKET_STOP_LIMIT_OFFSET_PERCENT must be a fraction below 0.5",
 		)
 	}
 	switch config.BracketFeedAdapter {

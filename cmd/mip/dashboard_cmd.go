@@ -232,6 +232,12 @@ func runServe(args []string, stderr io.Writer) error {
 			bracketService = bracketService.WithBroker(
 				protector, bracketAccounts{appConfig: appConfig, store: store}, logger,
 			)
+			bracketService, err = bracketService.WithStopShape(
+				bracketStopShape(appConfig),
+			)
+			if err != nil {
+				return fmt.Errorf("configuring the protective stop: %w", err)
+			}
 		} else {
 			logger.Warn(
 				"this broker cannot place orders, so brackets can be planned but not armed",
@@ -423,11 +429,14 @@ func buildBracketFeed(
 		)
 	}
 	engine, err := bracket.NewEngine(bracket.EngineOptions{
-		Repository:  store,
-		Modifier:    modifier,
-		Seller:      seller,
-		Inspector:   inspector,
-		Finisher:    settle,
+		Repository: store,
+		Modifier:   modifier,
+		Seller:     seller,
+		Inspector:  inspector,
+		Finisher:   settle,
+		// The same shape the service placed with. Amending a stop-limit as a plain
+		// stop would drop the limit the broker is holding.
+		StopShape:   bracketStopShape(appConfig),
 		Logger:      logger,
 		Mode:        appConfig.TradingMode,
 		AmendableAt: bracketAmendableAt(appConfig),
@@ -467,6 +476,16 @@ func buildBracketFeed(
 	return supervisor, nil
 }
 
+// bracketStopShape reads how the protective stop should be expressed. Named once so
+// the service that places it and the engine that amends it cannot disagree.
+func bracketStopShape(appConfig config.Config) bracket.StopShape {
+	shape := bracket.StopShape{OrderType: appConfig.BracketStopOrderType}
+	if shape.OrderType == "STOP_LOSS_LIMIT" {
+		shape.LimitOffsetPercent = appConfig.BracketStopLimitOffsetPercent
+	}
+	return shape
+}
+
 // bracketAmendableAt reports when the broker in use will accept a stop amendment.
 //
 // Webull takes native stop orders only in the core session, so a trail that tries to
@@ -478,6 +497,13 @@ func buildBracketFeed(
 // right level, recorded it as refused, and the stop never moved.
 func bracketAmendableAt(appConfig config.Config) func(time.Time) bool {
 	if execution.Mode(appConfig.TradingMode) != execution.ModeLive {
+		return func(time.Time) bool { return true }
+	}
+	// A stop-limit releases a limit order, which extended hours does accept, so
+	// gating it to the regular session would throw away the entire reason for
+	// choosing it. Whether the venue agrees is what `mip webull-probe` reports; this
+	// follows the configured shape rather than asserting the answer.
+	if appConfig.BracketStopOrderType == "STOP_LOSS_LIMIT" {
 		return func(time.Time) bool { return true }
 	}
 	return func(at time.Time) bool {

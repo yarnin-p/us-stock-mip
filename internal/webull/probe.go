@@ -283,7 +283,12 @@ func (client *Client) ProbeOrderSessions(
 		symbol = "AAPL"
 	}
 	results := make([]SessionProbe, 0, len(sessionCandidates)*2)
-	for _, orderType := range []string{"LIMIT", "STOP_LOSS"} {
+	// STOP_LOSS_LIMIT is the one that matters most. A plain stop releases a market
+	// order when it triggers, and extended hours does not take market orders -- which
+	// is the actual shape of the restriction, not anything about the request format.
+	// A stop-limit releases a limit, so it is the protective order that can be legal
+	// outside the regular session.
+	for _, orderType := range []string{"LIMIT", "STOP_LOSS", "STOP_LOSS_LIMIT"} {
 		for _, session := range sessionCandidates {
 			results = append(
 				results, client.probeSession(ctx, accountID, symbol, orderType, session),
@@ -316,11 +321,15 @@ func (client *Client) probeSession(
 		AccountID: accountID, ClientOrderID: handle,
 		Ticker: symbol, TimeInForce: "DAY", Quantity: 1,
 	}
-	if orderType == "STOP_LOSS" {
+	switch orderType {
+	case "STOP_LOSS":
 		// A sell stop far under the market: nothing about it is attractive to fill,
 		// and a preview will not place it in any case.
 		request.Side, request.OrderType, request.StopPrice = "SELL", "STOP_LOSS", 1
-	} else {
+	case "STOP_LOSS_LIMIT":
+		request.Side, request.OrderType = "SELL", "STOP_LOSS_LIMIT"
+		request.StopPrice, request.LimitPrice = 1, 1
+	default:
 		request.Side, request.OrderType, request.LimitPrice = "BUY", "LIMIT", 1
 	}
 	payload := orderPayload(request)

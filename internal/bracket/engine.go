@@ -37,6 +37,7 @@ type Engine struct {
 	seller     SliceSeller
 	inspector  execution.OrderInspector
 	finisher   Finisher
+	stopShape  StopShape
 	logger     *slog.Logger
 	mode       string
 	// session reports whether native stop amendments are accepted at a given
@@ -80,6 +81,10 @@ type EngineOptions struct {
 	// protecting it -- so the constructor refuses one without the other.
 	Inspector execution.OrderInspector
 	Finisher  Finisher
+	// StopShape must match what placed the stop. Amending a stop-limit as though it
+	// were a plain stop drops the limit the broker is holding, and the venue either
+	// refuses it or quietly turns the protection into a market order.
+	StopShape StopShape
 	Logger    *slog.Logger
 	Mode      string
 	// AmendableAt gates amendments to the sessions the broker accepts them in.
@@ -105,6 +110,13 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 				"the system trailing a level for stock nobody holds",
 		)
 	}
+	shape := options.StopShape
+	if strings.TrimSpace(shape.OrderType) == "" {
+		shape = DefaultStopShape()
+	}
+	if err := shape.Validate(); err != nil {
+		return nil, err
+	}
 	mode := strings.TrimSpace(options.Mode)
 	if mode == "" {
 		mode = "paper"
@@ -115,6 +127,7 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 		seller:     options.Seller,
 		inspector:  options.Inspector,
 		finisher:   options.Finisher,
+		stopShape:  shape,
 		logger:     options.Logger,
 		mode:       mode,
 		session:    options.AmendableAt,
@@ -364,7 +377,8 @@ func (engine *Engine) settleSlice(
 	// means the operator chooses where the stop sits, and correcting the size it
 	// covers leaves that choice exactly where they put it.
 	stopErr := engine.amend(
-		ctx, record, record.StopOrderID, "STOP_LOSS", record.StopPrice, true,
+		ctx, record, record.StopOrderID, engine.stopShape.OrderType,
+		record.StopPrice, true,
 	)
 	targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT", record.TargetPrice, true,
@@ -522,7 +536,7 @@ func (engine *Engine) advance(
 	}
 
 	stopErr := engine.amend(
-		ctx, record, record.StopOrderID, "STOP_LOSS",
+		ctx, record, record.StopOrderID, engine.stopShape.OrderType,
 		adjustment.StopPrice, adjustment.StopPrice != record.StopPrice,
 	)
 	targetErr := engine.amend(
@@ -569,9 +583,14 @@ func (engine *Engine) amend(
 		Ticker: record.Ticker, OrderType: orderType,
 		TimeInForce: "GTC", Quantity: record.Quantity,
 	}
-	if orderType == "STOP_LOSS" {
+	switch orderType {
+	case "STOP_LOSS":
 		request.StopPrice = price
-	} else {
+	case "STOP_LOSS_LIMIT":
+		// Both, always. The trigger moves and the released limit moves with it.
+		request.StopPrice = price
+		request.LimitPrice = engine.stopShape.LimitFor(price)
+	default:
 		request.LimitPrice = price
 	}
 	if err := engine.modifier.ModifyOrder(ctx, request); err != nil {

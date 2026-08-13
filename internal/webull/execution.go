@@ -179,8 +179,22 @@ func validateModifyRequest(request execution.ModifyOrderRequest) error {
 				"webull STOP_LOSS modify requires a positive stop price",
 			)
 		}
+	case "STOP_LOSS_LIMIT":
+		if request.StopPrice <= 0 || request.LimitPrice <= 0 {
+			return errors.New(
+				"webull STOP_LOSS_LIMIT modify requires both the stop and the limit it " +
+					"releases",
+			)
+		}
+		if request.LimitPrice > request.StopPrice {
+			return errors.New(
+				"webull STOP_LOSS_LIMIT limit must be at or below the stop",
+			)
+		}
 	default:
-		return errors.New("webull modify supports LIMIT and STOP_LOSS orders")
+		return errors.New(
+			"webull modify supports LIMIT, STOP_LOSS and STOP_LOSS_LIMIT orders",
+		)
 	}
 	if request.TimeInForce != "DAY" && request.TimeInForce != "GTC" {
 		return errors.New("webull time in force must be DAY or GTC")
@@ -199,7 +213,11 @@ func modifyPayload(request execution.ModifyOrderRequest) map[string]any {
 		"time_in_force":   request.TimeInForce,
 		"entrust_type":    "QTY",
 	}
-	if request.OrderType == "STOP_LOSS" {
+	if request.OrderType == "STOP_LOSS_LIMIT" {
+		item["stop_price"] = strconv.FormatFloat(request.StopPrice, 'f', -1, 64)
+		item["limit_price"] = strconv.FormatFloat(request.LimitPrice, 'f', -1, 64)
+		item["support_trading_session"] = "ALL"
+	} else if request.OrderType == "STOP_LOSS" {
 		item["stop_price"] = strconv.FormatFloat(request.StopPrice, 'f', -1, 64)
 		// Unproven, and the same guess PlaceOrder makes. See probe.go: none of
 		// CORE, ALL or NIGHT appears in Webull's own SDK, whose examples send
@@ -345,8 +363,26 @@ func validateTradingOrder(order execution.BrokerOrderRequest) error {
 				"webull STOP_LOSS order requires SELL and a positive stop price",
 			)
 		}
+	case "STOP_LOSS_LIMIT":
+		// Both prices: the stop is the trigger, the limit is the order it releases.
+		// That is the difference that matters outside the regular session -- a plain
+		// stop releases a market order, and extended hours does not take those.
+		if order.Side != "SELL" || order.StopPrice <= 0 || order.LimitPrice <= 0 {
+			return errors.New(
+				"webull STOP_LOSS_LIMIT order requires SELL, a stop price and the limit " +
+					"price it releases",
+			)
+		}
+		if order.LimitPrice > order.StopPrice {
+			return errors.New(
+				"webull STOP_LOSS_LIMIT limit must be at or below the stop; above it the " +
+					"released order could never fill",
+			)
+		}
 	default:
-		return errors.New("webull execution adapter supports LIMIT and STOP_LOSS orders")
+		return errors.New(
+			"webull execution adapter supports LIMIT, STOP_LOSS and STOP_LOSS_LIMIT orders",
+		)
 	}
 	if order.TimeInForce != "DAY" && order.TimeInForce != "GTC" {
 		return errors.New("webull time in force must be DAY or GTC")
@@ -370,7 +406,15 @@ func orderPayload(order execution.BrokerOrderRequest) map[string]any {
 		"time_in_force":   order.TimeInForce,
 		"entrust_type":    "QTY",
 	}
-	if order.OrderType == "STOP_LOSS" {
+	if order.OrderType == "STOP_LOSS_LIMIT" {
+		// A stop that releases a limit rather than a market order. It is the only
+		// protective shape that can be legal outside the regular session, and in a
+		// thin name it is also the one that cannot be filled anywhere the book
+		// happens to be -- at the cost of not filling at all through a gap.
+		item["stop_price"] = strconv.FormatFloat(order.StopPrice, 'f', -1, 64)
+		item["limit_price"] = strconv.FormatFloat(order.LimitPrice, 'f', -1, 64)
+		item["support_trading_session"] = order.TradingSession
+	} else if order.OrderType == "STOP_LOSS" {
 		item["stop_price"] = strconv.FormatFloat(order.StopPrice, 'f', -1, 64)
 		// A guess, kept because changing it blind would be another guess. The claim
 		// that native stops are core-session only is not backed by anything measured:

@@ -270,3 +270,101 @@ func TestABracketCanOnlyBeArmedOnce(t *testing.T) {
 		t.Fatalf("placed %d orders across two attempts", len(orders))
 	}
 }
+
+// A stop-limit is the only protective shape that can be legal outside the regular
+// session, and it is only that if both prices go out together.
+func TestAStopLimitCarriesTheLimitItReleases(t *testing.T) {
+	record := pendingRecord()
+	protector := &stubProtector{}
+	service, _ := armService(t, record, protector, stubAccounts{id: "acct-9"})
+	service, err := service.WithStopShape(StopShape{
+		OrderType: "STOP_LOSS_LIMIT", LimitOffsetPercent: 0.02,
+	})
+	if err != nil {
+		t.Fatalf("shape: %v", err)
+	}
+	if _, err := service.Arm(
+		context.Background(), record.ID, ArmInput{FillPrice: 10.00},
+	); err != nil {
+		t.Fatalf("arm: %v", err)
+	}
+	var stop execution.BrokerOrderRequest
+	for _, order := range protector.orders() {
+		if order.OrderType == "STOP_LOSS_LIMIT" {
+			stop = order
+		}
+	}
+	if stop.OrderType != "STOP_LOSS_LIMIT" {
+		t.Fatalf("no stop-limit was placed: %+v", protector.orders())
+	}
+	if !(stop.StopPrice > 0) || !(stop.LimitPrice > 0) {
+		t.Fatalf("stop-limit = trigger %v limit %v; both are required",
+			stop.StopPrice, stop.LimitPrice)
+	}
+	// Below the trigger, or the released order can never fill.
+	if stop.LimitPrice > stop.StopPrice {
+		t.Fatalf("limit %v is above the trigger %v", stop.LimitPrice, stop.StopPrice)
+	}
+	want := roundToCent(stop.StopPrice * 0.98)
+	if stop.LimitPrice != want {
+		t.Fatalf("limit = %v, want %v (2%% under the trigger)", stop.LimitPrice, want)
+	}
+}
+
+// The engine has to amend with the shape the service placed. Sending a plain stop
+// amendment against a stop-limit drops the limit the broker is holding.
+func TestTheEngineAmendsAStopLimitWithBothPrices(t *testing.T) {
+	record := activeRecord()
+	repository := newStubRepository(record)
+	modifier := &stubModifier{}
+	engine, err := NewEngine(EngineOptions{
+		Repository: repository, Modifier: modifier,
+		StopShape: StopShape{OrderType: "STOP_LOSS_LIMIT", LimitOffsetPercent: 0.02},
+		Logger:    quietLogger(), Mode: "paper",
+	})
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	// Far enough up to ratchet the stop.
+	if err := engine.HandleTick(
+		context.Background(), tickAt(record.Ticker, 14.00),
+	); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	found := false
+	for _, call := range modifier.calls() {
+		if call.OrderType != "STOP_LOSS_LIMIT" {
+			continue
+		}
+		found = true
+		if !(call.StopPrice > 0) || !(call.LimitPrice > 0) {
+			t.Fatalf("amendment = trigger %v limit %v; both must move together",
+				call.StopPrice, call.LimitPrice)
+		}
+		if call.LimitPrice > call.StopPrice {
+			t.Fatalf("limit %v above trigger %v", call.LimitPrice, call.StopPrice)
+		}
+	}
+	if !found {
+		t.Fatalf("the stop was amended as something else: %+v", modifier.calls())
+	}
+}
+
+func TestAnImpossibleStopShapeIsRefused(t *testing.T) {
+	for name, shape := range map[string]StopShape{
+		"unknown type":            {OrderType: "TRAILING_STOP_LOSS"},
+		"offset on a market stop": {OrderType: "STOP_LOSS", LimitOffsetPercent: 0.02},
+		"offset too far":          {OrderType: "STOP_LOSS_LIMIT", LimitOffsetPercent: 0.9},
+		"negative offset":         {OrderType: "STOP_LOSS_LIMIT", LimitOffsetPercent: -0.01},
+	} {
+		if err := shape.Validate(); err == nil {
+			t.Errorf("%s: expected a refusal", name)
+		}
+		if _, err := NewEngine(EngineOptions{
+			Repository: newStubRepository(), Modifier: &stubModifier{},
+			StopShape: shape, Logger: quietLogger(),
+		}); err == nil {
+			t.Errorf("%s: the engine accepted it", name)
+		}
+	}
+}

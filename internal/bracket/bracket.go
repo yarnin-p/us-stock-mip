@@ -264,6 +264,65 @@ func (config Config) minimumStep() float64 {
 	return config.MinimumStep
 }
 
+// StopShape says how the protective stop is expressed at the broker.
+//
+// A plain stop releases a market order when it triggers. Extended hours does not
+// accept market orders, which is the real shape of the restriction on protecting a
+// position outside the regular session -- nothing to do with the request format. A
+// stop-limit releases a limit order instead, so it can be legal there.
+//
+// The cost is not small and it is the operator's to weigh: through a gap, a limit can
+// fail to fill at all while the position keeps falling. A market stop guarantees an
+// exit at a bad price; a stop-limit risks no exit. In a halted microcap that reopens
+// forty per cent lower, those are very different outcomes.
+type StopShape struct {
+	// OrderType is "STOP_LOSS" or "STOP_LOSS_LIMIT".
+	OrderType string
+	// LimitOffsetPercent is how far below the trigger the released limit sits, as a
+	// fraction. Only read for a stop-limit. Zero puts the limit at the trigger, which
+	// is the least likely to fill.
+	LimitOffsetPercent float64
+}
+
+// DefaultStopShape is the plain stop. Unchanged from what this system has always
+// sent, so nothing switches to a different risk profile by accident.
+func DefaultStopShape() StopShape {
+	return StopShape{OrderType: "STOP_LOSS"}
+}
+
+// Validate refuses a shape that cannot protect anything.
+func (shape StopShape) Validate() error {
+	switch shape.OrderType {
+	case "STOP_LOSS":
+		if shape.LimitOffsetPercent != 0 {
+			return errors.New(
+				"a plain stop releases a market order and has no limit to offset",
+			)
+		}
+	case "STOP_LOSS_LIMIT":
+		if shape.LimitOffsetPercent < 0 || shape.LimitOffsetPercent >= 0.5 {
+			return errors.New(
+				"the stop-limit offset must be a fraction below 0.5; further than that " +
+					"and the limit is not protecting the position, it is guessing",
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"unsupported stop order type %q; use STOP_LOSS or STOP_LOSS_LIMIT",
+			shape.OrderType,
+		)
+	}
+	return nil
+}
+
+// LimitFor returns the price the released order carries, given the trigger.
+func (shape StopShape) LimitFor(trigger float64) float64 {
+	if shape.OrderType != "STOP_LOSS_LIMIT" {
+		return 0
+	}
+	return roundToCent(trigger * (1 - shape.LimitOffsetPercent))
+}
+
 // Bracket is one protected position: what was bought, where the protective
 // orders currently sit, and the best price seen since entry.
 type Bracket struct {
