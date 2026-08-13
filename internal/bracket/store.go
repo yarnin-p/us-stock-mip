@@ -27,11 +27,17 @@ type Record struct {
 	// ManualHold means the operator has taken the wheel: the engine records what it
 	// would have done and sends nothing. It exists because a stop typed by hand and
 	// then moved by the engine leaves nobody able to say which of them is driving.
-	ManualHold bool       `json:"manual_hold"`
-	Note       string     `json:"note,omitempty"`
-	OpenedAt   time.Time  `json:"opened_at"`
-	ClosedAt   *time.Time `json:"closed_at,omitempty"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ManualHold bool `json:"manual_hold"`
+	// PartialTakenQuantity is how much has already been sold into strength, and
+	// PartialOrderID is the sale that did it. A quantity rather than a flag, because
+	// the remainder is what the stop still protects and a boolean could not say how
+	// much that is.
+	PartialTakenQuantity float64    `json:"partial_taken_quantity,omitempty"`
+	PartialOrderID       string     `json:"partial_order_id,omitempty"`
+	Note                 string     `json:"note,omitempty"`
+	OpenedAt             time.Time  `json:"opened_at"`
+	ClosedAt             *time.Time `json:"closed_at,omitempty"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 
 	// LastPrice and UnrealizedPnL are filled by the reader for display and are
 	// not persisted; they come from the quote feed at read time.
@@ -48,7 +54,8 @@ func (record Record) Bracket() Bracket {
 	return Bracket{
 		ID: record.ID, Ticker: record.Ticker, State: record.State,
 		Config: record.Config, Quantity: record.Quantity,
-		EntryPrice: entry, StopPrice: record.StopPrice,
+		PartialTakenQuantity: record.PartialTakenQuantity,
+		EntryPrice:           entry, StopPrice: record.StopPrice,
 		TargetPrice: record.TargetPrice, HighWater: record.HighWater,
 	}
 }

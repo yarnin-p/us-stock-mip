@@ -22,7 +22,9 @@ const bracketColumns = `id, mode, coalesce(account_id, ''), ticker, state,
 	break_even_after, break_even_floor, profit_lock_after, profit_lock_floor,
 	fee_round_trip_percent,
 	coalesce(entry_order_id, ''), coalesce(stop_order_id, ''),
-	coalesce(target_order_id, ''), risk_flags, manual_hold, coalesce(note, ''),
+	coalesce(target_order_id, ''), risk_flags, manual_hold,
+	partial_tp_after, partial_tp_fraction, partial_tp_min_shares,
+	partial_taken_quantity, coalesce(partial_order_id, ''), coalesce(note, ''),
 	opened_at, closed_at, updated_at`
 
 func (store *Store) CreateBracket(
@@ -38,14 +40,15 @@ func (store *Store) CreateBracket(
 			trail_target_after, trail_target_distance, minimum_step,
 			break_even_after, break_even_floor,
 			profit_lock_after, profit_lock_floor, fee_round_trip_percent,
+			partial_tp_after, partial_tp_fraction, partial_tp_min_shares,
 			entry_order_id, stop_order_id, target_order_id, risk_flags, note
 		) VALUES (
 			$1, nullif($2, ''), $3, $4, $5, $6,
 			nullif($7, 0::numeric), nullif($8, 0::numeric),
 			nullif($9, 0::numeric), nullif($10, 0::numeric),
 			$11, $12, $13, $14, $15, $16, $17,
-			$18, $19, $20, $21, $22,
-			nullif($23, ''), nullif($24, ''), nullif($25, ''), $26, nullif($27, '')
+			$18, $19, $20, $21, $22, $23, $24, $25,
+			nullif($26, ''), nullif($27, ''), nullif($28, ''), $29, nullif($30, '')
 		) RETURNING `+bracketColumns,
 		record.Mode, record.AccountID, record.Ticker, string(record.State),
 		record.Quantity, record.RequestedEntry,
@@ -57,6 +60,8 @@ func (store *Store) CreateBracket(
 		record.Config.BreakEvenAfter, record.Config.BreakEvenFloor,
 		record.Config.ProfitLockAfter, record.Config.ProfitLockFloor,
 		record.Config.FeeRoundTripPercent,
+		record.Config.PartialTPAfter, record.Config.PartialTPFraction,
+		record.Config.PartialTPMinShares,
 		record.EntryOrderID, record.StopOrderID, record.TargetOrderID,
 		nonNilStrings(record.RiskFlags), record.Note,
 	)
@@ -138,8 +143,11 @@ func (store *Store) SaveBracket(
 			profit_lock_after = $14,
 			profit_lock_floor = $15,
 			fee_round_trip_percent = $16,
-			manual_hold = $17,
-			note = coalesce(nullif($18, ''), note),
+			partial_tp_after = $17,
+			partial_tp_fraction = $18,
+			partial_tp_min_shares = $19,
+			manual_hold = $20,
+			note = coalesce(nullif($21, ''), note),
 			updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+bracketColumns,
@@ -151,6 +159,8 @@ func (store *Store) SaveBracket(
 		record.Config.BreakEvenAfter, record.Config.BreakEvenFloor,
 		record.Config.ProfitLockAfter, record.Config.ProfitLockFloor,
 		record.Config.FeeRoundTripPercent,
+		record.Config.PartialTPAfter, record.Config.PartialTPFraction,
+		record.Config.PartialTPMinShares,
 		record.ManualHold, record.Note,
 	)
 	updated, err := scanBracket(row)
@@ -207,11 +217,17 @@ func (store *Store) SaveLevels(
 			high_water = nullif($4, 0::numeric),
 			stop_order_id = coalesce(nullif($5, ''), stop_order_id),
 			target_order_id = coalesce(nullif($6, ''), target_order_id),
+			-- The engine reduces the position when it sells a slice, so the size and
+			-- the sale that shrank it travel with the levels they now protect.
+			quantity = $7,
+			partial_taken_quantity = $8,
+			partial_order_id = coalesce(nullif($9, ''), partial_order_id),
 			updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+bracketColumns,
 		record.ID, record.StopPrice, record.TargetPrice, record.HighWater,
 		record.StopOrderID, record.TargetOrderID,
+		record.Quantity, record.PartialTakenQuantity, record.PartialOrderID,
 	)
 	updated, err := scanBracket(row)
 	if err != nil {
@@ -373,7 +389,10 @@ func scanBracket(row bracketRow) (bracket.Record, error) {
 		&record.Config.ProfitLockAfter, &record.Config.ProfitLockFloor,
 		&record.Config.FeeRoundTripPercent,
 		&record.EntryOrderID, &record.StopOrderID, &record.TargetOrderID,
-		&record.RiskFlags, &record.ManualHold, &record.Note,
+		&record.RiskFlags, &record.ManualHold,
+		&record.Config.PartialTPAfter, &record.Config.PartialTPFraction,
+		&record.Config.PartialTPMinShares,
+		&record.PartialTakenQuantity, &record.PartialOrderID, &record.Note,
 		&record.OpenedAt, &closedAt, &record.UpdatedAt,
 	); err != nil {
 		return bracket.Record{}, err

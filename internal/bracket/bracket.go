@@ -40,6 +40,7 @@ const (
 	TriggerInitial     Trigger = "INITIAL"      // first placement after entry fills
 	TriggerBreakEven   Trigger = "BREAK_EVEN"   // stop lifted to cover the round trip
 	TriggerProfitLock  Trigger = "PROFIT_LOCK"  // stop lifted to keep a real gain
+	TriggerPartialTP   Trigger = "PARTIAL_TP"   // a slice sold into strength
 	TriggerTrailStop   Trigger = "TRAIL_STOP"   // stop ratcheted under a new high
 	TriggerTrailTarget Trigger = "TRAIL_TARGET" // target extended above a new high
 	TriggerManual      Trigger = "MANUAL"       // operator typed new levels
@@ -90,6 +91,19 @@ type Config struct {
 	// $1.60 share whose round trip costs 1.4% keeps nothing. The caller computes
 	// it, since only the caller knows its broker's schedule.
 	FeeRoundTripPercent float64
+
+	// PartialTPAfter is the gain at which a slice of the position is sold, and
+	// PartialTPFraction is how much of the original size that slice is. Zero
+	// disables it.
+	//
+	// It sits above the trail activation deliberately. Taking profit before the
+	// trail engages would shrink the position that the runner case exists to
+	// exploit, and the measured edge in these names is entirely in the right tail.
+	PartialTPAfter    float64
+	PartialTPFraction float64
+	// PartialTPMinShares refuses a slice too small to be worth its own commission.
+	// At a cent a share a ten-share sale costs more in fees than it protects.
+	PartialTPMinShares float64
 
 	// MinimumStep is the smallest relative move worth an amendment. It defaults
 	// to DefaultMinimumStep, matching the ratchet the strategy coordinator
@@ -204,6 +218,33 @@ func (config Config) validateFloors() error {
 			)
 		}
 	}
+	if config.PartialTPAfter != 0 || config.PartialTPFraction != 0 ||
+		config.PartialTPMinShares != 0 {
+		if config.PartialTPAfter <= 0 || !finite(config.PartialTPAfter) {
+			return errors.New(
+				"partial take-profit activation must be positive when a slice is set",
+			)
+		}
+		if !positiveFraction(config.PartialTPFraction) {
+			return errors.New(
+				"partial take-profit fraction must be between 0 and 1",
+			)
+		}
+		if config.PartialTPMinShares < 0 || !finite(config.PartialTPMinShares) {
+			return errors.New(
+				"partial take-profit minimum shares must be zero or positive",
+			)
+		}
+		if config.TrailStopAfter > 0 &&
+			config.PartialTPAfter <= config.TrailStopAfter {
+			return fmt.Errorf(
+				"partial take-profit at %.4f must be above the trail activation "+
+					"%.4f; selling before the trail engages shrinks the runner the "+
+					"trail exists for",
+				config.PartialTPAfter, config.TrailStopAfter,
+			)
+		}
+	}
 	if config.TrailStopAfter > 0 && config.ProfitLockAfter > 0 &&
 		config.TrailStopAfter <= config.ProfitLockAfter {
 		return fmt.Errorf(
@@ -230,6 +271,10 @@ type Bracket struct {
 	State    State
 	Config   Config
 	Quantity float64
+	// PartialTakenQuantity is how much of the original size has already been sold
+	// into strength. Plan reads it to know the slice was taken, so a later tick at
+	// the same gain does not sell again.
+	PartialTakenQuantity float64
 
 	// EntryPrice is the average fill of the entry order once known, and the
 	// intended entry before that. Every level is derived from it.
@@ -257,7 +302,11 @@ type Adjustment struct {
 	PreviousStopPrice   float64
 	PreviousTargetPrice float64
 	HighWater           float64
-	Reason              string
+	// PartialQuantity is how much to sell now. It is an intent like the levels
+	// are: Plan decides, and only the caller reaches a broker. Zero means no slice
+	// is due.
+	PartialQuantity float64
+	Reason          string
 }
 
 // Plan decides where the protective orders belong now that the market has
@@ -334,6 +383,39 @@ func Plan(current Bracket, lastPrice float64) (Adjustment, error) {
 			adjustment.TargetPrice = candidate
 			if adjustment.Trigger == "" {
 				adjustment.Trigger = TriggerTrailTarget
+			}
+			adjustment.Changed = true
+		}
+	}
+
+	// The slice is decided from the high-water mark like the floors are, so a tick
+	// that dips after the level was reached does not un-arm it. It is taken once:
+	// PartialTakenQuantity is what already left, and a second slice would be a
+	// different rung nobody configured.
+	if config.PartialTPAfter > 0 && gain >= config.PartialTPAfter &&
+		current.PartialTakenQuantity <= 0 && current.Quantity > 0 {
+		slice := math.Floor(current.Quantity * config.PartialTPFraction)
+		switch {
+		case slice < config.PartialTPMinShares:
+			// Refusing loudly would fail a tick for a rule that simply does not apply
+			// to a position this small, so the rung is skipped and says why.
+			reasons = append(reasons, fmt.Sprintf(
+				"partial take-profit skipped: %.0f shares is under the %.0f minimum",
+				slice, config.PartialTPMinShares,
+			))
+		case slice >= current.Quantity:
+			reasons = append(reasons, fmt.Sprintf(
+				"partial take-profit skipped: %.0f shares would close the position, "+
+					"which is an exit rather than a slice", slice,
+			))
+		case slice > 0:
+			reasons = append(reasons, fmt.Sprintf(
+				"partial take-profit %.0f of %.0f shares (up %.1f%%)",
+				slice, current.Quantity, gain*100,
+			))
+			adjustment.PartialQuantity = slice
+			if adjustment.Trigger == "" {
+				adjustment.Trigger = TriggerPartialTP
 			}
 			adjustment.Changed = true
 		}

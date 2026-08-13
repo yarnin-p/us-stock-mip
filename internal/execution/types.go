@@ -230,9 +230,12 @@ type BrokerAdapter interface {
 	GetFills(context.Context, string) ([]Fill, error)
 }
 
-// ModifyOrderRequest amends the price of an order already working at the broker.
-// Quantity and side cannot change here: moving a protective level is a price
-// edit, and anything more is a different order.
+// ModifyOrderRequest amends an order already working at the broker.
+//
+// Side cannot change: that would be a different order. Quantity can, but only to
+// match a position that has genuinely shrunk -- selling a slice into strength
+// leaves a stop covering more shares than are held, and the resize is the same
+// edit as the price move rather than a new promise.
 type ModifyOrderRequest struct {
 	AccountID     string
 	ClientOrderID string

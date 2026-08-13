@@ -34,6 +34,7 @@ import (
 type Engine struct {
 	repository Repository
 	modifier   execution.OrderModifier
+	seller     SliceSeller
 	logger     *slog.Logger
 	mode       string
 	// session reports whether native stop amendments are accepted at a given
@@ -48,13 +49,30 @@ type Engine struct {
 	locks map[string]*sync.Mutex
 }
 
+// SliceSeller sells part of a position, for the partial take-profit rung.
+//
+// It is a separate port from OrderModifier because the two are different promises.
+// Amending moves a level on an order already protecting the position; this reduces
+// the position itself. A broker that can do one may not do the other, and a caller
+// holding only a modifier should hear that the rung is unavailable rather than have
+// it silently skipped.
+type SliceSeller interface {
+	PlaceOrder(
+		context.Context, execution.BrokerOrderRequest,
+	) (execution.Submission, error)
+}
+
 // EngineOptions wires the engine. Repository and modifier are required; the rest
 // have working defaults.
 type EngineOptions struct {
 	Repository Repository
 	Modifier   execution.OrderModifier
-	Logger     *slog.Logger
-	Mode       string
+	// Seller is required only by brackets configured with a partial take-profit.
+	// Leaving it out is legal and the rung then records why it did nothing, which is
+	// more honest than a config that silently means less than it says.
+	Seller SliceSeller
+	Logger *slog.Logger
+	Mode   string
 	// AmendableAt gates amendments to the sessions the broker accepts them in.
 	// The default allows every session, which is correct for paper and wrong for
 	// Webull -- the caller wiring a live adapter must pass the real gate.
@@ -78,6 +96,7 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 	engine := &Engine{
 		repository: options.Repository,
 		modifier:   options.Modifier,
+		seller:     options.Seller,
 		logger:     options.Logger,
 		mode:       mode,
 		session:    options.AmendableAt,
@@ -146,6 +165,54 @@ func (engine *Engine) HandleTick(
 	return failures
 }
 
+// sellSlice takes the partial take-profit. It reduces the tracked position only
+// after the broker has accepted the sale, so a rejected slice cannot leave the
+// engine guarding a size that never left.
+//
+// The slice goes out as a limit at the price that armed it rather than a market
+// order. These are thin names: a market sale of a quarter of the position is
+// exactly the order that walks its own book down, and the rung exists to bank a
+// gain, not to donate it to the spread.
+func (engine *Engine) sellSlice(
+	ctx context.Context, record Record, adjustment Adjustment, lastPrice float64,
+) (bool, error) {
+	if engine.seller == nil {
+		engine.record(ctx, record, adjustment, lastPrice, false,
+			"partial take-profit is configured but this broker cannot place the sale")
+		return false, nil
+	}
+	submission, err := engine.seller.PlaceOrder(ctx, execution.BrokerOrderRequest{
+		AccountID:      record.AccountID,
+		ClientOrderID:  partialOrderID(record),
+		Ticker:         record.Ticker,
+		Side:           "SELL",
+		OrderType:      "LIMIT",
+		TimeInForce:    "DAY",
+		TradingSession: "CORE",
+		Quantity:       adjustment.PartialQuantity,
+		LimitPrice:     roundToCent(lastPrice),
+	})
+	if err != nil {
+		return false, fmt.Errorf(
+			"selling %.0f of %.0f %s shares: %w",
+			adjustment.PartialQuantity, record.Quantity, record.Ticker, err,
+		)
+	}
+	engine.logger.Info(
+		"bracket took partial profit",
+		"ticker", record.Ticker, "bracket_id", record.ID,
+		"shares", adjustment.PartialQuantity, "of", record.Quantity,
+		"limit", roundToCent(lastPrice), "broker_order", submission.BrokerOrderID,
+	)
+	return true, nil
+}
+
+// partialOrderID keeps the slice traceable to the bracket that produced it, and
+// makes a duplicate send idempotent at brokers that key on the client id.
+func partialOrderID(record Record) string {
+	return fmt.Sprintf("bracket-%d-partial", record.ID)
+}
+
 // holdBack records what the engine would have moved while the operator holds the
 // wheel. It is a record and nothing else: no broker call, no level change.
 func (engine *Engine) holdBack(
@@ -204,13 +271,32 @@ func (engine *Engine) advance(
 		return false, nil
 	}
 
+	resized := false
+	if adjustment.PartialQuantity > 0 {
+		sold, err := engine.sellSlice(ctx, record, adjustment, lastPrice)
+		switch {
+		case err != nil:
+			engine.record(ctx, record, adjustment, lastPrice, false, err.Error())
+			return false, err
+		case sold:
+			// The protective orders now cover more shares than are held, so the size
+			// is reduced here, before they are amended. Reducing it afterwards would
+			// send the resize with the old quantity and leave a stop covering stock
+			// that has already gone.
+			record.PartialTakenQuantity += adjustment.PartialQuantity
+			record.Quantity -= adjustment.PartialQuantity
+			record.PartialOrderID = partialOrderID(record)
+			resized = true
+		}
+	}
+
 	stopErr := engine.amend(
 		ctx, record, record.StopOrderID, "STOP_LOSS",
-		adjustment.StopPrice, adjustment.StopPrice != record.StopPrice,
+		adjustment.StopPrice, resized || adjustment.StopPrice != record.StopPrice,
 	)
 	targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT",
-		adjustment.TargetPrice, adjustment.TargetPrice != record.TargetPrice,
+		adjustment.TargetPrice, resized || adjustment.TargetPrice != record.TargetPrice,
 	)
 	if brokerErr := errors.Join(stopErr, targetErr); brokerErr != nil {
 		engine.record(ctx, record, adjustment, lastPrice, false, brokerErr.Error())

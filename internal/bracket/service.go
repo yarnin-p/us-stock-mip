@@ -39,6 +39,11 @@ type OpenInput struct {
 	// as a fraction of notional. Both floors are net of it.
 	FeeRoundTripPercent float64 `json:"fee_round_trip_percent,omitempty"`
 
+	// The slice sold into strength. It must arm above the trail.
+	PartialTPAfter     float64 `json:"partial_tp_after,omitempty"`
+	PartialTPFraction  float64 `json:"partial_tp_fraction,omitempty"`
+	PartialTPMinShares float64 `json:"partial_tp_min_shares,omitempty"`
+
 	// AccountEquity lets the preview state the loss as a share of the whole
 	// account, which is the number that decides whether one bad fill matters.
 	AccountEquity float64 `json:"account_equity,omitempty"`
@@ -101,6 +106,9 @@ func Preview(input OpenInput) (EntryPlan, error) {
 		ProfitLockAfter:     input.ProfitLockAfter,
 		ProfitLockFloor:     input.ProfitLockFloor,
 		FeeRoundTripPercent: input.FeeRoundTripPercent,
+		PartialTPAfter:      input.PartialTPAfter,
+		PartialTPFraction:   input.PartialTPFraction,
+		PartialTPMinShares:  input.PartialTPMinShares,
 		MinimumStep:         DefaultMinimumStep,
 	}
 	stop, target, err := Levels(input.EntryPrice, config)

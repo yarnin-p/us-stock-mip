@@ -369,9 +369,14 @@ func buildBracketFeed(
 	if err != nil {
 		return nil, err
 	}
+	// The same adapter sells the partial slice. It is passed as a separate port so
+	// the engine can tell a broker that can amend from one that can also place, and
+	// report the partial rung as unavailable rather than skip it in silence.
+	seller, _ := modifier.(bracket.SliceSeller)
 	engine, err := bracket.NewEngine(bracket.EngineOptions{
 		Repository: store,
 		Modifier:   modifier,
+		Seller:     seller,
 		Logger:     logger,
 		Mode:       appConfig.TradingMode,
 		// Webull accepts stop amendments only in the core session. Passing the real

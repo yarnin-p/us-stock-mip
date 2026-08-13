@@ -2,9 +2,12 @@ package bracket
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/momentum-intelligence-platform/mip/internal/execution"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata/synthetic"
 )
@@ -267,5 +270,228 @@ func TestAHeldBracketIsRecordedButNeverSent(t *testing.T) {
 	}
 	if entry.BrokerError == "" {
 		t.Fatal("the suppression did not record why")
+	}
+}
+
+// partialConfig arms a slice above the trail: a quarter of the position at +30%.
+func partialConfig() Config {
+	config := ladderConfig()
+	config.PartialTPAfter = 0.30
+	config.PartialTPFraction = 0.25
+	config.PartialTPMinShares = 5
+	return config
+}
+
+type stubSeller struct {
+	mutex    sync.Mutex
+	requests []execution.BrokerOrderRequest
+	err      error
+}
+
+func (seller *stubSeller) PlaceOrder(
+	_ context.Context, request execution.BrokerOrderRequest,
+) (execution.Submission, error) {
+	seller.mutex.Lock()
+	defer seller.mutex.Unlock()
+	seller.requests = append(seller.requests, request)
+	if seller.err != nil {
+		return execution.Submission{}, seller.err
+	}
+	return execution.Submission{BrokerOrderID: "slice-1"}, nil
+}
+
+func (seller *stubSeller) sales() []execution.BrokerOrderRequest {
+	seller.mutex.Lock()
+	defer seller.mutex.Unlock()
+	return append([]execution.BrokerOrderRequest(nil), seller.requests...)
+}
+
+func newSellingEngine(
+	t *testing.T, repository Repository, modifier execution.OrderModifier,
+	seller SliceSeller,
+) *Engine {
+	t.Helper()
+	engine, err := NewEngine(EngineOptions{
+		Repository: repository, Modifier: modifier, Seller: seller,
+		Logger: quietLogger(), Mode: "paper",
+	})
+	if err != nil {
+		t.Fatalf("engine: %v", err)
+	}
+	return engine
+}
+
+func partialRecord(t *testing.T) Record {
+	t.Helper()
+	record := activeRecord()
+	record.Config = partialConfig()
+	stop, target, err := Levels(record.EntryPrice, record.Config)
+	if err != nil {
+		t.Fatalf("levels: %v", err)
+	}
+	record.StopPrice, record.TargetPrice = stop, target
+	return record
+}
+
+func TestPartialTakeProfitSellsASliceAndResizesTheProtection(t *testing.T) {
+	record := partialRecord(t)
+	repository := newStubRepository(record)
+	modifier := &stubModifier{}
+	seller := &stubSeller{}
+	engine := newSellingEngine(t, repository, modifier, seller)
+
+	// +35%: past the 30% slice trigger.
+	if err := engine.HandleTick(
+		context.Background(), tickAt(record.Ticker, 13.50),
+	); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	sales := seller.sales()
+	if len(sales) != 1 {
+		t.Fatalf("sales = %d, want 1", len(sales))
+	}
+	sale := sales[0]
+	if sale.Side != "SELL" || sale.Quantity != 25 {
+		t.Fatalf("sale = %+v, want a SELL of 25 of 100", sale)
+	}
+	// A market order in a thin name walks its own book down, which is exactly what
+	// this rung is meant to avoid.
+	if sale.OrderType != "LIMIT" || sale.LimitPrice != 13.50 {
+		t.Fatalf("sale should be a limit at the arming price: %+v", sale)
+	}
+
+	stored := repository.stored(t, record.ID)
+	if stored.PartialTakenQuantity != 25 || stored.Quantity != 75 {
+		t.Fatalf("position = %v held, %v sold; want 75 and 25",
+			stored.Quantity, stored.PartialTakenQuantity)
+	}
+	// The stop was covering 100 shares a moment ago. Leaving it there would have it
+	// selling stock that has already gone.
+	resized := false
+	for _, call := range modifier.calls() {
+		if call.OrderType == "STOP_LOSS" && call.Quantity == 75 {
+			resized = true
+		}
+	}
+	if !resized {
+		t.Fatalf("the stop was not resized to the remaining 75: %+v", modifier.calls())
+	}
+}
+
+func TestTheSliceIsTakenOnceEvenAsThePriceKeepsRunning(t *testing.T) {
+	record := partialRecord(t)
+	repository := newStubRepository(record)
+	seller := &stubSeller{}
+	engine := newSellingEngine(t, repository, &stubModifier{}, seller)
+	ctx := context.Background()
+
+	for _, price := range []float64{13.50, 14.00, 20.00, 15.00} {
+		if err := engine.HandleTick(ctx, tickAt(record.Ticker, price)); err != nil {
+			t.Fatalf("handle %v: %v", price, err)
+		}
+	}
+	if sales := seller.sales(); len(sales) != 1 {
+		t.Fatalf("sales = %d, want the slice taken once", len(sales))
+	}
+}
+
+func TestARejectedSliceLeavesThePositionWhole(t *testing.T) {
+	record := partialRecord(t)
+	repository := newStubRepository(record)
+	seller := &stubSeller{err: errors.New("broker rejected the sale")}
+	engine := newSellingEngine(t, repository, &stubModifier{}, seller)
+
+	err := engine.HandleTick(context.Background(), tickAt(record.Ticker, 13.50))
+	if err == nil {
+		t.Fatal("a rejected slice must be reported")
+	}
+	stored := repository.stored(t, record.ID)
+	if stored.Quantity != 100 || stored.PartialTakenQuantity != 0 {
+		t.Fatalf("position = %v held, %v sold; a rejected sale must change neither",
+			stored.Quantity, stored.PartialTakenQuantity)
+	}
+	if repository.auditCount() != 1 {
+		t.Fatal("the rejection was not recorded")
+	}
+}
+
+func TestABrokerThatCannotSellSaysSoRatherThanSkipSilently(t *testing.T) {
+	record := partialRecord(t)
+	repository := newStubRepository(record)
+	// No seller: the amend capability alone cannot take a slice.
+	engine := newTestEngine(repository, &stubModifier{})
+
+	if err := engine.HandleTick(
+		context.Background(), tickAt(record.Ticker, 13.50),
+	); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	stored := repository.stored(t, record.ID)
+	if stored.PartialTakenQuantity != 0 {
+		t.Fatal("a slice was recorded with no broker able to sell it")
+	}
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if len(repository.adjustments) == 0 {
+		t.Fatal("nothing recorded the unavailable rung")
+	}
+	// The trail is independent protection and must still move, so the explanation
+	// is one row among several rather than the last one.
+	explained := false
+	for _, entry := range repository.adjustments {
+		if !entry.Applied && strings.Contains(entry.BrokerError, "cannot place") {
+			explained = true
+		}
+	}
+	if !explained {
+		t.Fatalf("the unavailable rung was not explained: %+v", repository.adjustments)
+	}
+}
+
+func TestASliceTooSmallToPayItsCommissionIsSkipped(t *testing.T) {
+	record := partialRecord(t)
+	// 10 shares * 25% = 2, under the 5-share minimum.
+	record.Quantity = 10
+	repository := newStubRepository(record)
+	seller := &stubSeller{}
+	engine := newSellingEngine(t, repository, &stubModifier{}, seller)
+
+	if err := engine.HandleTick(
+		context.Background(), tickAt(record.Ticker, 13.50),
+	); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if sales := seller.sales(); len(sales) != 0 {
+		t.Fatalf("a sub-minimum slice was sold: %+v", sales)
+	}
+}
+
+func TestPartialTakeProfitMustArmAboveTheTrail(t *testing.T) {
+	config := partialConfig()
+	config.PartialTPAfter = 0.10 // below the 20% trail
+	if err := config.Validate(); err == nil {
+		t.Fatal("a slice arming before the trail was accepted")
+	}
+	for name, mutate := range map[string]func(Config) Config{
+		"fraction with no trigger": func(config Config) Config {
+			config.PartialTPAfter = 0
+			return config
+		},
+		"whole position": func(config Config) Config {
+			config.PartialTPFraction = 1
+			return config
+		},
+		"negative minimum": func(config Config) Config {
+			config.PartialTPMinShares = -1
+			return config
+		},
+	} {
+		if err := mutate(partialConfig()).Validate(); err == nil {
+			t.Errorf("%s: expected the config to be refused", name)
+		}
+	}
+	if err := partialConfig().Validate(); err != nil {
+		t.Fatalf("a well-ordered slice was refused: %v", err)
 	}
 }
