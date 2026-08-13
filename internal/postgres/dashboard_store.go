@@ -1108,6 +1108,10 @@ func (store *Store) RealtimeTickers(ctx context.Context) ([]string, error) {
 			WHERE exited_at IS NULL
 			UNION ALL
 			SELECT ticker,0,0
+			FROM brackets
+			WHERE state IN ('PENDING','ACTIVE')
+			UNION ALL
+			SELECT ticker,0,0
 			FROM watchlists
 			UNION ALL
 			SELECT
