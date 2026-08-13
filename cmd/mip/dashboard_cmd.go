@@ -229,7 +229,9 @@ func runServe(args []string, stderr io.Writer) error {
 		bracketBroker = nil
 	default:
 		if protector, ok := bracketBroker.(bracket.Protector); ok {
-			bracketService = bracketService.WithBroker(protector, store, logger)
+			bracketService = bracketService.WithBroker(
+				protector, bracketAccounts{appConfig: appConfig, store: store}, logger,
+			)
 		} else {
 			logger.Warn(
 				"this broker cannot place orders, so brackets can be planned but not armed",
@@ -421,19 +423,14 @@ func buildBracketFeed(
 		)
 	}
 	engine, err := bracket.NewEngine(bracket.EngineOptions{
-		Repository: store,
-		Modifier:   modifier,
-		Seller:     seller,
-		Inspector:  inspector,
-		Finisher:   settle,
-		Logger:     logger,
-		Mode:       appConfig.TradingMode,
-		// Webull accepts stop amendments only in the core session. Passing the real
-		// gate is the caller's job precisely because the default allows every
-		// session, which is right for paper and wrong for a live broker.
-		AmendableAt: func(at time.Time) bool {
-			return market.SessionAt(at) == market.SessionRegular
-		},
+		Repository:  store,
+		Modifier:    modifier,
+		Seller:      seller,
+		Inspector:   inspector,
+		Finisher:    settle,
+		Logger:      logger,
+		Mode:        appConfig.TradingMode,
+		AmendableAt: bracketAmendableAt(appConfig),
 	})
 	if err != nil {
 		return nil, err
@@ -470,6 +467,57 @@ func buildBracketFeed(
 	return supervisor, nil
 }
 
+// bracketAmendableAt reports when the broker in use will accept a stop amendment.
+//
+// Webull takes native stop orders only in the core session, so a trail that tries to
+// move a stop at 04:00 is refused by the venue and the position keeps the level it
+// had. That is a real constraint and the engine has to know it.
+//
+// The paper venue has no sessions. Gating it the same way made every paper run
+// outside 09:30-16:00 New York look like a broken engine: the trail computed the
+// right level, recorded it as refused, and the stop never moved.
+func bracketAmendableAt(appConfig config.Config) func(time.Time) bool {
+	if execution.Mode(appConfig.TradingMode) != execution.ModeLive {
+		return func(time.Time) bool { return true }
+	}
+	return func(at time.Time) bool {
+		return market.SessionAt(at) == market.SessionRegular
+	}
+}
+
+// bracketAccounts answers which broker account the protective orders belong to.
+//
+// The store's answer is the right one for a live account, and only for one: it
+// requires a broker_accounts row synchronised within the last two minutes, which
+// exists only while a Webull sync is running. In paper there is no such row and
+// never will be, so arming would be refused forever for want of an account that
+// the fake venue ignores anyway.
+//
+// An explicitly configured account wins over both. The store's own error message
+// already tells an operator with several accounts to set WEBULL_ACCOUNT_ID, and it
+// was the one place that never read it.
+type bracketAccounts struct {
+	appConfig config.Config
+	store     *postgres.Store
+}
+
+func (accounts bracketAccounts) DefaultBrokerAccount(
+	ctx context.Context,
+) (string, error) {
+	if configured := strings.TrimSpace(
+		accounts.appConfig.WebullAccountID,
+	); configured != "" {
+		return configured, nil
+	}
+	if execution.Mode(accounts.appConfig.TradingMode) != execution.ModeLive {
+		// Deliberately not a plausible account number. It appears on every paper
+		// order, and a paper run that looks like it went to a real account is the
+		// kind of thing that gets read as one later.
+		return "paper", nil
+	}
+	return accounts.store.DefaultBrokerAccount(ctx)
+}
+
 func buildMarketDataProvider(
 	lifetime context.Context, appConfig config.Config, logger *slog.Logger,
 ) (marketdata.Provider, error) {
@@ -478,9 +526,11 @@ func buildMarketDataProvider(
 		logger.Warn(
 			"bracket feed is synthetic; prices are generated and mean nothing",
 			"interval", appConfig.BracketFeedWalkInterval,
+			"volatility", appConfig.BracketFeedWalkVolatility,
 		)
 		return synthetic.NewWalkProvider(
 			synthetic.WalkInterval(appConfig.BracketFeedWalkInterval),
+			synthetic.WalkVolatility(appConfig.BracketFeedWalkVolatility),
 		)
 	case "webull":
 		webullConfig, err := config.LoadWebull()

@@ -486,6 +486,18 @@ func (engine *Engine) advance(
 	}
 
 	if !amendable {
+		// The high-water mark still advances. It is a fact about the market, not a
+		// consequence of the broker taking an order, and dropping it here meant a
+		// position held through a session the broker would not amend in came back
+		// measuring its trail from a high that had already been beaten.
+		//
+		// The consequence is worth being clear about: a name that ran overnight and
+		// gave it all back will, at the open, propose a stop above the market. That is
+		// the trail saying it should have exited hours ago, and it is better said than
+		// hidden behind a stale high.
+		if adjustment.HighWater > record.HighWater {
+			record.HighWater = adjustment.HighWater
+		}
 		// Recorded, not sent. A silently dropped adjustment is indistinguishable
 		// from one that was never needed, and that ambiguity is what makes an
 		// unprotected position hard to notice.

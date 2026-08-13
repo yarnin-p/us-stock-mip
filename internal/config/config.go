@@ -51,8 +51,13 @@ type Config struct {
 	// price so the whole path can be exercised without a venue, and "webull"
 	// reads the real stream. It is separate from TradingMode on purpose -- a paper
 	// ledger fed by real prices is the only honest forward test.
-	BracketFeedAdapter             string
-	BracketFeedWalkInterval        time.Duration
+	BracketFeedAdapter      string
+	BracketFeedWalkInterval time.Duration
+	// BracketFeedWalkVolatility is the size of each synthetic step as a fraction of
+	// price. The default is calm enough that a ladder configured for real momentum
+	// names never arms, which makes a dry run look like a broken engine rather than
+	// a quiet market; raising it is how the rungs get exercised before the open.
+	BracketFeedWalkVolatility      float64
 	MaxPositionValue               float64
 	MaxGrossExposure               float64
 	MaxCapitalAllocation           float64
@@ -812,6 +817,18 @@ func load(requireMassive bool) (Config, error) {
 	if config.BracketFeedWalkInterval <= 0 {
 		return Config{}, errors.New(
 			"BRACKET_FEED_WALK_INTERVAL must be positive",
+		)
+	}
+	config.BracketFeedWalkVolatility, err = floatEnv(
+		"BRACKET_FEED_WALK_VOLATILITY", 0.004,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.BracketFeedWalkVolatility <= 0 ||
+		config.BracketFeedWalkVolatility > 0.5 {
+		return Config{}, errors.New(
+			"BRACKET_FEED_WALK_VOLATILITY must be a fraction between 0 and 0.5",
 		)
 	}
 	switch config.BracketFeedAdapter {

@@ -148,6 +148,12 @@ func (store *Store) SaveBracket(
 			partial_tp_min_shares = $19,
 			manual_hold = $20,
 			note = coalesce(nullif($21, ''), note),
+			-- Both coalesced, never overwritten with a zero. The engine's hot path
+			-- writes the record it loaded, and a bracket that lost its fill price
+			-- would silently start measuring every rung from the price that was asked
+			-- for instead of the one that filled.
+			entry_price = coalesce(nullif($22, 0::numeric), entry_price),
+			account_id = coalesce(nullif($23, ''), account_id),
 			updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+bracketColumns,
@@ -162,6 +168,7 @@ func (store *Store) SaveBracket(
 		record.Config.PartialTPAfter, record.Config.PartialTPFraction,
 		record.Config.PartialTPMinShares,
 		record.ManualHold, record.Note,
+		record.EntryPrice, record.AccountID,
 	)
 	updated, err := scanBracket(row)
 	if err != nil {
@@ -222,12 +229,17 @@ func (store *Store) SaveLevels(
 			quantity = $7,
 			partial_taken_quantity = $8,
 			partial_order_id = coalesce(nullif($9, ''), partial_order_id),
+			-- Written here because activation is the only moment they are known, and
+			-- coalesced because every later write goes through this same statement.
+			entry_price = coalesce(nullif($10, 0::numeric), entry_price),
+			account_id = coalesce(nullif($11, ''), account_id),
 			updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+bracketColumns,
 		record.ID, record.StopPrice, record.TargetPrice, record.HighWater,
 		record.StopOrderID, record.TargetOrderID,
 		record.Quantity, record.PartialTakenQuantity, record.PartialOrderID,
+		record.EntryPrice, record.AccountID,
 	)
 	updated, err := scanBracket(row)
 	if err != nil {
