@@ -71,6 +71,12 @@ type BracketRecord = {
   manual_hold?: boolean;
   partial_taken_quantity?: number;
   partial_order_id?: string;
+  /* Empty means no stop order rests at the broker: outside the regular session
+   * Webull accepts none, so the engine is holding the level itself. That is the one
+   * thing on this screen that changes what happens if MIP goes down, so it is shown
+   * on the row rather than left to be inferred. */
+  stop_order_id?: string;
+  stop_fired?: boolean;
   config: BracketConfig;
 };
 
@@ -831,6 +837,22 @@ function BracketList({ reload }: { reload: number }) {
                   </td>
                   <td className="num tone-risk">
                     {row.stop_price ? `$${money(row.stop_price)}` : "—"}
+                    {row.state === "ACTIVE" && row.stop_price ? (
+                      row.stop_fired ? (
+                        <em className="tm-pending"> ขายแล้ว</em>
+                      ) : row.stop_order_id ? (
+                        <span className="tm-holder broker" title="stop order วางอยู่ที่โบรก — รอดแม้ MIP ดับ">
+                          โบรก
+                        </span>
+                      ) : (
+                        <span
+                          className="tm-holder engine"
+                          title="Webull ไม่รับ stop order นอก regular session — engine เฝ้าราคาและจะยิง limit sell เอง ถ้า MIP ดับจะไม่มีอะไรคุ้ม"
+                        >
+                          engine
+                        </span>
+                      )
+                    ) : null}
                   </td>
                   <td className="num tone-reward">
                     {row.target_price ? `$${money(row.target_price)}` : "—"}
@@ -970,6 +992,17 @@ function Manage({
       </h3>
 
       {pending && <Entry bracket={bracket} onChanged={onChanged} />}
+
+      {bracket.state === "ACTIVE" && !bracket.stop_order_id && !bracket.stop_fired && (
+        <div className="tm-flag">
+          <strong>stop นี้ engine ถืออยู่ ไม่ได้อยู่ที่โบรก</strong>
+          <p>
+            Webull ไม่รับ stop order นอกเวลา 21:30–04:00 น. — engine เฝ้าทุก print
+            และจะยิง limit sell เองเมื่อราคาแตะ ตลาดเปิดแล้วมันจะส่ง stop ไปวางที่โบรกให้
+            <strong> ระหว่างนี้ถ้า MIP ดับหรือเน็ตหลุด จะไม่มีอะไรคุ้มไม้นี้</strong>
+          </p>
+        </div>
+      )}
 
       <div className="tm-manage-block">
         <p className="tm-hint">

@@ -374,3 +374,143 @@ func TestASessionProbeSeparatesTheSessionFromEverythingElse(t *testing.T) {
 		}
 	}
 }
+
+// Calibration is the probe run at start-up instead of by hand, so what it learns has
+// to actually change what later orders send. A calibration that reported a value and
+// then kept sending the old guess would be worse than none: it would look measured.
+func TestCalibrationChangesWhatLaterOrdersSend(t *testing.T) {
+	var sessions []string
+	var modifyPaths []string
+	var modifyQueries []string
+	client := probeClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		raw, _ := io.ReadAll(request.Body)
+		var decoded map[string]any
+		_ = json.Unmarshal(raw, &decoded)
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/place"):
+			orders, _ := decoded["new_orders"].([]any)
+			if len(orders) == 1 {
+				order, _ := orders[0].(map[string]any)
+				value, present := order["support_trading_session"]
+				text, _ := value.(string)
+				if !present {
+					text = "(omitted)"
+				}
+				sessions = append(sessions, text)
+			}
+			writer.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(request.URL.Path, "/preview"):
+			orders, _ := decoded["new_orders"].([]any)
+			if len(orders) == 1 {
+				order, _ := orders[0].(map[string]any)
+				value, present := order["support_trading_session"]
+				text, _ := value.(string)
+				if !present {
+					text = "(omitted)"
+				}
+				sessions = append(sessions, text)
+			}
+			// Only "N" is accepted, which is the value Webull's own SDK sends.
+			if len(sessions) > 0 && sessions[len(sessions)-1] == "N" {
+				writer.WriteHeader(http.StatusOK)
+				_, _ = writer.Write([]byte(
+					`{"estimated_cost":"1.00","estimated_transaction_fee":"0.00"}`,
+				))
+				return
+			}
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(
+				`{"error_code":"PARAM","msg":"support_trading_session is invalid"}`,
+			))
+		case strings.Contains(request.URL.Path, "orders/replace"):
+			// Only the SDK's documented endpoint knows the order.
+			modifyPaths = append(modifyPaths, request.URL.Path)
+			modifyQueries = append(modifyQueries, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte(`{"error_code":"ORDER_NOT_EXIST"}`))
+		default:
+			modifyPaths = append(modifyPaths, request.URL.Path)
+			modifyQueries = append(modifyQueries, request.URL.RawQuery)
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"msg":"path not found"}`))
+		}
+	})
+
+	learned, err := client.Calibrate(context.Background(), "acct-1", "AAPL", nil)
+	if err != nil {
+		t.Fatalf("calibrate: %v", err)
+	}
+	if learned.Sessions["LIMIT"] != "N" {
+		t.Fatalf("learned session %q for LIMIT, want N", learned.Sessions["LIMIT"])
+	}
+	if strings.Join(learned.ModifyPath, "/") != "openapi/account/orders/replace" {
+		t.Fatalf("learned modify path %v", learned.ModifyPath)
+	}
+	if learned.AccountInBody {
+		t.Error("the SDK endpoint takes account_id in the query")
+	}
+
+	// Now the part that matters: a real order must carry what was learned.
+	sessions = nil
+	if _, err := client.PlaceOrder(
+		context.Background(), execution.BrokerOrderRequest{
+			AccountID: "acct-1", ClientOrderID: "entry-1", Ticker: "RMCF",
+			Side: "BUY", OrderType: "LIMIT", TimeInForce: "DAY",
+			TradingSession: "ALL", Quantity: 100, LimitPrice: 1.60,
+		},
+	); err != nil {
+		t.Fatalf("place: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0] != "N" {
+		t.Fatalf("the order sent session %v, not the learned N", sessions)
+	}
+
+	// And an amendment must go to the learned endpoint, with account_id where that
+	// endpoint wants it.
+	modifyPaths, modifyQueries = nil, nil
+	if err := client.ModifyOrder(
+		context.Background(), execution.ModifyOrderRequest{
+			AccountID: "acct-1", ClientOrderID: "bracket-1-stop", Ticker: "RMCF",
+			OrderType: "STOP_LOSS", TimeInForce: "GTC",
+			Quantity: 100, StopPrice: 1.44,
+		},
+	); err == nil {
+		t.Fatal("the venue said the order does not exist; that must reach the caller")
+	}
+	if len(modifyPaths) != 1 ||
+		!strings.HasSuffix(modifyPaths[0], "/openapi/account/orders/replace") {
+		t.Fatalf("amended via %v, not the learned endpoint", modifyPaths)
+	}
+	if !strings.Contains(modifyQueries[0], "account_id=acct-1") {
+		t.Fatalf("account_id was not in the query: %q", modifyQueries[0])
+	}
+}
+
+// A contract that could only be half established is not one to send orders on.
+func TestCalibrationReportsWhatItCouldNotEstablish(t *testing.T) {
+	client := probeClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(
+			`{"error_code":"PARAM","msg":"support_trading_session is invalid"}`,
+		))
+	})
+	learned, err := client.Calibrate(context.Background(), "acct-1", "AAPL", nil)
+	if err == nil {
+		t.Fatal("nothing was accepted and calibration reported success")
+	}
+	for _, want := range []string{"LIMIT", "modify"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the gap report does not mention %q: %v", want, err)
+		}
+	}
+	if len(learned.Sessions) != 0 {
+		t.Errorf("learned %v from a venue that accepted nothing", learned.Sessions)
+	}
+}
+
+func TestCalibrationRefusesWithoutAnAccountOrToken(t *testing.T) {
+	client := probeClient(t, func(http.ResponseWriter, *http.Request) {})
+	if _, err := client.Calibrate(context.Background(), " ", "AAPL", nil); err == nil {
+		t.Error("calibrating without an account must fail")
+	}
+}

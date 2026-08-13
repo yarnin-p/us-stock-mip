@@ -561,3 +561,22 @@
   font-size: 0.8rem;
   color: var(--tm-reward, #4ade80);
 }
+
+/* Who is holding the stop. Not decoration: it is the difference between protection
+ * that survives this process dying and protection that does not. */
+.tm-holder {
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 5px;
+  font-size: 0.65rem;
+  letter-spacing: 0.02em;
+  cursor: help;
+}
+.tm-holder.broker {
+  background: rgba(74, 222, 128, 0.16);
+  border: 1px solid rgba(74, 222, 128, 0.45);
+}
+.tm-holder.engine {
+  background: rgba(251, 191, 36, 0.18);
+  border: 1px solid rgba(251, 191, 36, 0.55);
+}

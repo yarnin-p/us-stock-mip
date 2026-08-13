@@ -185,6 +185,9 @@ type Client struct {
 	tokenMutex  sync.RWMutex
 	clock       func() time.Time
 	nonce       func() (string, error)
+	// learned is the order contract measured from this account at start-up. Until
+	// Calibrate has run it is empty and the compiled-in guesses are used.
+	learned calibration
 }
 
 func NewClient(appKey, appSecret string, options ...Option) (*Client, error) {

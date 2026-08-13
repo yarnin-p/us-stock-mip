@@ -215,6 +215,45 @@ func runServe(args []string, stderr io.Writer) error {
 	// fills them. Two instances would mean the engine amending orders the service
 	// never placed.
 	bracketBroker, err := buildOrderModifier(appConfig)
+	if live, ok := bracketBroker.(*webull.Client); ok && err == nil {
+		// Learn the contract before anything is sent on it. Both probes are
+		// non-binding: session values come from previews, and the modify endpoint from
+		// amending an order that was never placed.
+		//
+		// A gap is fatal here and only here. Reading market data on a guessed contract
+		// costs nothing; sending a live order on one means finding out at the moment a
+		// stop was needed, so a broker whose contract could not be established is
+		// dropped rather than trusted.
+		account := strings.TrimSpace(appConfig.WebullAccountID)
+		if account == "" {
+			if resolved, resolveErr := store.DefaultBrokerAccount(ctx); resolveErr == nil {
+				account = resolved
+			}
+		}
+		if account == "" {
+			logger.Error(
+				"cannot calibrate the Webull order contract without an account; set " +
+					"WEBULL_ACCOUNT_ID. Brackets can be planned but not armed",
+			)
+			bracketBroker = nil
+		} else if learned, calErr := live.Calibrate(
+			ctx, account, "AAPL", logger,
+		); calErr != nil {
+			logger.Error(
+				"the Webull order contract could not be established; live orders are "+
+					"refused rather than sent on a guess",
+				"error", calErr,
+			)
+			bracketBroker = nil
+		} else if held, rests := learned.StopRestsAtBroker(); rests {
+			logger.Info("a stop can rest at the broker", "shape", held)
+		} else {
+			logger.Warn(
+				"no stop order was accepted in any session, so the engine holds every " +
+					"stop; a position is unprotected whenever this process is not running",
+			)
+		}
+	}
 	switch {
 	case err != nil:
 		// Not fatal. The dashboard is also the scanner, the gainers list and the

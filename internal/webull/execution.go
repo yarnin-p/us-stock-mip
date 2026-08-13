@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -40,7 +41,7 @@ func (client *Client) PreviewOrder(
 	}
 	var body json.RawMessage
 	if err := client.postJSON(
-		ctx, previewOrderPath, orderPayload(order), &body,
+		ctx, previewOrderPath, client.orderPayload(order), &body,
 	); err != nil {
 		return execution.Preview{}, err
 	}
@@ -77,7 +78,7 @@ func (client *Client) PlaceOrder(
 	}
 	var body json.RawMessage
 	if err := client.postJSON(
-		ctx, placeOrderPath, orderPayload(order), &body,
+		ctx, placeOrderPath, client.orderPayload(order), &body,
 	); err != nil {
 		return execution.Submission{}, err
 	}
@@ -141,10 +142,16 @@ func (client *Client) ModifyOrder(
 	if client.currentAccessToken() == "" {
 		return errors.New("webull access token is required")
 	}
+	// The learned endpoint, or the compiled-in guess if nothing has been measured.
+	path, accountInBody := client.modifyEndpoint()
+	payload := modifyPayload(request)
+	var query url.Values
+	if !accountInBody {
+		query = url.Values{"account_id": []string{request.AccountID}}
+		delete(payload, "account_id")
+	}
 	var body json.RawMessage
-	if err := client.postJSON(
-		ctx, modifyOrderPath, modifyPayload(request), &body,
-	); err != nil {
+	if err := client.postJSONQuery(ctx, path, query, payload, &body); err != nil {
 		return err
 	}
 	return rejectionIn("amend an order", body)
@@ -393,7 +400,9 @@ func validateTradingOrder(order execution.BrokerOrderRequest) error {
 	return nil
 }
 
-func orderPayload(order execution.BrokerOrderRequest) map[string]any {
+func (client *Client) orderPayload(
+	order execution.BrokerOrderRequest,
+) map[string]any {
 	item := map[string]string{
 		"combo_type":      "NORMAL",
 		"client_order_id": order.ClientOrderID,
@@ -406,6 +415,17 @@ func orderPayload(order execution.BrokerOrderRequest) map[string]any {
 		"time_in_force":   order.TimeInForce,
 		"entrust_type":    "QTY",
 	}
+	// The learned value wins over the compiled-in guess for every order type; the
+	// guesses below are what this sent before anything had been measured.
+	defer func() {
+		if learned, found := client.sessionFor(order.OrderType); found {
+			if learned == "" {
+				delete(item, "support_trading_session")
+			} else {
+				item["support_trading_session"] = learned
+			}
+		}
+	}()
 	if order.OrderType == "STOP_LOSS_LIMIT" {
 		// A stop that releases a limit rather than a market order. It is the only
 		// protective shape that can be legal outside the regular session, and in a

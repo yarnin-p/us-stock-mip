@@ -207,7 +207,11 @@ func classifyProbe(err error, body json.RawMessage) (EndpointVerdict, string) {
 // text matching, which is fragile, so a phrase it does not know lands on
 // "unclear" with the venue's words attached rather than on a wrong verdict.
 func mentionsMissingOrder(detail string) bool {
-	lowered := strings.ToLower(detail)
+	// Underscores and hyphens become spaces first. Venue codes are SCREAMING_SNAKE --
+	// ORDER_NOT_EXIST, ORDER-NOT-FOUND -- and matching against prose phrases without
+	// normalising missed every one of them, which reported a working endpoint as
+	// unclear and left calibration with nothing to use.
+	lowered := strings.NewReplacer("_", " ", "-", " ").Replace(strings.ToLower(detail))
 	for _, phrase := range []string{
 		"not exist", "does not exist", "not found", "no such order",
 		"order_not_found", "invalid order", "order not", "cannot be modified",
@@ -332,7 +336,7 @@ func (client *Client) probeSession(
 	default:
 		request.Side, request.OrderType, request.LimitPrice = "BUY", "LIMIT", 1
 	}
-	payload := orderPayload(request)
+	payload := client.orderPayload(request)
 	// The session value is overridden directly, which is the whole point: orderPayload
 	// hardcodes the values this repository guessed at.
 	orders, _ := payload["new_orders"].([]map[string]string)
