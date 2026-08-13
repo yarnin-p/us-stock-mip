@@ -11,6 +11,24 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
 
+// The order endpoints, named once so the four of them cannot drift apart.
+//
+// These paths are not confirmed against a live account. Webull's published SDKs
+// carry two other generations -- /trade/order/replace, and an /openapi/account/
+// orders/* family that puts account_id in the query string rather than the body --
+// and the docs site now describes a third at /trading/orders/*. Nothing in this
+// repository has ever exercised any of them for real: the tests assert the paths
+// this code sends, which proves only that it is consistent with itself.
+//
+// `mip webull-probe` settles it against the venue without touching a real order.
+// Until it has been run, treat an amendment as unproven rather than working.
+var (
+	previewOrderPath = []string{"openapi", "trade", "order", "preview"}
+	placeOrderPath   = []string{"openapi", "trade", "order", "place"}
+	cancelOrderPath  = []string{"openapi", "trade", "order", "cancel"}
+	modifyOrderPath  = []string{"openapi", "trade", "order", "modify"}
+)
+
 func (client *Client) PreviewOrder(
 	ctx context.Context, order execution.BrokerOrderRequest,
 ) (execution.Preview, error) {
@@ -20,14 +38,18 @@ func (client *Client) PreviewOrder(
 	if client.currentAccessToken() == "" {
 		return execution.Preview{}, errors.New("webull access token is required")
 	}
-	var response any
+	var body json.RawMessage
 	if err := client.postJSON(
-		ctx,
-		[]string{"openapi", "trade", "order", "preview"},
-		orderPayload(order),
-		&response,
+		ctx, previewOrderPath, orderPayload(order), &body,
 	); err != nil {
 		return execution.Preview{}, err
+	}
+	if err := rejectionIn("preview an order", body); err != nil {
+		return execution.Preview{}, err
+	}
+	var response any
+	if err := json.Unmarshal(body, &response); err != nil {
+		return execution.Preview{}, fmt.Errorf("decoding Webull preview: %w", err)
 	}
 	cost, costFound := findNumericField(response, "estimated_cost")
 	fee, feeFound := findNumericField(response, "estimated_transaction_fee")
@@ -53,13 +75,16 @@ func (client *Client) PlaceOrder(
 	if client.currentAccessToken() == "" {
 		return execution.Submission{}, errors.New("webull access token is required")
 	}
-	var response json.RawMessage
+	var body json.RawMessage
 	if err := client.postJSON(
-		ctx,
-		[]string{"openapi", "trade", "order", "place"},
-		orderPayload(order),
-		&response,
+		ctx, placeOrderPath, orderPayload(order), &body,
 	); err != nil {
+		return execution.Submission{}, err
+	}
+	// A refusal here arrives inside an HTTP 200 and used to be discarded, which
+	// reported an order as submitted that the broker never took. The reconciler
+	// would then hunt for a client_order_id that does not exist at the venue.
+	if err := rejectionIn("place an order", body); err != nil {
 		return execution.Submission{}, err
 	}
 	return execution.Submission{
@@ -79,14 +104,17 @@ func (client *Client) CancelOrder(
 	if client.currentAccessToken() == "" {
 		return errors.New("webull access token is required")
 	}
-	return client.postJSON(
-		ctx,
-		[]string{"openapi", "trade", "order", "cancel"},
+	var body json.RawMessage
+	if err := client.postJSON(
+		ctx, cancelOrderPath,
 		map[string]string{
 			"account_id": accountID, "client_order_id": clientOrderID,
 		},
-		nil,
-	)
+		&body,
+	); err != nil {
+		return err
+	}
+	return rejectionIn("cancel an order", body)
 }
 
 // ModifyOrder amends a working order's price without cancelling it, so a
@@ -95,7 +123,15 @@ func (client *Client) CancelOrder(
 // when a halted name reopens and gaps through the level.
 //
 // Webull identifies the order by client_order_id -- the same handle cancel and
-// detail use -- and wants the full order shape on an amendment, not a delta.
+// detail use. Its own SDK amends with a delta of just the fields that changed;
+// this sends the whole order shape, which that SDK also permits, because a stop
+// being resized alongside its price is one edit and splitting it into two would
+// leave a window where the size and the level disagree.
+//
+// The response is read rather than discarded. Discarding it is how an amendment
+// the broker refused becomes an audit row saying the level moved: the engine sees
+// a nil error, believes the stop is where it asked, and the position sits behind
+// the old one with nothing in the system saying so.
 func (client *Client) ModifyOrder(
 	ctx context.Context, request execution.ModifyOrderRequest,
 ) error {
@@ -105,12 +141,13 @@ func (client *Client) ModifyOrder(
 	if client.currentAccessToken() == "" {
 		return errors.New("webull access token is required")
 	}
-	return client.postJSON(
-		ctx,
-		[]string{"openapi", "trade", "order", "modify"},
-		modifyPayload(request),
-		nil,
-	)
+	var body json.RawMessage
+	if err := client.postJSON(
+		ctx, modifyOrderPath, modifyPayload(request), &body,
+	); err != nil {
+		return err
+	}
+	return rejectionIn("amend an order", body)
 }
 
 var _ execution.OrderModifier = (*Client)(nil)

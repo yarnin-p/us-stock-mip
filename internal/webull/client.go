@@ -1,6 +1,7 @@
 package webull
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/md5"
@@ -717,12 +718,29 @@ func (client *Client) postJSON(
 	path []string,
 	payload any,
 	destination any,
+) error {
+	return client.postJSONQuery(ctx, path, nil, payload, destination)
+}
+
+// postJSONQuery exists because Webull is not consistent about where an
+// identifier belongs: some generations of the order endpoints take account_id in
+// the query string and some in the body, and the signature covers both. The
+// endpoint probe has to be able to send either.
+func (client *Client) postJSONQuery(
+	ctx context.Context,
+	path []string,
+	query url.Values,
+	payload any,
+	destination any,
 ) (_ error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encoding Webull request: %w", err)
 	}
 	endpoint := client.baseURL.JoinPath(path...)
+	if len(query) > 0 {
+		endpoint.RawQuery = query.Encode()
+	}
 	timestamp := client.clock().UTC().Format(time.RFC3339)
 	nonce, err := client.nonce()
 	if err != nil {
@@ -783,8 +801,17 @@ func (client *Client) postJSON(
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseSize))
 		return nil
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseSize)).
-		Decode(destination); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize))
+	if err != nil {
+		return fmt.Errorf("reading Webull response: %w", err)
+	}
+	// Some endpoints acknowledge with an empty body. Reading it is how the order
+	// paths check for a refusal carried inside an HTTP 200, and silence there has
+	// to stay a success or every one of them breaks on nothing being wrong.
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
 		return fmt.Errorf("decoding Webull response: %w", err)
 	}
 	return nil
