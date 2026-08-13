@@ -474,3 +474,90 @@
 
 .tm-history-price { color: var(--te-muted); }
 .tm-history-error { color: var(--te-red); font-size: 0.78rem; }
+
+/* ── The exit ladder ──────────────────────────────────────────────────────────
+ * Each rung is its own bordered block rather than a row in a table of inputs.
+ * The rules stack, and reading them as a stack is how you notice that one of them
+ * arms before another. */
+.tm-rung {
+  border: 1px solid var(--tm-line, #2a2f3a);
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+.tm-rung.off { opacity: 0.55; }
+.tm-rung.t-reward { border-left: 3px solid var(--tm-reward, #4ade80); }
+.tm-rung.t-flat { border-left: 3px solid var(--tm-flat, #94a3b8); }
+.tm-rung-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.45rem;
+}
+.tm-rung-what {
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+.tm-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+.tm-switch input { accent-color: var(--tm-reward, #4ade80); }
+
+/* ── In-flight control ───────────────────────────────────────────────────────
+ * Visually separated from the list because it acts on money that is already at
+ * risk, not on a plan that is still being drafted. */
+.tm-manage {
+  margin-top: 0.9rem;
+  border: 1px solid var(--tm-line, #2a2f3a);
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+.tm-manage-title {
+  margin: 0 0 0.7rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tm-manage-block {
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--tm-line, #2a2f3a);
+}
+.tm-manage-block:first-of-type { border-top: 0; padding-top: 0; }
+.tm-manage-block.danger { border-top-color: rgba(248, 113, 113, 0.35); }
+.tm-btn {
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--tm-line, #2a2f3a);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.tm-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.tm-btn:disabled { opacity: 0.5; cursor: default; }
+.tm-btn.warn { border-color: rgba(251, 191, 36, 0.5); }
+.tm-btn.danger { border-color: rgba(248, 113, 113, 0.6); }
+/* A held bracket is not a trailed one, and the badge is the only thing on the row
+ * that says so. */
+.tm-held {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 5px;
+  font-size: 0.68rem;
+  background: rgba(251, 191, 36, 0.2);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+}
+.tm-said {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--tm-reward, #4ade80);
+}
