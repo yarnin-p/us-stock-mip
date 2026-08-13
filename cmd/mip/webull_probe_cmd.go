@@ -32,6 +32,9 @@ func runWebullProbe(args []string, stdout, stderr io.Writer) error {
 	accountID := flags.String(
 		"account", "", "broker account to probe (default WEBULL_ACCOUNT_ID)",
 	)
+	symbol := flags.String(
+		"symbol", "AAPL", "symbol used for the non-binding session previews",
+	)
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parsing Webull probe flags: %w", err)
 	}
@@ -115,6 +118,46 @@ func runWebullProbe(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	fmt.Fprintln(stdout, "\n* is the path the execution adapter sends today")
+
+	// The second question, and the one that decides how the premarket is traded.
+	sessions, err := client.ProbeOrderSessions(ctx, target, *symbol)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout,
+		"\nwhich sessions each order type is allowed in (previews only -- nothing is placed)")
+	stopWorks := make([]string, 0, 4)
+	limitWorks := make([]string, 0, 4)
+	for _, probe := range sessions {
+		fmt.Fprintf(
+			stdout, "  %-10s support_trading_session=%-10s %s\n",
+			probe.OrderType, probe.Session, probe.Verdict,
+		)
+		if probe.Verdict != webull.SessionAccepted {
+			if probe.Verdict == webull.SessionRefused && probe.Detail != "" {
+				fmt.Fprintf(stdout, "      %s\n", truncate(probe.Detail, 200))
+			}
+			continue
+		}
+		if probe.OrderType == "STOP_LOSS" {
+			stopWorks = append(stopWorks, probe.Session)
+		} else {
+			limitWorks = append(limitWorks, probe.Session)
+		}
+	}
+	fmt.Fprintf(stdout, "\nLIMIT accepted with: %s\n", orNone(limitWorks))
+	fmt.Fprintf(stdout, "STOP_LOSS accepted with: %s\n", orNone(stopWorks))
+	if len(stopWorks) == 0 {
+		fmt.Fprintln(stdout,
+			"no session value was accepted for a native stop. Either stops really are "+
+				"regular-hours only, or every value tried was wrong -- read the refusals "+
+				"above before concluding either.")
+	} else {
+		fmt.Fprintln(stdout,
+			"a native stop is accepted, so the value above is the one the adapter should "+
+				"send. If it covers the extended sessions, premarket trailing is possible "+
+				"and the engine's session gate should be widened to match.")
+	}
 	switch {
 	case verified:
 		fmt.Fprintln(stdout,
@@ -127,6 +170,13 @@ func runWebullProbe(args []string, stdout, stderr io.Writer) error {
 				"until then treat every trailing amendment as unproven.")
 	}
 	return nil
+}
+
+func orNone(values []string) string {
+	if len(values) == 0 {
+		return "(none)"
+	}
+	return strings.Join(values, ", ")
 }
 
 func truncate(text string, limit int) string {

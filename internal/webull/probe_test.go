@@ -269,3 +269,108 @@ func TestModifyOrderAcceptsAnEmptyAcknowledgement(t *testing.T) {
 		t.Fatalf("an empty acknowledgement must stay a success, got %v", err)
 	}
 }
+
+// The session question is settled with previews, and a preview places nothing. If
+// this ever reaches the place endpoint it is sending real orders while claiming to
+// ask a question.
+func TestTheSessionProbeOnlyPreviews(t *testing.T) {
+	var paths []string
+	var sessions []string
+	client := probeClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		raw, _ := io.ReadAll(request.Body)
+		var decoded map[string]any
+		_ = json.Unmarshal(raw, &decoded)
+		orders, _ := decoded["new_orders"].([]any)
+		if len(orders) == 1 {
+			order, _ := orders[0].(map[string]any)
+			value, present := order["support_trading_session"]
+			if !present {
+				sessions = append(sessions, "(omitted)")
+			} else {
+				text, _ := value.(string)
+				sessions = append(sessions, text)
+			}
+		}
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(
+			`{"estimated_cost":"1.00","estimated_transaction_fee":"0.00"}`,
+		))
+	})
+	probes, err := client.ProbeOrderSessions(context.Background(), "acct-1", "aapl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(probes) == 0 {
+		t.Fatal("the probe tried nothing")
+	}
+	for _, path := range paths {
+		if !strings.HasSuffix(path, "/preview") {
+			t.Fatalf("the session probe hit %s; only preview asks without consequences", path)
+		}
+	}
+	// The value under test has to actually reach the wire, including the omitted case
+	// -- orderPayload hardcodes one, and a probe that could not override it would be
+	// testing the guess instead of the venue.
+	for _, want := range []string{"(omitted)", "N", "CORE", "ALL", "OVN"} {
+		found := false
+		for _, sent := range sessions {
+			if sent == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("session %q never reached the venue; sent %v", want, sessions)
+		}
+	}
+	for _, probe := range probes {
+		if probe.Verdict != SessionAccepted {
+			t.Errorf("%s/%s = %s, want accepted when the venue costs it",
+				probe.OrderType, probe.Session, probe.Verdict)
+		}
+	}
+}
+
+// A refusal about a position is not a refusal about a session, and reporting it as
+// one would answer the premarket question wrongly in the safe-looking direction.
+func TestASessionProbeSeparatesTheSessionFromEverythingElse(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+		want   SessionVerdict
+	}{
+		"session named": {
+			status: http.StatusBadRequest,
+			body:   `{"error_code":"PARAM","msg":"support_trading_session is invalid"}`,
+			want:   SessionRefused,
+		},
+		"order type named": {
+			status: http.StatusBadRequest,
+			body:   `{"error_code":"PARAM","msg":"order_type not supported outside RTH"}`,
+			want:   SessionRefused,
+		},
+		"no position to sell": {
+			status: http.StatusExpectationFailed,
+			body:   `{"error_code":"NO_POSITION","msg":"insufficient position"}`,
+			want:   SessionInconclusive,
+		},
+		"price band": {
+			status: http.StatusBadRequest,
+			body:   `{"error_code":"PRICE","msg":"limit price too far from market"}`,
+			want:   SessionInconclusive,
+		},
+	} {
+		client := probeClient(t, func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(testCase.status)
+			_, _ = writer.Write([]byte(testCase.body))
+		})
+		probes, err := client.ProbeOrderSessions(context.Background(), "acct-1", "AAPL")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if probes[0].Verdict != testCase.want {
+			t.Errorf("%s: verdict = %s, want %s (detail %q)",
+				name, probes[0].Verdict, testCase.want, probes[0].Detail)
+		}
+	}
+}

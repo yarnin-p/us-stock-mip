@@ -220,6 +220,146 @@ func mentionsMissingOrder(detail string) bool {
 	return false
 }
 
+// Whether a stop can protect a position outside the regular session is the question
+// that decides how the premarket is traded, and this repository answered it with a
+// comment. The comment said native stops are core-session only and sent
+// support_trading_session values of CORE, ALL and NIGHT -- none of which appear
+// anywhere in Webull's own SDK, whose examples send "N" and whose v1 interface used a
+// plain extended_hours_trading boolean sitting right beside order_type, with nothing
+// saying a stop could not use it.
+//
+// So it is unproven in both directions, and previewing settles it. A preview is
+// non-binding: it asks the venue to cost an order and place nothing. Sending one per
+// candidate value, for a stop and for a limit, is a complete answer that cannot move
+// a share.
+
+// SessionProbe is one order type and session value, and what the venue made of it.
+type SessionProbe struct {
+	OrderType string
+	// Session is the support_trading_session value sent, or "(omitted)".
+	Session string
+	Verdict SessionVerdict
+	Detail  string
+}
+
+// SessionVerdict is what a preview said about one combination.
+type SessionVerdict string
+
+const (
+	// SessionAccepted means the venue costed the order, so the combination is legal.
+	SessionAccepted SessionVerdict = "accepted"
+	// SessionRefused means the venue named the session or the order type as the
+	// problem.
+	SessionRefused SessionVerdict = "refused"
+	// SessionInconclusive means it was refused for something else -- no position to
+	// sell, a price band, an entitlement -- which says nothing about the session.
+	SessionInconclusive SessionVerdict = "inconclusive"
+)
+
+// sessionCandidates are every value worth trying: Webull's own "N", the Y/N reading
+// of it, the three this repository invented, and the session codes its market-data
+// side uses.
+var sessionCandidates = []string{
+	"", "N", "Y", "CORE", "ALL", "NIGHT", "RTH", "PRE", "ATH", "OVN",
+}
+
+// ProbeOrderSessions previews a stop and a limit under every candidate session
+// value, and reports which ones the venue will cost.
+//
+// It places nothing. Preview is the one order endpoint that exists to answer
+// questions without consequences, which makes it the right instrument for a question
+// about what is allowed.
+func (client *Client) ProbeOrderSessions(
+	ctx context.Context, accountID, symbol string,
+) ([]SessionProbe, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return nil, errors.New("webull account ID is required to probe")
+	}
+	if client.currentAccessToken() == "" {
+		return nil, errors.New("webull access token is required to probe")
+	}
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" {
+		symbol = "AAPL"
+	}
+	results := make([]SessionProbe, 0, len(sessionCandidates)*2)
+	for _, orderType := range []string{"LIMIT", "STOP_LOSS"} {
+		for _, session := range sessionCandidates {
+			results = append(
+				results, client.probeSession(ctx, accountID, symbol, orderType, session),
+			)
+		}
+	}
+	return results, nil
+}
+
+func (client *Client) probeSession(
+	ctx context.Context, accountID, symbol, orderType, session string,
+) SessionProbe {
+	probe := SessionProbe{OrderType: orderType, Session: session}
+	if session == "" {
+		probe.Session = "(omitted)"
+	}
+	orderID, err := client.nonce()
+	if err != nil {
+		probe.Verdict = SessionInconclusive
+		probe.Detail = err.Error()
+		return probe
+	}
+	// Trimmed defensively: a nonce shorter than the slice would panic, and a probe
+	// that crashes the command teaches nothing.
+	handle := "probe" + strings.ReplaceAll(orderID, "-", "")
+	if len(handle) > 24 {
+		handle = handle[:24]
+	}
+	request := execution.BrokerOrderRequest{
+		AccountID: accountID, ClientOrderID: handle,
+		Ticker: symbol, TimeInForce: "DAY", Quantity: 1,
+	}
+	if orderType == "STOP_LOSS" {
+		// A sell stop far under the market: nothing about it is attractive to fill,
+		// and a preview will not place it in any case.
+		request.Side, request.OrderType, request.StopPrice = "SELL", "STOP_LOSS", 1
+	} else {
+		request.Side, request.OrderType, request.LimitPrice = "BUY", "LIMIT", 1
+	}
+	payload := orderPayload(request)
+	// The session value is overridden directly, which is the whole point: orderPayload
+	// hardcodes the values this repository guessed at.
+	orders, _ := payload["new_orders"].([]map[string]string)
+	if len(orders) == 1 {
+		if session == "" {
+			delete(orders[0], "support_trading_session")
+		} else {
+			orders[0]["support_trading_session"] = session
+		}
+	}
+	var body json.RawMessage
+	err = client.postJSONQuery(ctx, previewOrderPath, nil, payload, &body)
+	if err == nil {
+		err = rejectionIn("preview an order", body)
+	}
+	if err == nil {
+		probe.Verdict = SessionAccepted
+		probe.Detail = excerpt(strings.TrimSpace(string(body)))
+		return probe
+	}
+	probe.Detail = err.Error()
+	lowered := strings.ToLower(probe.Detail)
+	switch {
+	case strings.Contains(lowered, "session") ||
+		strings.Contains(lowered, "order_type") ||
+		strings.Contains(lowered, "order type") ||
+		strings.Contains(lowered, "extended"):
+		probe.Verdict = SessionRefused
+	default:
+		// No position to sell, a price band, a missing entitlement: all real refusals
+		// that say nothing about whether the session was allowed.
+		probe.Verdict = SessionInconclusive
+	}
+	return probe
+}
+
 // ModifyProbeRequest builds the amendment the probe sends. It is exported so the
 // command that prints a report can show the exact request, and so a reader can
 // satisfy themselves that it names an order that was never placed.

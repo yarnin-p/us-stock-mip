@@ -201,8 +201,10 @@ func modifyPayload(request execution.ModifyOrderRequest) map[string]any {
 	}
 	if request.OrderType == "STOP_LOSS" {
 		item["stop_price"] = strconv.FormatFloat(request.StopPrice, 'f', -1, 64)
-		// Native stops are core-session only, the same constraint PlaceOrder
-		// works under. The trail engine only amends during the regular session.
+		// Unproven, and the same guess PlaceOrder makes. See probe.go: none of
+		// CORE, ALL or NIGHT appears in Webull's own SDK, whose examples send
+		// support_trading_session "N". `mip webull-probe` settles which values a
+		// stop is actually accepted with, using previews that place nothing.
 		item["support_trading_session"] = "CORE"
 	} else {
 		item["limit_price"] = strconv.FormatFloat(request.LimitPrice, 'f', -1, 64)
@@ -370,9 +372,13 @@ func orderPayload(order execution.BrokerOrderRequest) map[string]any {
 	}
 	if order.OrderType == "STOP_LOSS" {
 		item["stop_price"] = strconv.FormatFloat(order.StopPrice, 'f', -1, 64)
-		// Webull accepts native stop orders only in the core session. The
-		// endpoint rejects an omitted/ALL value as an invalid trading session.
-		// reconcileProtection only submits these orders during REGULAR.
+		// A guess, kept because changing it blind would be another guess. The claim
+		// that native stops are core-session only is not backed by anything measured:
+		// Webull's v1 interface carried extended_hours_trading as a plain boolean
+		// beside order_type with nothing excluding a stop, and its v2 examples send
+		// support_trading_session "N" rather than any of the values used here.
+		// `mip webull-probe` previews a stop under every candidate and reports which
+		// the venue accepts; that answer, not this comment, should decide it.
 		item["support_trading_session"] = "CORE"
 	} else {
 		item["limit_price"] = strconv.FormatFloat(order.LimitPrice, 'f', -1, 64)
