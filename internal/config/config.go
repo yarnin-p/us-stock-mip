@@ -64,6 +64,11 @@ type Config struct {
 	// protect a position outside the regular session -- at the cost that through a gap
 	// the released limit can fail to fill at all. The default is the plain stop, so
 	// nothing changes its risk profile without being asked.
+	// BracketFeedOvernight asks the price feed for the overnight book. It is off by
+	// default because it needs a separate Webull entitlement -- without it every
+	// request comes back 403 MARKET_DATA_NOT_SUBSCRIBED and nothing is trailed at all,
+	// including during the sessions the account *is* entitled to.
+	BracketFeedOvernight bool
 	BracketStopOrderType string
 	// BracketStopEnforcement says who holds the stop: "broker" rests an order at the
 	// venue, "engine" keeps the level here and sells on a breach, and "session" -- the
@@ -858,6 +863,10 @@ func load(requireMassive bool) (Config, error) {
 			config.BracketStopOrderType,
 		)
 	}
+	config.BracketFeedOvernight, err = boolEnv("BRACKET_FEED_OVERNIGHT", false)
+	if err != nil {
+		return Config{}, err
+	}
 	config.BracketStopEnforcement = strings.ToLower(strings.TrimSpace(
 		envOrDefault("BRACKET_STOP_ENFORCEMENT", "session"),
 	))
@@ -882,7 +891,7 @@ func load(requireMassive bool) (Config, error) {
 		)
 	}
 	switch config.BracketFeedAdapter {
-	case "none", "synthetic", "webull":
+	case "none", "synthetic", "webull", "webull-poll":
 	default:
 		return Config{}, fmt.Errorf(
 			"BRACKET_FEED_ADAPTER must be none, synthetic or webull, got %q",

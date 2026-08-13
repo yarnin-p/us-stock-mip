@@ -49,6 +49,12 @@ type Engine struct {
 	regular func(time.Time) bool
 
 	mutex sync.Mutex
+	// complaints remembers the last failure reported per bracket. A bracket whose
+	// configuration cannot be satisfied -- a stop that would cross a target stranded
+	// below the market -- fails identically on every print, and at one line a second
+	// that buries every other thing the log has to say. The failure still fails; it
+	// just stops being repeated until it changes or a minute passes.
+	complaints map[int64]complaint
 	// locks serialises per ticker rather than globally. Two prints for the same
 	// symbol computing against the same stored levels would send two amendments
 	// for one move; two prints for different symbols have nothing to race over
@@ -172,6 +178,7 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 		session:    options.AmendableAt,
 		regular:    options.RegularSessionAt,
 		locks:      make(map[string]*sync.Mutex),
+		complaints: make(map[int64]complaint),
 	}
 	if engine.logger == nil {
 		engine.logger = slog.Default()
@@ -185,6 +192,24 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 		engine.regular = func(time.Time) bool { return false }
 	}
 	return engine, nil
+}
+
+type complaint struct {
+	message string
+	at      time.Time
+}
+
+// shouldReport reports whether this failure is worth another log line: a new message
+// for the bracket, or the same one after a minute.
+func (engine *Engine) shouldReport(id int64, message string, at time.Time) bool {
+	engine.mutex.Lock()
+	defer engine.mutex.Unlock()
+	last, seen := engine.complaints[id]
+	if seen && last.message == message && at.Sub(last.at) < time.Minute {
+		return false
+	}
+	engine.complaints[id] = complaint{message: message, at: at}
+	return true
 }
 
 // HandleTick moves the protective orders of every active bracket on the tick's
@@ -288,10 +313,12 @@ func (engine *Engine) HandleTick(
 			failures = errors.Join(
 				failures, fmt.Errorf("bracket %d: %w", record.ID, err),
 			)
-			engine.logger.Error(
-				"bracket adjustment failed",
-				"ticker", record.Ticker, "bracket_id", record.ID, "error", err,
-			)
+			if engine.shouldReport(record.ID, err.Error(), tick.ObservedAt) {
+				engine.logger.Error(
+					"bracket adjustment failed",
+					"ticker", record.Ticker, "bracket_id", record.ID, "error", err,
+				)
+			}
 		}
 	}
 	return failures

@@ -32,6 +32,7 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata/synthetic"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata/webullfeed"
+	"github.com/momentum-intelligence-platform/mip/internal/marketdata/webullpoll"
 	"github.com/momentum-intelligence-platform/mip/internal/massive"
 	"github.com/momentum-intelligence-platform/mip/internal/opening"
 	"github.com/momentum-intelligence-platform/mip/internal/postgres"
@@ -613,6 +614,40 @@ func buildMarketDataProvider(
 		return synthetic.NewWalkProvider(
 			synthetic.WalkInterval(appConfig.BracketFeedWalkInterval),
 			synthetic.WalkVolatility(appConfig.BracketFeedWalkVolatility),
+		)
+	case "webull-poll":
+		// The stream and the poll are separate adapters rather than a fallback inside
+		// one, because which is in use changes how stale a price can be -- and that is
+		// something an operator has to be able to read off the configuration rather
+		// than infer from a log line at four in the morning.
+		webullConfig, err := config.LoadWebull()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"the Webull price poll requires valid Webull configuration: %w", err,
+			)
+		}
+		client, err := webull.NewClient(
+			webullConfig.WebullAppKey, webullConfig.WebullSecret,
+			webull.WithBaseURL(webullConfig.WebullBaseURL),
+			webull.WithAlgorithm(webullConfig.WebullAlgorithm),
+			webull.WithAccessToken(webullConfig.WebullAccessToken),
+			webull.WithHTTPClient(&http.Client{Timeout: webullConfig.HTTPTimeout}),
+		)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info(
+			"bracket feed polls Webull snapshots",
+			"interval", appConfig.BracketFeedWalkInterval,
+		)
+		return webullpoll.New(
+			lifetime, client,
+			webullpoll.WithInterval(appConfig.BracketFeedWalkInterval),
+			// Off unless the account is entitled. Asking for the overnight book without
+			// the NIGHT TRADING QUOTES subscription returns 403 for the whole request,
+			// so one unentitled extra costs every price in every session.
+			webullpoll.WithOvernight(appConfig.BracketFeedOvernight),
+			webullpoll.WithLogger(logger),
 		)
 	case "webull":
 		webullConfig, err := config.LoadWebull()

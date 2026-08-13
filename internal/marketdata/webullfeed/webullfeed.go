@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
@@ -56,6 +57,9 @@ type Provider struct {
 	// because a burst of opens only needs one re-subscription, and coalescing them
 	// is cheaper than restarting the session per name.
 	wake chan struct{}
+	// ticks counts what has been delivered, so a stream that is connected but silent
+	// can be told from one that is carrying prices.
+	ticks atomic.Uint64
 }
 
 // Option configures a Provider.
@@ -150,6 +154,7 @@ func (provider *Provider) Subscribe(
 	}()
 
 	if fresh {
+		provider.logger.Info("webull snapshot subscription requested", "ticker", key)
 		provider.signal()
 	}
 	return sub, nil
@@ -247,11 +252,23 @@ func (provider *Provider) run() {
 			cancel()
 		}()
 
+		// Logged on the way in as well as on the way out. Only logging failures made
+		// the feed invisible when it was working and equally invisible when it was
+		// never asked to start -- and "the thing trailing my stop is silently not
+		// running" is precisely the state that has to be visible.
+		provider.logger.Info(
+			"webull snapshot stream opening", "symbols", strings.Join(symbols, ","),
+		)
 		start := time.Now()
 		err := provider.client.StreamSnapshots(
 			streamCtx, provider.brokerURL, symbols, provider.deliver,
 		)
 		cancel()
+		provider.logger.Info(
+			"webull snapshot stream closed",
+			"symbols", len(symbols), "uptime", time.Since(start).Round(time.Second),
+			"delivered", provider.delivered(), "error", err,
+		)
 
 		switch {
 		case provider.lifetime.Err() != nil:
@@ -301,11 +318,18 @@ func (provider *Provider) deliver(
 	provider.mutex.Lock()
 	list := append([]*subscription(nil), provider.subscribers[tick.Ticker]...)
 	provider.mutex.Unlock()
+	provider.ticks.Add(1)
 	for _, sub := range list {
 		sub.offer(tick)
 	}
 	return nil
 }
+
+// Delivered reports how many ticks have been handed on, for a health line that can
+// distinguish a connected feed from a working one.
+func (provider *Provider) Delivered() uint64 { return provider.ticks.Load() }
+
+func (provider *Provider) delivered() uint64 { return provider.ticks.Load() }
 
 func (provider *Provider) closeAll() {
 	provider.mutex.Lock()
