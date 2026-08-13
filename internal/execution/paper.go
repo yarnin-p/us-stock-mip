@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -93,6 +94,42 @@ func (adapter *PaperAdapter) CancelOrder(
 ) error {
 	return nil
 }
+
+// ModifyOrder amends a working paper order in place so trailing behaves here the
+// way it will against a live broker. Only an order still recorded as submitted
+// can be amended; a filled one is history.
+func (adapter *PaperAdapter) ModifyOrder(
+	_ context.Context, request ModifyOrderRequest,
+) error {
+	if strings.TrimSpace(request.ClientOrderID) == "" {
+		return errors.New("paper modify requires a client order ID")
+	}
+	for _, price := range []float64{request.StopPrice, request.LimitPrice} {
+		if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+			return errors.New("paper modify prices must be finite and nonnegative")
+		}
+	}
+	if request.StopPrice <= 0 && request.LimitPrice <= 0 {
+		return errors.New("paper modify requires a stop or limit price")
+	}
+	adapter.mutex.Lock()
+	defer adapter.mutex.Unlock()
+	for _, order := range adapter.orders {
+		if order.BrokerOrderID != request.ClientOrderID {
+			continue
+		}
+		if order.State != string(StateSubmitted) {
+			return fmt.Errorf(
+				"paper order %s is %s and cannot be modified",
+				request.ClientOrderID, order.State,
+			)
+		}
+		return nil
+	}
+	return fmt.Errorf("paper order %s is not working", request.ClientOrderID)
+}
+
+var _ OrderModifier = (*PaperAdapter)(nil)
 
 func (adapter *PaperAdapter) GetOrders(
 	context.Context, string,

@@ -89,6 +89,94 @@ func (client *Client) CancelOrder(
 	)
 }
 
+// ModifyOrder amends a working order's price without cancelling it, so a
+// trailing stop is never withdrawn from the market in order to be raised. That
+// window is brief in calendar terms and expensive in risk terms: it is exactly
+// when a halted name reopens and gaps through the level.
+//
+// Webull identifies the order by client_order_id -- the same handle cancel and
+// detail use -- and wants the full order shape on an amendment, not a delta.
+func (client *Client) ModifyOrder(
+	ctx context.Context, request execution.ModifyOrderRequest,
+) error {
+	if err := validateModifyRequest(request); err != nil {
+		return err
+	}
+	if client.currentAccessToken() == "" {
+		return errors.New("webull access token is required")
+	}
+	return client.postJSON(
+		ctx,
+		[]string{"openapi", "trade", "order", "modify"},
+		modifyPayload(request),
+		nil,
+	)
+}
+
+var _ execution.OrderModifier = (*Client)(nil)
+
+func validateModifyRequest(request execution.ModifyOrderRequest) error {
+	if strings.TrimSpace(request.AccountID) == "" {
+		return errors.New("webull account ID is required")
+	}
+	if strings.TrimSpace(request.ClientOrderID) == "" ||
+		len(request.ClientOrderID) > 32 {
+		return errors.New("webull client order ID must contain 1 to 32 characters")
+	}
+	if !symbolPattern.MatchString(request.Ticker) {
+		return fmt.Errorf("invalid Webull symbol %q", request.Ticker)
+	}
+	if request.Quantity <= 0 {
+		return errors.New("webull modify quantity must be positive")
+	}
+	switch request.OrderType {
+	case "LIMIT":
+		if request.LimitPrice <= 0 || request.StopPrice != 0 {
+			return errors.New(
+				"webull LIMIT modify requires only a positive limit price",
+			)
+		}
+	case "STOP_LOSS":
+		if request.StopPrice <= 0 {
+			return errors.New(
+				"webull STOP_LOSS modify requires a positive stop price",
+			)
+		}
+	default:
+		return errors.New("webull modify supports LIMIT and STOP_LOSS orders")
+	}
+	if request.TimeInForce != "DAY" && request.TimeInForce != "GTC" {
+		return errors.New("webull time in force must be DAY or GTC")
+	}
+	return nil
+}
+
+func modifyPayload(request execution.ModifyOrderRequest) map[string]any {
+	item := map[string]string{
+		"client_order_id": request.ClientOrderID,
+		"symbol":          request.Ticker,
+		"instrument_type": "EQUITY",
+		"market":          "US",
+		"order_type":      request.OrderType,
+		"quantity":        strconv.FormatFloat(request.Quantity, 'f', -1, 64),
+		"time_in_force":   request.TimeInForce,
+		"entrust_type":    "QTY",
+	}
+	if request.OrderType == "STOP_LOSS" {
+		item["stop_price"] = strconv.FormatFloat(request.StopPrice, 'f', -1, 64)
+		// Native stops are core-session only, the same constraint PlaceOrder
+		// works under. The trail engine only amends during the regular session.
+		item["support_trading_session"] = "CORE"
+	} else {
+		item["limit_price"] = strconv.FormatFloat(request.LimitPrice, 'f', -1, 64)
+		item["support_trading_session"] = "ALL"
+	}
+	return map[string]any{
+		"account_id":    request.AccountID,
+		"modify_orders": []map[string]string{item},
+	}
+}
+
 func (client *Client) GetOrders(
 	ctx context.Context, accountID string,
 ) ([]execution.BrokerOrder, error) {

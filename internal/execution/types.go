@@ -230,6 +230,33 @@ type BrokerAdapter interface {
 	GetFills(context.Context, string) ([]Fill, error)
 }
 
+// ModifyOrderRequest amends the price of an order already working at the broker.
+// Quantity and side cannot change here: moving a protective level is a price
+// edit, and anything more is a different order.
+type ModifyOrderRequest struct {
+	AccountID     string
+	ClientOrderID string
+	Ticker        string
+	OrderType     string
+	TimeInForce   string
+	Quantity      float64
+	LimitPrice    float64
+	StopPrice     float64
+}
+
+// OrderModifier is implemented by brokers that can amend a working order in
+// place. It is deliberately separate from BrokerAdapter, because not every
+// broker can do this and a caller must be able to tell which one it holds.
+//
+// The distinction matters for money. Cancelling a stop and placing a new one
+// leaves the position unprotected in between, and that gap is exactly when a
+// halted, fast-moving name gaps through the level. Code that finds only a
+// BrokerAdapter should report the weaker guarantee rather than treat the two as
+// equivalent.
+type OrderModifier interface {
+	ModifyOrder(context.Context, ModifyOrderRequest) error
+}
+
 type Repository interface {
 	RiskSnapshot(context.Context, string, Mode, string) (RiskSnapshot, error)
 	DefaultBrokerAccount(context.Context) (string, error)
