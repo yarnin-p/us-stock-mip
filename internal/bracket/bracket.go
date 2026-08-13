@@ -38,6 +38,8 @@ type Trigger string
 
 const (
 	TriggerInitial     Trigger = "INITIAL"      // first placement after entry fills
+	TriggerBreakEven   Trigger = "BREAK_EVEN"   // stop lifted to cover the round trip
+	TriggerProfitLock  Trigger = "PROFIT_LOCK"  // stop lifted to keep a real gain
 	TriggerTrailStop   Trigger = "TRAIL_STOP"   // stop ratcheted under a new high
 	TriggerTrailTarget Trigger = "TRAIL_TARGET" // target extended above a new high
 	TriggerManual      Trigger = "MANUAL"       // operator typed new levels
@@ -65,6 +67,29 @@ type Config struct {
 	// TrailTargetDistance is how far above the high-water mark the target sits.
 	// Required when TrailTargetAfter is set.
 	TrailTargetDistance float64
+
+	// BreakEvenAfter is the gain that arms the first floor, and BreakEvenFloor is
+	// the net gain the stop is moved to when it does. They are a pair: a trigger
+	// says when, a floor says where, and the floor is always the smaller number
+	// because a stop cannot sit above the price that armed it.
+	//
+	// This rung is the one that answers the case a trail alone cannot: price rises
+	// far enough to feel like a winner, never reaches the trail activation, comes
+	// back, and closes at the original stop.
+	BreakEvenAfter float64
+	BreakEvenFloor float64
+
+	// ProfitLockAfter and ProfitLockFloor are the same pair one rung higher, for
+	// keeping a real gain rather than only avoiding a loss.
+	ProfitLockAfter float64
+	ProfitLockFloor float64
+
+	// FeeRoundTripPercent is what getting in and out costs, as a fraction of the
+	// entry notional. Both floors are stated as net gains and are raised by this,
+	// because a floor stated in price is not a floor in cash: a 1.5% floor on a
+	// $1.60 share whose round trip costs 1.4% keeps nothing. The caller computes
+	// it, since only the caller knows its broker's schedule.
+	FeeRoundTripPercent float64
 
 	// MinimumStep is the smallest relative move worth an amendment. It defaults
 	// to DefaultMinimumStep, matching the ratchet the strategy coordinator
@@ -119,6 +144,73 @@ func (config Config) Validate() error {
 	}
 	if config.MinimumStep < 0 || !finite(config.MinimumStep) {
 		return errors.New("minimum step must be zero or positive")
+	}
+	if config.FeeRoundTripPercent < 0 || !finite(config.FeeRoundTripPercent) {
+		return errors.New("fee round trip percent must be zero or positive")
+	}
+	return config.validateFloors()
+}
+
+// validateFloors refuses a ladder whose rungs are out of order.
+//
+// The ordering is not a style preference. A floor above the trigger that armed it
+// would place the stop over the market and fire instantly; a profit lock below
+// the break-even floor would lower a stop that had already been raised, which is
+// the one thing this package promises never to do. Catching it here means a
+// misconfigured ladder cannot be persisted, let alone sent to a broker.
+func (config Config) validateFloors() error {
+	for _, rung := range []struct {
+		name         string
+		after, floor float64
+	}{
+		{"break even", config.BreakEvenAfter, config.BreakEvenFloor},
+		{"profit lock", config.ProfitLockAfter, config.ProfitLockFloor},
+	} {
+		if rung.after < 0 || !finite(rung.after) {
+			return fmt.Errorf("%s activation must be zero or positive", rung.name)
+		}
+		if rung.after == 0 {
+			if rung.floor != 0 {
+				return fmt.Errorf(
+					"%s floor is set but its activation is not; a floor with no "+
+						"trigger would never be applied", rung.name,
+				)
+			}
+			continue
+		}
+		if rung.floor < 0 || !finite(rung.floor) {
+			return fmt.Errorf("%s floor must be zero or positive", rung.name)
+		}
+		if rung.floor >= rung.after {
+			return fmt.Errorf(
+				"%s floor %.4f must be below its activation %.4f, or the stop "+
+					"would sit above the price that armed it",
+				rung.name, rung.floor, rung.after,
+			)
+		}
+	}
+	if config.BreakEvenAfter > 0 && config.ProfitLockAfter > 0 {
+		if config.ProfitLockAfter <= config.BreakEvenAfter {
+			return fmt.Errorf(
+				"profit lock activation %.4f must be above break even %.4f",
+				config.ProfitLockAfter, config.BreakEvenAfter,
+			)
+		}
+		if config.ProfitLockFloor <= config.BreakEvenFloor {
+			return fmt.Errorf(
+				"profit lock floor %.4f must be above the break even floor %.4f, "+
+					"or reaching it would lower a stop already raised",
+				config.ProfitLockFloor, config.BreakEvenFloor,
+			)
+		}
+	}
+	if config.TrailStopAfter > 0 && config.ProfitLockAfter > 0 &&
+		config.TrailStopAfter <= config.ProfitLockAfter {
+		return fmt.Errorf(
+			"trail activation %.4f must be above profit lock %.4f; the trail is "+
+				"the last rung, not the first",
+			config.TrailStopAfter, config.ProfitLockAfter,
+		)
 	}
 	return nil
 }
@@ -212,17 +304,20 @@ func Plan(current Bracket, lastPrice float64) (Adjustment, error) {
 	}
 	reasons := make([]string, 0, 2)
 
-	if config.TrailStopAfter > 0 && gain >= config.TrailStopAfter {
-		candidate := roundToCent(highWater * (1 - config.TrailStopDistance))
-		// Ratchet: only ever upward, and only when the move is worth a round
-		// trip to the broker.
-		if candidate > stop*(1+config.minimumStep()) && candidate < lastPrice {
+	// Every armed rung proposes a stop and the highest wins. Choosing between them
+	// rather than applying them in sequence is what makes them unable to fight: a
+	// rung that computes lower than one already reached simply does not win, so no
+	// ordering of arrivals can lower a stop.
+	if best := config.highestFloor(current.EntryPrice, highWater, gain); best.price > 0 {
+		// Ratchet: only ever upward, only when the move is worth a round trip to
+		// the broker, and never above the market -- a stop over the last print
+		// would fill the moment it arrived.
+		if best.price > stop*(1+config.minimumStep()) && best.price < lastPrice {
 			reasons = append(reasons, fmt.Sprintf(
-				"trailing stop %.4f -> %.4f (high %.4f, %.1f%% below)",
-				stop, candidate, highWater, config.TrailStopDistance*100,
+				"%s %.4f -> %.4f (%s)", best.label, stop, best.price, best.detail,
 			))
-			adjustment.StopPrice = candidate
-			adjustment.Trigger = TriggerTrailStop
+			adjustment.StopPrice = best.price
+			adjustment.Trigger = best.trigger
 			adjustment.Changed = true
 		}
 	}
@@ -259,6 +354,73 @@ func Plan(current Bracket, lastPrice float64) (Adjustment, error) {
 // Levels is the initial stop and target for an entry, used when the bracket is
 // created and again when the entry fills at a price other than the one asked
 // for.
+// floorProposal is one rung's answer: where it would put the stop, and enough
+// wording to explain itself in the audit trail.
+type floorProposal struct {
+	price   float64
+	trigger Trigger
+	label   string
+	detail  string
+}
+
+// highestFloor asks every armed rung where the stop belongs and returns the most
+// protective answer.
+//
+// The two lock rungs measure from the entry price, because what they promise is a
+// net outcome on this position. The trail measures from the high-water mark,
+// because what it promises is to give back no more than a set distance from the
+// best price seen. They are different promises and it would be wrong to state
+// either in the other's terms.
+func (config Config) highestFloor(
+	entryPrice, highWater, gain float64,
+) floorProposal {
+	best := floorProposal{}
+	consider := func(candidate floorProposal) {
+		if candidate.price > best.price {
+			best = candidate
+		}
+	}
+	// Both locks are stated as net gains, so the fee already spent on the round
+	// trip is added back before the stop is placed.
+	if config.BreakEvenAfter > 0 && gain >= config.BreakEvenAfter {
+		net := config.BreakEvenFloor + config.FeeRoundTripPercent
+		consider(floorProposal{
+			price:   roundToCent(entryPrice * (1 + net)),
+			trigger: TriggerBreakEven,
+			label:   "break-even floor",
+			detail: fmt.Sprintf(
+				"up %.1f%%, keeping %.1f%% net after %.2f%% costs",
+				gain*100, config.BreakEvenFloor*100,
+				config.FeeRoundTripPercent*100,
+			),
+		})
+	}
+	if config.ProfitLockAfter > 0 && gain >= config.ProfitLockAfter {
+		net := config.ProfitLockFloor + config.FeeRoundTripPercent
+		consider(floorProposal{
+			price:   roundToCent(entryPrice * (1 + net)),
+			trigger: TriggerProfitLock,
+			label:   "profit lock",
+			detail: fmt.Sprintf(
+				"up %.1f%%, keeping %.1f%% net after %.2f%% costs",
+				gain*100, config.ProfitLockFloor*100,
+				config.FeeRoundTripPercent*100,
+			),
+		})
+	}
+	if config.TrailStopAfter > 0 && gain >= config.TrailStopAfter {
+		consider(floorProposal{
+			price:   roundToCent(highWater * (1 - config.TrailStopDistance)),
+			trigger: TriggerTrailStop,
+			label:   "trailing stop",
+			detail: fmt.Sprintf(
+				"high %.4f, %.1f%% below", highWater, config.TrailStopDistance*100,
+			),
+		})
+	}
+	return best
+}
+
 func Levels(entryPrice float64, config Config) (stop, target float64, err error) {
 	if err := config.Validate(); err != nil {
 		return 0, 0, fmt.Errorf("bracket config: %w", err)

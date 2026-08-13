@@ -19,6 +19,8 @@ const bracketColumns = `id, mode, coalesce(account_id, ''), ticker, state,
 	stop_loss_percent, take_profit_percent,
 	trail_stop_after, trail_stop_distance,
 	trail_target_after, trail_target_distance, minimum_step,
+	break_even_after, break_even_floor, profit_lock_after, profit_lock_floor,
+	fee_round_trip_percent,
 	coalesce(entry_order_id, ''), coalesce(stop_order_id, ''),
 	coalesce(target_order_id, ''), risk_flags, coalesce(note, ''),
 	opened_at, closed_at, updated_at`
@@ -34,13 +36,16 @@ func (store *Store) CreateBracket(
 			stop_loss_percent, take_profit_percent,
 			trail_stop_after, trail_stop_distance,
 			trail_target_after, trail_target_distance, minimum_step,
+			break_even_after, break_even_floor,
+			profit_lock_after, profit_lock_floor, fee_round_trip_percent,
 			entry_order_id, stop_order_id, target_order_id, risk_flags, note
 		) VALUES (
 			$1, nullif($2, ''), $3, $4, $5, $6,
 			nullif($7, 0::numeric), nullif($8, 0::numeric),
 			nullif($9, 0::numeric), nullif($10, 0::numeric),
 			$11, $12, $13, $14, $15, $16, $17,
-			nullif($18, ''), nullif($19, ''), nullif($20, ''), $21, nullif($22, '')
+			$18, $19, $20, $21, $22,
+			nullif($23, ''), nullif($24, ''), nullif($25, ''), $26, nullif($27, '')
 		) RETURNING `+bracketColumns,
 		record.Mode, record.AccountID, record.Ticker, string(record.State),
 		record.Quantity, record.RequestedEntry,
@@ -49,6 +54,9 @@ func (store *Store) CreateBracket(
 		record.Config.TrailStopAfter, record.Config.TrailStopDistance,
 		record.Config.TrailTargetAfter, record.Config.TrailTargetDistance,
 		record.Config.MinimumStep,
+		record.Config.BreakEvenAfter, record.Config.BreakEvenFloor,
+		record.Config.ProfitLockAfter, record.Config.ProfitLockFloor,
+		record.Config.FeeRoundTripPercent,
 		record.EntryOrderID, record.StopOrderID, record.TargetOrderID,
 		nonNilStrings(record.RiskFlags), record.Note,
 	)
@@ -281,6 +289,9 @@ func scanBracket(row bracketRow) (bracket.Record, error) {
 		&record.Config.TrailStopAfter, &record.Config.TrailStopDistance,
 		&record.Config.TrailTargetAfter, &record.Config.TrailTargetDistance,
 		&record.Config.MinimumStep,
+		&record.Config.BreakEvenAfter, &record.Config.BreakEvenFloor,
+		&record.Config.ProfitLockAfter, &record.Config.ProfitLockFloor,
+		&record.Config.FeeRoundTripPercent,
 		&record.EntryOrderID, &record.StopOrderID, &record.TargetOrderID,
 		&record.RiskFlags, &record.Note,
 		&record.OpenedAt, &closedAt, &record.UpdatedAt,

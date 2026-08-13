@@ -28,6 +28,17 @@ type OpenInput struct {
 	TrailTargetAfter    float64 `json:"trail_target_after,omitempty"`
 	TrailTargetDistance float64 `json:"trail_target_distance,omitempty"`
 
+	// The floor rungs below the trail. Zero disables a rung; a floor with no
+	// activation is refused rather than ignored.
+	BreakEvenAfter  float64 `json:"break_even_after,omitempty"`
+	BreakEvenFloor  float64 `json:"break_even_floor,omitempty"`
+	ProfitLockAfter float64 `json:"profit_lock_after,omitempty"`
+	ProfitLockFloor float64 `json:"profit_lock_floor,omitempty"`
+
+	// FeeRoundTripPercent is what the caller's broker charges to get in and out,
+	// as a fraction of notional. Both floors are net of it.
+	FeeRoundTripPercent float64 `json:"fee_round_trip_percent,omitempty"`
+
 	// AccountEquity lets the preview state the loss as a share of the whole
 	// account, which is the number that decides whether one bad fill matters.
 	AccountEquity float64 `json:"account_equity,omitempty"`
@@ -85,6 +96,11 @@ func Preview(input OpenInput) (EntryPlan, error) {
 		TrailStopDistance:   input.TrailStopDistance,
 		TrailTargetAfter:    input.TrailTargetAfter,
 		TrailTargetDistance: input.TrailTargetDistance,
+		BreakEvenAfter:      input.BreakEvenAfter,
+		BreakEvenFloor:      input.BreakEvenFloor,
+		ProfitLockAfter:     input.ProfitLockAfter,
+		ProfitLockFloor:     input.ProfitLockFloor,
+		FeeRoundTripPercent: input.FeeRoundTripPercent,
 		MinimumStep:         DefaultMinimumStep,
 	}
 	stop, target, err := Levels(input.EntryPrice, config)
