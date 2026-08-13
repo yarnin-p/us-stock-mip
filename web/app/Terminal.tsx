@@ -1108,7 +1108,11 @@ function Entry({
   onChanged: () => void;
 }) {
   const [order, setOrder] = useState<ExecutionOrder | null>(null);
-  const [fill, setFill] = useState("");
+  // Prefilled from the plan, because an empty field disabled the arm button with
+  // nothing on screen saying why -- and the price asked for is the right starting
+  // guess when the fill has not been reported yet. Correcting it is one edit; working
+  // out why a button does nothing is not.
+  const [fill, setFill] = useState(() => String(bracket.requested_entry));
   const [shares, setShares] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1267,6 +1271,9 @@ function Entry({
         >
           arm — วาง SL/TP แล้วให้ engine ตาม
         </button>
+        {!(Number(fill) > 0) && (
+          <p className="tm-error">ใส่ราคาที่ได้จริงก่อน — ทุกเส้นคิดจากราคานี้</p>
+        )}
       </div>
 
       {said && <p className="tm-said">{said}</p>}

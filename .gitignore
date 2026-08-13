@@ -15,8 +15,16 @@
 __pycache__/
 *.pyc
 /web/dist/
-/web/build/
+# Ignore what the web build produces, but not sites-vite-plugin.ts: vite.config.ts
+# imports it, so with the whole directory ignored a clean clone could not build the
+# web app at all -- which is exactly what happened. Written as a contents glob rather
+# than a directory, because git does not descend into an ignored directory and a
+# negation inside one can never take effect.
+/web/build/*
+!/web/build/sites-vite-plugin.ts
 /web/.next/
 
 # Database dumps. Restorable state, not source; keep them off the remote.
 /backups/
+
+.run/

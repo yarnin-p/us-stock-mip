@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { NAV, NAV_KEYS, type NavKey } from "./nav";
+import { TerminalView } from "./Terminal";
 
 // TradeEdge — the warm-white admin shell.
 //
@@ -260,6 +261,15 @@ function useJSON<T>(path: string | null, deps: unknown[] = []) {
 
 /* ── shell ─────────────────────────────────────────────────────────────── */
 
+// The views that exist. One list rather than a condition repeated per view: the
+// placeholder and the screens were two places to edit, and a screen added to one and
+// not the other renders both at once -- or neither, which is how the terminal came to
+// be reachable by nothing.
+const BUILT: readonly string[] = [
+  "dashboard", "gainers", "scanner", "watchlist", "positions", "performance",
+  "terminal",
+];
+
 export function TradeEdgeApp({ section }: { section: string }) {
   const router = useRouter();
   const view = (NAV_KEYS.includes(section)
@@ -306,8 +316,15 @@ export function TradeEdgeApp({ section }: { section: string }) {
           {view === "watchlist" && <WatchlistView items={watch ?? []} />}
           {view === "positions" && <PositionsView positions={positions ?? []} />}
           {view === "performance" && <PerformanceView paper={paper} />}
-          {!["dashboard", "gainers", "scanner", "watchlist", "positions", "performance"]
-            .includes(view) && <NotBuilt label={NAV.find((item) => item.key === view)?.label ?? ""} />}
+          {/* The terminal is the one screen that sends instructions about money, so it
+            * brings its own surface rather than being themed like the rest of the
+            * console. It was written and never mounted: the rail linked to a route that
+            * rendered the not-built placeholder, so every field on it -- the exit
+            * ladder, arming, the manual hold -- was unreachable. */}
+          {view === "terminal" && <TerminalView />}
+          {!BUILT.includes(view) && (
+            <NotBuilt label={NAV.find((item) => item.key === view)?.label ?? ""} />
+          )}
         </div>
       </div>
     </div>

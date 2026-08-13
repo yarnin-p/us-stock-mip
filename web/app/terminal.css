@@ -580,3 +580,16 @@
   background: rgba(251, 191, 36, 0.18);
   border: 1px solid rgba(251, 191, 36, 0.55);
 }
+
+/* Rung fields wrap instead of being crushed. Three inputs squeezed into a narrow
+ * ticket column made every label unreadable, and a rule nobody can read is a rule
+ * nobody checks before their money is behind it. */
+.tm-advanced .tm-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.5rem 0.7rem;
+}
+.tm-advanced .tm-field span {
+  white-space: normal;
+  line-height: 1.25;
+}
