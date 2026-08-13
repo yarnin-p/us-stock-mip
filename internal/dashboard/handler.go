@@ -35,6 +35,7 @@ type Options struct {
 	TicketLimits       TicketLimitSource
 	TicketUSDTHB       float64
 	Gainers            GainersSource
+	Brackets           BracketSource
 }
 
 type Handler struct {
@@ -53,6 +54,7 @@ type Handler struct {
 	ticketLimits       TicketLimitSource
 	usdTHB             float64
 	gainersSource      GainersSource
+	bracketSource      BracketSource
 }
 
 func NewHandler(repository Repository, options Options) *Handler {
@@ -71,6 +73,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		runtimeHealth:      options.RuntimeHealth,
 		ticketLimits:       options.TicketLimits,
 		gainersSource:      options.Gainers,
+		bracketSource:      options.Brackets,
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
@@ -95,6 +98,15 @@ func NewHandler(repository Repository, options Options) *Handler {
 	// manual ticket cannot bypass approval or the kill switch.
 	handler.mux.HandleFunc("POST /ticket/preview", handler.previewTicket)
 	handler.mux.HandleFunc("POST /ticket/submit", handler.submitTicket)
+	// The bracket terminal. Preview is a pure calculation; opening records the
+	// intent. Neither places an order -- entry submission stays on the execution
+	// path so a bracket cannot route around approval or the kill switch.
+	handler.mux.HandleFunc("POST /brackets/preview", handler.previewBracket)
+	handler.mux.HandleFunc("GET /brackets", handler.brackets)
+	handler.mux.HandleFunc("POST /brackets", handler.openBracket)
+	handler.mux.HandleFunc("GET /brackets/{id}", handler.bracketDetail)
+	handler.mux.HandleFunc("PATCH /brackets/{id}", handler.amendBracket)
+	handler.mux.HandleFunc("POST /brackets/{id}/close", handler.closeBracket)
 	if handler.spikeWatcher != nil {
 		handler.mux.HandleFunc("GET /spike-watch", handler.spikeWatch)
 	}

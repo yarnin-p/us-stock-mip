@@ -1,0 +1,208 @@
+package dashboard
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/momentum-intelligence-platform/mip/internal/bracket"
+)
+
+// BracketSource is the terminal's view of the bracket service. It is supplied
+// through Options rather than added to Repository so the existing test doubles
+// keep compiling.
+type BracketSource interface {
+	List(context.Context, int) ([]bracket.Record, error)
+	Get(context.Context, int64) (bracket.Record, error)
+	Adjustments(context.Context, int64) ([]bracket.AdjustmentRecord, error)
+	Open(context.Context, bracket.OpenInput, string) (bracket.Record, error)
+	Amend(context.Context, int64, float64, float64) (bracket.Record, error)
+	Close(context.Context, int64, bracket.State, string) (bracket.Record, error)
+	Mode() string
+}
+
+// previewBracket sizes an intent and states its risk without touching a broker.
+// It is a pure calculation, so the terminal can call it on every keystroke.
+func (handler *Handler) previewBracket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	var input bracket.OpenInput
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, err := bracket.Preview(input)
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, plan)
+}
+
+func (handler *Handler) brackets(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	limit := 100
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeAPIError(response, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	records, err := source.List(request.Context(), limit)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"mode": source.Mode(), "brackets": records,
+	})
+}
+
+// bracketDetail returns the bracket with its full adjustment history. The
+// history is the point of the screen: when a stop turns out to have been in the
+// wrong place, the question is what was known when it moved.
+func (handler *Handler) bracketDetail(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	id, ok := bracketID(response, request)
+	if !ok {
+		return
+	}
+	record, err := source.Get(request.Context(), id)
+	if err != nil {
+		writeAPIError(response, http.StatusNotFound, err.Error())
+		return
+	}
+	adjustments, err := source.Adjustments(request.Context(), id)
+	if err != nil {
+		writeAPIError(response, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"bracket": record, "adjustments": adjustments,
+	})
+}
+
+// openBracket records the intent in PENDING. It places nothing: the entry order
+// goes through the execution path so a bracket cannot bypass the risk gate or
+// the kill switch, which is the same reason the manual ticket does not submit
+// from here either.
+func (handler *Handler) openBracket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	var input bracket.OpenInput
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	record, err := source.Open(request.Context(), input, "")
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusCreated, record)
+}
+
+type amendBracketRequest struct {
+	StopPrice   float64 `json:"stop_price"`
+	TargetPrice float64 `json:"target_price"`
+}
+
+func (handler *Handler) amendBracket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	id, ok := bracketID(response, request)
+	if !ok {
+		return
+	}
+	var body amendBracketRequest
+	if err := decodeJSON(response, request, &body); err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	record, err := source.Amend(
+		request.Context(), id, body.StopPrice, body.TargetPrice,
+	)
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, record)
+}
+
+type closeBracketRequest struct {
+	State string `json:"state"`
+	Note  string `json:"note,omitempty"`
+}
+
+func (handler *Handler) closeBracket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	id, ok := bracketID(response, request)
+	if !ok {
+		return
+	}
+	var body closeBracketRequest
+	if err := decodeJSON(response, request, &body); err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	record, err := source.Close(
+		request.Context(), id, bracket.State(body.State), body.Note,
+	)
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, record)
+}
+
+func (handler *Handler) requireBrackets(
+	response http.ResponseWriter,
+) (BracketSource, bool) {
+	if handler.bracketSource == nil {
+		writeAPIError(
+			response, http.StatusServiceUnavailable,
+			"the bracket terminal is not configured on this deployment",
+		)
+		return nil, false
+	}
+	return handler.bracketSource, true
+}
+
+func bracketID(
+	response http.ResponseWriter, request *http.Request,
+) (int64, bool) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeAPIError(
+			response, http.StatusBadRequest, errors.New("invalid bracket id").Error(),
+		)
+		return 0, false
+	}
+	return id, true
+}

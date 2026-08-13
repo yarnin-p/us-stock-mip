@@ -20,6 +20,7 @@ import (
 
 	"github.com/momentum-intelligence-platform/mip/internal/alpaca"
 	"github.com/momentum-intelligence-platform/mip/internal/automation"
+	"github.com/momentum-intelligence-platform/mip/internal/bracket"
 	"github.com/momentum-intelligence-platform/mip/internal/catalyst"
 	"github.com/momentum-intelligence-platform/mip/internal/config"
 	"github.com/momentum-intelligence-platform/mip/internal/dashboard"
@@ -198,6 +199,13 @@ func runServe(args []string, stderr io.Writer) error {
 		)
 	}
 	runtimeHealth := newRuntimeHealthRegistry()
+	// The bracket terminal runs in whatever mode execution is in. It never places
+	// an order itself, so this wiring cannot promote paper to live; flipping modes
+	// stays a deliberate configuration change.
+	bracketService, err := bracket.NewService(store, appConfig.TradingMode)
+	if err != nil {
+		return fmt.Errorf("wiring the bracket terminal: %w", err)
+	}
 	handler := dashboard.NewHandler(repository, dashboard.Options{
 		AllowedOrigin:      allowedOrigin,
 		Logger:             logger,
@@ -209,6 +217,7 @@ func runServe(args []string, stderr io.Writer) error {
 		SpikeWatcher:       store,
 		NewsCatalysts:      store,
 		Gainers:            store,
+		Brackets:           bracketService,
 		RuntimeHealth:      runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.
