@@ -24,6 +24,7 @@ func TestEveryQueryPassesTheArgumentsItDeclares(t *testing.T) {
 	}
 	call := regexp.MustCompile(`\.(?:Query|QueryRow|Exec)\(\s*ctx,\s*` + "`")
 	placeholder := regexp.MustCompile(`\$(\d+)`)
+	constants := packageStringConstants(entries)
 	checked := 0
 	for _, entry := range entries {
 		if strings.HasSuffix(entry, "_test.go") {
@@ -42,6 +43,11 @@ func TestEveryQueryPassesTheArgumentsItDeclares(t *testing.T) {
 			}
 			closing += open + 1
 			query := text[open+1 : closing]
+			// A query assembled from a shared column list continues past the
+			// first backtick as `+ident+`. Splice the constant in and keep
+			// going, or the concatenation itself gets counted as an argument
+			// and every such call reports one too many.
+			query, closing = spliceConcatenated(text, query, closing, constants)
 			highest := 0
 			for _, found := range placeholder.FindAllStringSubmatch(query, -1) {
 				value, convErr := strconv.Atoi(found[1])
@@ -120,4 +126,62 @@ func countArguments(rest string) int {
 func isCommentStart(rest string, index int) bool {
 	return index+1 < len(rest) && rest[index] == '/' &&
 		(rest[index+1] == '/' || rest[index+1] == '*')
+}
+
+// packageStringConstants collects file-level backtick string constants so a
+// query built from one can be reassembled before it is checked.
+func packageStringConstants(entries []string) map[string]string {
+	pattern := regexp.MustCompile("(?s)const\\s+(\\w+)\\s*=\\s*`([^`]*)`")
+	constants := map[string]string{}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(entry)
+		if err != nil {
+			continue
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(source), -1) {
+			constants[match[1]] = match[2]
+		}
+	}
+	return constants
+}
+
+// spliceConcatenated follows a `...` + ident + `...` chain, returning the whole
+// query text and the offset just past its final literal.
+func spliceConcatenated(
+	text, query string, closing int, constants map[string]string,
+) (string, int) {
+	joiner := regexp.MustCompile("^\\s*\\+\\s*(\\w+)\\s*(\\+\\s*)?")
+	for {
+		rest := text[closing+1:]
+		match := joiner.FindStringSubmatch(rest)
+		if match == nil {
+			return query, closing
+		}
+		value, ok := constants[match[1]]
+		if !ok {
+			// An unknown identifier cannot be resolved, so the count would be
+			// guesswork either way. Stop rather than report a wrong number.
+			return query, closing
+		}
+		query += value
+		advance := closing + 1 + len(match[0])
+		if match[2] == "" {
+			return query, advance - 1
+		}
+		next := strings.Index(text[advance:], "`")
+		if next < 0 {
+			return query, advance - 1
+		}
+		literalStart := advance + next
+		literalEnd := strings.Index(text[literalStart+1:], "`")
+		if literalEnd < 0 {
+			return query, advance - 1
+		}
+		literalEnd += literalStart + 1
+		query += text[literalStart+1 : literalEnd]
+		closing = literalEnd
+	}
 }
