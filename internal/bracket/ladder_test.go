@@ -333,7 +333,10 @@ func partialRecord(t *testing.T) Record {
 	return record
 }
 
-func TestPartialTakeProfitSellsASliceAndResizesTheProtection(t *testing.T) {
+// The two-step version of this -- sold, then confirmed, then resized -- lives in
+// TestThePositionShrinksOnlyWhenTheSliceActuallyFills. This one covers the send:
+// what goes to the broker, and that the position is left alone until it fills.
+func TestPartialTakeProfitSendsALimitForTheSlice(t *testing.T) {
 	record := partialRecord(t)
 	repository := newStubRepository(record)
 	modifier := &stubModifier{}
@@ -362,20 +365,20 @@ func TestPartialTakeProfitSellsASliceAndResizesTheProtection(t *testing.T) {
 	}
 
 	stored := repository.stored(t, record.ID)
-	if stored.PartialTakenQuantity != 25 || stored.Quantity != 75 {
-		t.Fatalf("position = %v held, %v sold; want 75 and 25",
+	// Sent is not sold. Until the limit fills, all 100 shares are still held and
+	// all 100 still need protecting.
+	if stored.Quantity != 100 || stored.PartialTakenQuantity != 0 {
+		t.Fatalf("position = %v held, %v sold; the sale has not filled yet",
 			stored.Quantity, stored.PartialTakenQuantity)
 	}
-	// The stop was covering 100 shares a moment ago. Leaving it there would have it
-	// selling stock that has already gone.
-	resized := false
-	for _, call := range modifier.calls() {
-		if call.OrderType == "STOP_LOSS" && call.Quantity == 75 {
-			resized = true
-		}
+	if stored.PartialOrderID == "" {
+		t.Fatal("the sale left no handle, so nothing could confirm or stop it repeating")
 	}
-	if !resized {
-		t.Fatalf("the stop was not resized to the remaining 75: %+v", modifier.calls())
+	for _, call := range modifier.calls() {
+		if call.Quantity != 100 {
+			t.Fatalf("the stop was resized to %v while 100 are held: %+v",
+				call.Quantity, modifier.calls())
+		}
 	}
 }
 

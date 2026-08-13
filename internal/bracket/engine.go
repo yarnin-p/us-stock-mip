@@ -35,6 +35,8 @@ type Engine struct {
 	repository Repository
 	modifier   execution.OrderModifier
 	seller     SliceSeller
+	inspector  execution.OrderInspector
+	finisher   Finisher
 	logger     *slog.Logger
 	mode       string
 	// session reports whether native stop amendments are accepted at a given
@@ -71,8 +73,15 @@ type EngineOptions struct {
 	// Leaving it out is legal and the rung then records why it did nothing, which is
 	// more honest than a config that silently means less than it says.
 	Seller SliceSeller
-	Logger *slog.Logger
-	Mode   string
+	// Inspector and Finisher close the loop on a fill: one reads what became of a
+	// protective order, the other ends the bracket. They come as a pair. Reading
+	// that a stop filled and then doing nothing about it is the worst of the three
+	// states -- the system would know the position is gone and still show a bracket
+	// protecting it -- so the constructor refuses one without the other.
+	Inspector execution.OrderInspector
+	Finisher  Finisher
+	Logger    *slog.Logger
+	Mode      string
 	// AmendableAt gates amendments to the sessions the broker accepts them in.
 	// The default allows every session, which is correct for paper and wrong for
 	// Webull -- the caller wiring a live adapter must pass the real gate.
@@ -89,6 +98,13 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 				"cancel-then-replace would leave positions unprotected between calls",
 		)
 	}
+	if (options.Inspector == nil) != (options.Finisher == nil) {
+		return nil, errors.New(
+			"bracket engine needs an order inspector and a finisher together: " +
+				"detecting that a stop filled and not ending the bracket would leave " +
+				"the system trailing a level for stock nobody holds",
+		)
+	}
 	mode := strings.TrimSpace(options.Mode)
 	if mode == "" {
 		mode = "paper"
@@ -97,6 +113,8 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 		repository: options.Repository,
 		modifier:   options.Modifier,
 		seller:     options.Seller,
+		inspector:  options.Inspector,
+		finisher:   options.Finisher,
 		logger:     options.Logger,
 		mode:       mode,
 		session:    options.AmendableAt,
@@ -140,15 +158,35 @@ func (engine *Engine) HandleTick(
 		if record.State != StateActive {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Settled before anything else, and before the manual-hold gate. A bracket
+		// whose stop has filled has no levels left to move, and a hold means the
+		// operator is choosing where the stop sits -- not that a position which has
+		// already been sold should go on being reported as protected.
+		settled, updated, err := engine.settle(ctx, record, tick)
+		if err != nil {
+			failures = errors.Join(
+				failures, fmt.Errorf("bracket %d: %w", record.ID, err),
+			)
+			// A broker that cannot be reached for a status is not a reason to stop
+			// protecting the position, so the trail still gets its turn below.
+			engine.logger.Warn(
+				"could not confirm what became of a protective order",
+				"ticker", record.Ticker, "bracket_id", record.ID, "error", err,
+			)
+		}
+		if settled {
+			continue
+		}
+		record = updated
 		if record.ManualHold {
 			// Recorded, not sent -- the same treatment as an unamendable session. A
 			// held bracket that left no trail would make it impossible to see later
 			// what the engine would have done while the operator was driving.
 			engine.holdBack(ctx, record, tick.Price)
 			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return err
 		}
 		// One bracket failing must not deny the others on this symbol their move,
 		// so the errors are joined rather than returned at the first one.
@@ -165,9 +203,194 @@ func (engine *Engine) HandleTick(
 	return failures
 }
 
-// sellSlice takes the partial take-profit. It reduces the tracked position only
-// after the broker has accepted the sale, so a rejected slice cannot leave the
-// engine guarding a size that never left.
+// settle asks the broker what became of this bracket's orders, and acts on the
+// answer. It reports whether the bracket is finished, and hands back the record as
+// it now stands.
+//
+// It asks only when the price makes it worth asking. A stop is checked when the
+// print is at or through it, a target when the print reaches it, and a slice
+// whenever one is out. Nothing here is on a timer and nothing sweeps the book: the
+// tick that could have caused the fill is the tick that goes and looks, which is
+// why the cost is a request per plausible fill rather than per position per second.
+//
+// The gap this leaves is worth naming. If the feed dies at the moment of a fill,
+// no tick arrives to prompt the question and the bracket stays active until one
+// does or the operator closes it by hand. Closing that would take an account order
+// stream, which this broker does not offer; a poller would only narrow it, at the
+// cost of a request per position forever.
+func (engine *Engine) settle(
+	ctx context.Context, record Record, tick marketdata.Tick,
+) (bool, Record, error) {
+	if engine.inspector == nil {
+		return false, record, nil
+	}
+	var failures error
+
+	// The slice first: it changes the size the other two orders should cover, and
+	// amending them with a stale size is the mistake that leaves stock unguarded.
+	if record.PartialOrderID != "" && record.PartialTakenQuantity <= 0 {
+		updated, err := engine.settleSlice(ctx, record)
+		if err != nil {
+			failures = errors.Join(failures, err)
+		}
+		record = updated
+	}
+
+	if record.StopOrderID != "" && record.StopPrice > 0 &&
+		tick.Price <= record.StopPrice {
+		done, err := engine.settleExit(
+			ctx, record, record.StopOrderID, StateStopped, tick,
+		)
+		if err != nil {
+			failures = errors.Join(failures, err)
+		} else if done {
+			return true, record, nil
+		}
+	}
+	if record.TargetOrderID != "" && record.TargetPrice > 0 &&
+		tick.Price >= record.TargetPrice {
+		done, err := engine.settleExit(
+			ctx, record, record.TargetOrderID, StateTargeted, tick,
+		)
+		if err != nil {
+			failures = errors.Join(failures, err)
+		} else if done {
+			return true, record, nil
+		}
+	}
+	return false, record, failures
+}
+
+// settleExit ends the bracket when the order that would end it has filled.
+func (engine *Engine) settleExit(
+	ctx context.Context,
+	record Record,
+	orderID string,
+	state State,
+	tick marketdata.Tick,
+) (bool, error) {
+	outcome, err := engine.inspector.OrderOutcome(
+		ctx, record.AccountID, orderID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("reading order %s: %w", orderID, err)
+	}
+	if !outcome.Filled {
+		return false, nil
+	}
+	price := outcome.FilledPrice
+	if price <= 0 {
+		// A fill the broker will not price is still a fill, and the tick that
+		// prompted the question is the closest honest stand-in.
+		price = tick.Price
+	}
+	note := fmt.Sprintf(
+		"%s filled %.0f at %.4f", strings.ToLower(string(state)),
+		outcome.FilledQuantity, price,
+	)
+	// The audit row goes in before the state changes, so a bracket that ends is
+	// never left without the reason it ended.
+	engine.record(ctx, record, Adjustment{
+		Trigger: TriggerFilled, HighWater: record.HighWater,
+		StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+		Reason: note,
+	}, price, true, "")
+	if _, err := engine.finisher.Close(ctx, record.ID, state, note); err != nil {
+		return false, fmt.Errorf("closing bracket %d after a fill: %w", record.ID, err)
+	}
+	engine.logger.Info(
+		"bracket closed by a fill",
+		"ticker", record.Ticker, "bracket_id", record.ID, "state", string(state),
+		"shares", outcome.FilledQuantity, "price", price,
+	)
+	return true, nil
+}
+
+// settleSlice reduces the position once the partial sale has actually gone
+// through, and resizes what protects the rest.
+//
+// The reduction waits for the fill rather than assuming it. A limit sitting
+// unfilled while the tracked size has already shrunk is the dangerous version:
+// the stop then covers less stock than is held and the difference is protected by
+// nothing. Waiting inverts that -- for the moment between the fill and the next
+// tick the stop covers more than is held, which the broker refuses rather than
+// acts on.
+func (engine *Engine) settleSlice(
+	ctx context.Context, record Record,
+) (Record, error) {
+	outcome, err := engine.inspector.OrderOutcome(
+		ctx, record.AccountID, record.PartialOrderID,
+	)
+	if err != nil {
+		return record, fmt.Errorf(
+			"reading partial sale %s: %w", record.PartialOrderID, err,
+		)
+	}
+	switch {
+	case outcome.Filled && outcome.FilledQuantity > 0:
+	case outcome.Working:
+		// Still out there. The position stays whole, which is what it is.
+		return record, nil
+	default:
+		// Cancelled, expired or refused. The rung is spent either way -- re-arming it
+		// would sell into a level the price has long since left -- so the order ID is
+		// cleared and the reason recorded.
+		engine.record(ctx, record, Adjustment{
+			Trigger: TriggerPartialTP, HighWater: record.HighWater,
+			StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+			Reason: fmt.Sprintf(
+				"partial sale %s ended %s without filling; the position is unchanged",
+				record.PartialOrderID, outcome.State,
+			),
+		}, record.HighWater, false, "")
+		return record, nil
+	}
+
+	sold := min(outcome.FilledQuantity, record.Quantity)
+	record.PartialTakenQuantity += sold
+	record.Quantity -= sold
+	engine.logger.Info(
+		"partial sale confirmed",
+		"ticker", record.Ticker, "bracket_id", record.ID,
+		"sold", sold, "remaining", record.Quantity, "price", outcome.FilledPrice,
+	)
+	reason := fmt.Sprintf(
+		"partial sale filled %.0f at %.4f; %.0f shares remain protected",
+		sold, outcome.FilledPrice, record.Quantity,
+	)
+	// The protective orders now cover more shares than are held. Resizing them is
+	// the same edit as the price move, so it goes out here rather than waiting for
+	// a level to happen to change. This happens even under a manual hold: a hold
+	// means the operator chooses where the stop sits, and correcting the size it
+	// covers leaves that choice exactly where they put it.
+	stopErr := engine.amend(
+		ctx, record, record.StopOrderID, "STOP_LOSS", record.StopPrice, true,
+	)
+	targetErr := engine.amend(
+		ctx, record, record.TargetOrderID, "LIMIT", record.TargetPrice, true,
+	)
+	brokerErr := errors.Join(stopErr, targetErr)
+	adjustment := Adjustment{
+		Trigger: TriggerPartialTP, HighWater: record.HighWater,
+		StopPrice: record.StopPrice, TargetPrice: record.TargetPrice,
+		PreviousStopPrice: record.StopPrice, PreviousTargetPrice: record.TargetPrice,
+		Reason: reason,
+	}
+	if brokerErr != nil {
+		engine.record(
+			ctx, record, adjustment, outcome.FilledPrice, false, brokerErr.Error(),
+		)
+		// The sale is still recorded: the shares have gone whatever the broker says
+		// about the resize, and pretending otherwise would guard a size that no
+		// longer exists.
+		return record, brokerErr
+	}
+	engine.record(ctx, record, adjustment, outcome.FilledPrice, true, "")
+	return record, nil
+}
+
+// sellSlice takes the partial take-profit. It records the sale as sent, and the
+// position shrinks only when the broker confirms the fill.
 //
 // The slice goes out as a limit at the price that armed it rather than a market
 // order. These are thin names: a market sale of a quarter of the position is
@@ -271,32 +494,28 @@ func (engine *Engine) advance(
 		return false, nil
 	}
 
-	resized := false
 	if adjustment.PartialQuantity > 0 {
-		sold, err := engine.sellSlice(ctx, record, adjustment, lastPrice)
+		sent, err := engine.sellSlice(ctx, record, adjustment, lastPrice)
 		switch {
 		case err != nil:
 			engine.record(ctx, record, adjustment, lastPrice, false, err.Error())
 			return false, err
-		case sold:
-			// The protective orders now cover more shares than are held, so the size
-			// is reduced here, before they are amended. Reducing it afterwards would
-			// send the resize with the old quantity and leave a stop covering stock
-			// that has already gone.
-			record.PartialTakenQuantity += adjustment.PartialQuantity
-			record.Quantity -= adjustment.PartialQuantity
+		case sent:
+			// Only the handle is recorded here. The size stays as it is until the sale
+			// actually fills, because a stop resized against a limit that never fills
+			// covers less stock than is held and the difference is guarded by nothing.
+			// settleSlice reduces it and resizes the protection together.
 			record.PartialOrderID = partialOrderID(record)
-			resized = true
 		}
 	}
 
 	stopErr := engine.amend(
 		ctx, record, record.StopOrderID, "STOP_LOSS",
-		adjustment.StopPrice, resized || adjustment.StopPrice != record.StopPrice,
+		adjustment.StopPrice, adjustment.StopPrice != record.StopPrice,
 	)
 	targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT",
-		adjustment.TargetPrice, resized || adjustment.TargetPrice != record.TargetPrice,
+		adjustment.TargetPrice, adjustment.TargetPrice != record.TargetPrice,
 	)
 	if brokerErr := errors.Join(stopErr, targetErr); brokerErr != nil {
 		engine.record(ctx, record, adjustment, lastPrice, false, brokerErr.Error())

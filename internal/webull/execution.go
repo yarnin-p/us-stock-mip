@@ -230,6 +230,46 @@ func (client *Client) GetOrders(
 	return result, nil
 }
 
+// OrderOutcome reports what became of one order. It reads the order's own detail
+// rather than scanning history, so asking about a bracket's stop costs one request
+// whatever the account has done this year.
+//
+// Webull's status vocabulary is mapped here and nowhere else. The words are the
+// venue's, the meaning is the domain's, and a status this does not recognise counts
+// as neither filled nor working -- which reads as "gone, and nothing happened", the
+// safe way for a caller deciding whether a position is still protected to be wrong.
+func (client *Client) OrderOutcome(
+	ctx context.Context, accountID, clientOrderID string,
+) (execution.OrderOutcome, error) {
+	order, err := client.OrderDetail(ctx, accountID, clientOrderID)
+	if err != nil {
+		return execution.OrderOutcome{}, err
+	}
+	outcome := execution.OrderOutcome{
+		State:          order.Status,
+		FilledQuantity: order.FilledQuantity,
+	}
+	switch strings.ToUpper(strings.TrimSpace(order.Status)) {
+	case "FILLED", "PARTIAL_FILLED", "PARTIALLY_FILLED":
+		// A partial fill counts as filled with the quantity that went, because the
+		// caller's question is how much stock it still holds.
+		outcome.Filled = order.FilledQuantity > 0
+		outcome.Working = order.FilledQuantity < order.TotalQuantity
+	case "PENDING", "WORKING", "SUBMITTED", "QUEUED", "PENDING_SUBMIT",
+		"PENDING_CANCEL", "PENDING_REPLACE":
+		outcome.Working = true
+	}
+	if order.FilledPrice != nil {
+		outcome.FilledPrice = *order.FilledPrice
+	}
+	if order.FilledAt != nil {
+		outcome.FilledAt = *order.FilledAt
+	}
+	return outcome, nil
+}
+
+var _ execution.OrderInspector = (*Client)(nil)
+
 func (client *Client) GetPositions(
 	ctx context.Context, accountID string,
 ) ([]execution.BrokerPosition, error) {

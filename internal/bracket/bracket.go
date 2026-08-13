@@ -44,6 +44,7 @@ const (
 	TriggerTrailStop   Trigger = "TRAIL_STOP"   // stop ratcheted under a new high
 	TriggerTrailTarget Trigger = "TRAIL_TARGET" // target extended above a new high
 	TriggerManual      Trigger = "MANUAL"       // operator typed new levels
+	TriggerFilled      Trigger = "FILLED"       // a protective order ended the position
 )
 
 // Config is the risk shape of one bracket, expressed as fractions of the entry
@@ -272,9 +273,13 @@ type Bracket struct {
 	Config   Config
 	Quantity float64
 	// PartialTakenQuantity is how much of the original size has already been sold
-	// into strength. Plan reads it to know the slice was taken, so a later tick at
-	// the same gain does not sell again.
+	// into strength, once the broker has confirmed the sale.
 	PartialTakenQuantity float64
+	// PartialSliceSent says a slice has been sent to the broker, filled or not.
+	// This is what stops the rung firing twice, rather than the quantity sold:
+	// between sending a limit and it filling there is nothing sold yet, and a rung
+	// gated on the quantity would sell another slice on every tick in that window.
+	PartialSliceSent bool
 
 	// EntryPrice is the average fill of the entry order once known, and the
 	// intended entry before that. Every level is derived from it.
@@ -389,11 +394,10 @@ func Plan(current Bracket, lastPrice float64) (Adjustment, error) {
 	}
 
 	// The slice is decided from the high-water mark like the floors are, so a tick
-	// that dips after the level was reached does not un-arm it. It is taken once:
-	// PartialTakenQuantity is what already left, and a second slice would be a
-	// different rung nobody configured.
+	// that dips after the level was reached does not un-arm it. It is sent once:
+	// a second slice would be a different rung nobody configured.
 	if config.PartialTPAfter > 0 && gain >= config.PartialTPAfter &&
-		current.PartialTakenQuantity <= 0 && current.Quantity > 0 {
+		!current.PartialSliceSent && current.Quantity > 0 {
 		slice := math.Floor(current.Quantity * config.PartialTPFraction)
 		switch {
 		case slice < config.PartialTPMinShares:

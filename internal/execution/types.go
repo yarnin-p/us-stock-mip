@@ -260,6 +260,40 @@ type OrderModifier interface {
 	ModifyOrder(context.Context, ModifyOrderRequest) error
 }
 
+// OrderOutcome is what became of one order that was placed.
+//
+// Filled and Working are stated separately rather than derived from State,
+// because State is the broker's own vocabulary and every broker spells these
+// differently. Neither being true is a real answer, not a missing one: an order
+// can be cancelled, expired or rejected, and the caller has to be able to tell
+// "gone, and nothing happened" from "still out there".
+type OrderOutcome struct {
+	// State is the broker's own word for it, kept for the audit trail.
+	State          string
+	Filled         bool
+	Working        bool
+	FilledQuantity float64
+	FilledPrice    float64
+	FilledAt       time.Time
+}
+
+// OrderInspector reports what became of a single order, found by the client order
+// ID that placed it.
+//
+// This is what closes the loop on a protective order. Without it a stop can fill,
+// the position can be gone, and the system goes on trailing a level for stock
+// nobody holds: amending an order the broker has already finished with, and
+// showing an operator a bracket that is protecting nothing.
+//
+// It reads one order rather than a list. The caller knows which orders it placed
+// and asks about those, so the cost scales with open positions instead of with
+// account history.
+type OrderInspector interface {
+	OrderOutcome(
+		ctx context.Context, accountID, clientOrderID string,
+	) (OrderOutcome, error)
+}
+
 type Repository interface {
 	RiskSnapshot(context.Context, string, Mode, string) (RiskSnapshot, error)
 	DefaultBrokerAccount(context.Context) (string, error)

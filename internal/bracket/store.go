@@ -2,6 +2,7 @@ package bracket
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -55,7 +56,10 @@ func (record Record) Bracket() Bracket {
 		ID: record.ID, Ticker: record.Ticker, State: record.State,
 		Config: record.Config, Quantity: record.Quantity,
 		PartialTakenQuantity: record.PartialTakenQuantity,
-		EntryPrice:           entry, StopPrice: record.StopPrice,
+		// A slice that has been sent but not yet confirmed is still sent, so the
+		// order ID -- not the quantity -- is what says the rung has fired.
+		PartialSliceSent: strings.TrimSpace(record.PartialOrderID) != "",
+		EntryPrice:       entry, StopPrice: record.StopPrice,
 		TargetPrice: record.TargetPrice, HighWater: record.HighWater,
 	}
 }
@@ -77,6 +81,18 @@ type AdjustmentRecord struct {
 	BrokerError    string    `json:"broker_error,omitempty"`
 	Reason         string    `json:"reason,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+// Finisher records a bracket as over and releases whatever was following its
+// symbol.
+//
+// The engine holds one instead of writing the terminal state itself, so a bracket
+// closed by a stop filling and one closed by hand go through the same door. Two
+// ways to end a bracket would be two places to forget to release the feed, and a
+// symbol nobody unwatches keeps paying a venue subscription for a position that
+// no longer exists.
+type Finisher interface {
+	Close(ctx context.Context, id int64, state State, note string) (Record, error)
 }
 
 // Repository is the persistence this package needs. It is defined here, beside

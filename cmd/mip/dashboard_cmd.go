@@ -210,7 +210,9 @@ func runServe(args []string, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("wiring the bracket terminal: %w", err)
 	}
-	bracketFeed, err := buildBracketFeed(ctx, appConfig, store, logger)
+	bracketFeed, err := buildBracketFeed(
+		ctx, appConfig, store, bracketService, logger,
+	)
 	if err != nil {
 		return fmt.Errorf("wiring the bracket price feed: %w", err)
 	}
@@ -352,6 +354,7 @@ func buildBracketFeed(
 	ctx context.Context,
 	appConfig config.Config,
 	store *postgres.Store,
+	finisher bracket.Finisher,
 	logger *slog.Logger,
 ) (*bracket.Supervisor, error) {
 	if appConfig.BracketFeedAdapter == "none" {
@@ -373,10 +376,26 @@ func buildBracketFeed(
 	// the engine can tell a broker that can amend from one that can also place, and
 	// report the partial rung as unavailable rather than skip it in silence.
 	seller, _ := modifier.(bracket.SliceSeller)
+	// The same adapter answers what became of an order. Without that answer a
+	// filled stop leaves the bracket trailing a level for stock nobody holds, so
+	// the finisher is only passed alongside an inspector -- the engine refuses one
+	// without the other, and a broker that cannot report a fill says so here
+	// instead of looking protected.
+	inspector, _ := modifier.(execution.OrderInspector)
+	settle := finisher
+	if inspector == nil {
+		settle = nil
+		logger.Warn(
+			"this broker cannot report what became of an order; brackets will trail " +
+				"but will not close themselves when a stop or target fills",
+		)
+	}
 	engine, err := bracket.NewEngine(bracket.EngineOptions{
 		Repository: store,
 		Modifier:   modifier,
 		Seller:     seller,
+		Inspector:  inspector,
+		Finisher:   settle,
 		Logger:     logger,
 		Mode:       appConfig.TradingMode,
 		// Webull accepts stop amendments only in the core session. Passing the real

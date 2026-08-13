@@ -131,6 +131,49 @@ func (adapter *PaperAdapter) ModifyOrder(
 
 var _ OrderModifier = (*PaperAdapter)(nil)
 
+// OrderOutcome reports what became of one paper order.
+//
+// A paper stop stays working forever: nothing here watches the price, so it never
+// triggers on its own. That makes paper mode useful for proving the plumbing
+// around a fill and useless for proving a stop would have been hit -- worth
+// knowing before reading a paper run as a forward test of the exits.
+func (adapter *PaperAdapter) OrderOutcome(
+	_ context.Context, _, clientOrderID string,
+) (OrderOutcome, error) {
+	if strings.TrimSpace(clientOrderID) == "" {
+		return OrderOutcome{}, errors.New("paper order lookup requires a client order ID")
+	}
+	adapter.mutex.Lock()
+	defer adapter.mutex.Unlock()
+	for _, order := range adapter.orders {
+		if order.BrokerOrderID != clientOrderID {
+			continue
+		}
+		outcome := OrderOutcome{State: order.State}
+		switch order.State {
+		case string(StateFilled):
+			outcome.Filled = true
+		case string(StateSubmitted):
+			outcome.Working = true
+		}
+		for _, fill := range adapter.fills {
+			if fill.BrokerFillID != "paper-"+clientOrderID {
+				continue
+			}
+			outcome.FilledQuantity += fill.Quantity
+			outcome.FilledPrice = fill.Price
+			outcome.FilledAt = fill.FilledAt
+		}
+		return outcome, nil
+	}
+	// Unknown rather than an error: a caller asking about an order this adapter
+	// never saw wants "nothing there", and turning that into a failure would make
+	// a restart against a fresh paper adapter look like a broker outage.
+	return OrderOutcome{State: "UNKNOWN"}, nil
+}
+
+var _ OrderInspector = (*PaperAdapter)(nil)
+
 func (adapter *PaperAdapter) GetOrders(
 	context.Context, string,
 ) ([]BrokerOrder, error) {
