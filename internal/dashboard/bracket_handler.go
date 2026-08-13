@@ -30,6 +30,15 @@ type BracketArmer interface {
 	Arm(context.Context, int64, bracket.ArmInput) (bracket.Record, error)
 }
 
+// BookDepth reports the shares resting at the best bid for a symbol, which is the
+// only thing that says whether a position can be sold at the price a plan assumes.
+//
+// Optional: without it a preview still sizes from the money and says the depth is
+// unknown, which is honest. Silently sizing as though the book were unlimited is not.
+type BookDepth interface {
+	ExitDepth(ctx context.Context, ticker string) (shares float64, price float64, err error)
+}
+
 // previewBracket sizes an intent and states its risk without touching a broker.
 // It is a pure calculation, so the terminal can call it on every keystroke.
 func (handler *Handler) previewBracket(
@@ -39,6 +48,25 @@ func (handler *Handler) previewBracket(
 	if err := decodeJSON(response, request, &input); err != nil {
 		writeAPIError(response, http.StatusBadRequest, err.Error())
 		return
+	}
+	// The book is read here, not in the domain: Preview stays a pure function of its
+	// input, and the caller that knows how to reach a quote is the one that does.
+	// A caller may also pass the depth itself, which is what makes the plan replayable.
+	if input.BidShares <= 0 && handler.bookDepth != nil {
+		shares, price, depthErr := handler.bookDepth.ExitDepth(
+			request.Context(), input.Ticker,
+		)
+		if depthErr != nil {
+			// Not fatal. A preview without depth reports the depth as unknown, which
+			// is strictly better than refusing to price the trade at all.
+			handler.logger.Warn(
+				"could not read the book for a bracket preview; depth will be reported "+
+					"as unknown",
+				"ticker", input.Ticker, "error", depthErr,
+			)
+		} else {
+			input.BidShares, input.BidPrice = shares, price
+		}
 	}
 	plan, err := bracket.Preview(input)
 	if err != nil {

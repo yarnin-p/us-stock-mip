@@ -674,8 +674,8 @@ func (client *Client) subscribeMarketData(
 	if strings.TrimSpace(sessionID) == "" {
 		return errors.New("webull streaming session ID is required")
 	}
-	if len(symbols) == 0 || len(symbols) > 100 {
-		return errors.New("webull stream subscription requires 1 to 100 symbols")
+	if len(symbols) == 0 {
+		return errors.New("webull stream subscription requires at least one symbol")
 	}
 	normalized := make([]string, len(symbols))
 	for index, symbol := range symbols {
@@ -694,15 +694,80 @@ func (client *Client) subscribeMarketData(
 			return fmt.Errorf("unsupported Webull stream data type %q", subType)
 		}
 	}
-	return client.postJSON(ctx,
-		[]string{"openapi", "market-data", "streaming", "subscribe"},
-		map[string]any{
-			"session_id": sessionID, "symbols": normalized,
-			"category": "US_STOCK", "sub_types": subTypes,
-			"overnight_required": overnight,
-		},
-		nil,
+	// One request carries at most a hundred symbols -- Webull's own SDK says so -- but
+	// the limit is per request, not per session. More symbols means more requests
+	// against the same session_id, which is what "up to 100 symbols can be subscribed"
+	// for each request means. Refusing the whole list above a hundred was this code
+	// inventing a session limit that does not exist.
+	//
+	// Chunks are independent. A chunk the venue refuses -- an unsupported symbol, a
+	// topic quota reached -- must not throw away the chunks it accepted, because the
+	// alternative is a feed that goes completely dark over one bad name.
+	var (
+		accepted int
+		failures []error
 	)
+	for start := 0; start < len(normalized); start += streamSubscribeBatch {
+		end := min(start+streamSubscribeBatch, len(normalized))
+		batch := normalized[start:end]
+		if err := client.postJSON(ctx,
+			[]string{"openapi", "market-data", "streaming", "subscribe"},
+			map[string]any{
+				"session_id": sessionID, "symbols": batch,
+				"category": "US_STOCK", "sub_types": subTypes,
+				"overnight_required": overnight,
+			},
+			nil,
+		); err != nil {
+			failures = append(failures, fmt.Errorf(
+				"symbols %d-%d (%s...): %w", start+1, end, batch[0], err,
+			))
+			continue
+		}
+		accepted += len(batch)
+	}
+	switch {
+	case len(failures) == 0:
+		return nil
+	case accepted == 0:
+		return fmt.Errorf(
+			"no symbols were subscribed: %w", errors.Join(failures...),
+		)
+	default:
+		// Partial. The stream is worth running, and the caller has to be able to tell
+		// this from total failure without parsing a message.
+		return &PartialSubscriptionError{
+			Subscribed: accepted,
+			Requested:  len(normalized),
+			Cause:      errors.Join(failures...),
+		}
+	}
+}
+
+// streamSubscribeBatch is Webull's documented per-request symbol limit.
+const streamSubscribeBatch = 100
+
+// PartialSubscriptionError says some symbols were subscribed and some were not. It
+// is not a failure to stream: it is a failure to stream everything, and the two call
+// for different responses -- one is retried, the other is logged and lived with.
+type PartialSubscriptionError struct {
+	Subscribed int
+	Requested  int
+	Cause      error
+}
+
+func (err *PartialSubscriptionError) Error() string {
+	return fmt.Sprintf(
+		"subscribed %d of %d symbols: %v", err.Subscribed, err.Requested, err.Cause,
+	)
+}
+
+func (err *PartialSubscriptionError) Unwrap() error { return err.Cause }
+
+// IsPartialSubscription reports whether a subscription partly succeeded.
+func IsPartialSubscription(err error) bool {
+	var partial *PartialSubscriptionError
+	return errors.As(err, &partial)
 }
 
 func (client *Client) UnsubscribeAll(

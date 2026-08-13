@@ -738,6 +738,39 @@ func SizeByBudget(budget, entryPrice, stopPrice, accountEquity float64) (Sizing,
 	return sizing, nil
 }
 
+// SizeByShares states a position whose share count is already decided, so cost, risk
+// and the account share are all derived from the size that will actually be taken.
+//
+// It exists for the depth cap. Scaling a Sizing down by a ratio would leave a plan
+// whose risk figure describes a position nobody is going to hold, and the risk figure
+// is the one number on that screen worth reading.
+func SizeByShares(shares int64, entryPrice, stopPrice, accountEquity float64) (Sizing, error) {
+	if shares <= 0 {
+		return Sizing{}, errors.New("share count must be positive")
+	}
+	if !positiveFinite(entryPrice) {
+		return Sizing{}, errors.New("entry price must be positive")
+	}
+	if stopPrice < 0 || !finite(stopPrice) {
+		return Sizing{}, errors.New("stop price must be zero or positive")
+	}
+	if stopPrice >= entryPrice {
+		return Sizing{}, fmt.Errorf(
+			"stop %.4f must be below entry %.4f", stopPrice, entryPrice,
+		)
+	}
+	sizing := Sizing{
+		Shares: shares,
+		Cost:   roundToCent(float64(shares) * entryPrice),
+		Risk:   roundToCent(float64(shares) * (entryPrice - stopPrice)),
+		Rule:   "capped by book depth",
+	}
+	if positiveFinite(accountEquity) {
+		sizing.RiskPercentOfAccount = sizing.Risk / accountEquity
+	}
+	return sizing, nil
+}
+
 // SizeByRisk converts "lose at most this much if the stop hits" into shares. It
 // is the sizing that survives a halt, because it fixes the loss rather than the
 // exposure.
@@ -780,6 +813,60 @@ func SizeByRisk(riskAmount, entryPrice, stopPrice, accountEquity float64) (Sizin
 //
 // The thresholds come from the measured halt cases, not from theory, and the
 // function only reports -- it never blocks an entry.
+// ExitDepth is what the market will take off your hands right now: the shares
+// resting at the best bid, and their price.
+//
+// It exists because sizing from a budget answers "how much do I want to spend" and
+// nothing at all about "can I get out". Measured over 2.17 million quotes on this
+// account's own universe, a position of 1,700 shares in a sub-10M-float name could
+// be absorbed by the best bid only 1.6% to 15.0% of the time depending on the price
+// band, and the median bid held $72 to $640 of stock. A $2,000 position is routinely
+// four to a hundred times larger than the book in front of it.
+//
+// That is the mechanism behind a position that "collapsed on one print". The seller
+// walking the book down was the position itself.
+type ExitDepth struct {
+	// BidShares is the size resting at the best bid. Zero means unknown, which is
+	// treated as unknown rather than as unlimited.
+	BidShares float64
+	// BidPrice is the price those shares are bid at, for stating the depth in money.
+	BidPrice float64
+	// MaxMultiple is how many times the visible bid a position may be. Above 1 the
+	// position is betting on depth below the best bid, which this system cannot see:
+	// only the top of book is captured, so the number is a judgement, not a
+	// measurement. It is configuration for that reason.
+	MaxMultiple float64
+}
+
+// DefaultExitDepthMultiple allows a position three times the visible bid.
+//
+// Not derived from data, and it should not pretend to be: measuring the true cost of
+// walking the book needs the full depth ladder, which is not captured. Three is a
+// deliberate compromise -- it assumes the levels under the best bid hold roughly what
+// the best bid holds, which is the least unreasonable guess available.
+const DefaultExitDepthMultiple = 3.0
+
+// Shares reports the largest position this depth supports, and whether it applies.
+func (depth ExitDepth) Shares() (int64, bool) {
+	if depth.BidShares <= 0 {
+		return 0, false
+	}
+	multiple := depth.MaxMultiple
+	if multiple <= 0 {
+		multiple = DefaultExitDepthMultiple
+	}
+	limit := int64(math.Floor(depth.BidShares * multiple))
+	if limit < 1 {
+		return 0, false
+	}
+	return limit, true
+}
+
+// Value is the money resting at the bid.
+func (depth ExitDepth) Value() float64 {
+	return roundToCent(depth.BidShares * depth.BidPrice)
+}
+
 func HaltRisk(floatShares float64, relativeVolume float64, extensionFromOpen float64) []string {
 	flags := make([]string, 0, 3)
 	if floatShares > 0 && floatShares < 5_000_000 {
@@ -801,6 +888,39 @@ func HaltRisk(floatShares float64, relativeVolume float64, extensionFromOpen flo
 		))
 	}
 	return flags
+}
+
+// DepthRisk describes what the book in front of a position means for getting out.
+//
+// It takes what the money asked for as well as what is being taken, because after a
+// cap the two are equal to the limit and the cap becomes invisible -- which is exactly
+// the thing that has to be said out loud.
+//
+// Unknown depth gets its own flag: no data must not read as no constraint.
+func DepthRisk(depth ExitDepth, shares, requested int64) []string {
+	limit, known := depth.Shares()
+	if !known {
+		return []string{
+			"DEPTH_UNKNOWN: no bid was observed, so nothing here has checked whether " +
+				"this position can be sold",
+		}
+	}
+	if requested > limit {
+		return []string{fmt.Sprintf(
+			"DEPTH_CAPPED: %d shares were asked for; the best bid holds %.0f ($%.0f) and "+
+				"%d is all this book supports at %.0fx",
+			requested, depth.BidShares, depth.Value(), limit,
+			max(depth.MaxMultiple, DefaultExitDepthMultiple),
+		)}
+	}
+	if float64(shares) > depth.BidShares {
+		return []string{fmt.Sprintf(
+			"DEPTH_THIN: the best bid holds %.0f shares ($%.0f) against %d held, so "+
+				"an exit walks below it",
+			depth.BidShares, depth.Value(), shares,
+		)}
+	}
+	return nil
 }
 
 func roundToCent(value float64) float64 {

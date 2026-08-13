@@ -70,11 +70,14 @@ func TestPreviewRaisesTheATGLStructureFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(plan.RiskFlags) != 3 {
-		t.Fatalf("flags = %v, want all three", plan.RiskFlags)
-	}
-	if !strings.Contains(strings.Join(plan.RiskFlags, " "), "MICRO_FLOAT") {
-		t.Fatalf("flags %v do not name the float", plan.RiskFlags)
+	// By name, not by count. Counting broke the moment a fourth flag was added, and a
+	// test that fails when the code says more than it used to is a test that discourages
+	// saying more.
+	joined := strings.Join(plan.RiskFlags, " ")
+	for _, want := range []string{"MICRO_FLOAT", "EXTREME_RVOL", "OVEREXTENDED"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("flags %v do not name %s", plan.RiskFlags, want)
+		}
 	}
 }
 
@@ -362,5 +365,112 @@ func TestHoldAndReleasePutTheOperatorInCharge(t *testing.T) {
 	}
 	if stored := repository.records[created.ID]; stored.ManualHold {
 		t.Fatal("the release was not persisted")
+	}
+}
+
+// The book has the last word on size. Sizing from money answers how much to spend and
+// says nothing about whether the position can be sold -- which is the whole mechanism
+// behind a position that "collapsed on one print".
+func TestPreviewCutsThePositionToWhatTheBookWillTake(t *testing.T) {
+	input := terminalInput()
+	input.Ticker = "BIVI"
+	input.EntryPrice = 2.92
+	input.Budget = 5000
+	// Measured shape: a bid holding a couple of hundred shares against a position of
+	// well over a thousand.
+	input.BidShares = 200
+	input.BidPrice = 2.90
+
+	plan, err := Preview(input)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	budget, price := 5000.0, 2.92
+	wanted := int64(math.Floor(budget / price))
+	if plan.RequestedShares != wanted {
+		t.Fatalf("requested = %d, want %d from the budget", plan.RequestedShares, wanted)
+	}
+	if plan.Shares >= plan.RequestedShares {
+		t.Fatalf("shares = %d against a bid of 200; the book was ignored", plan.Shares)
+	}
+	if plan.Shares != 600 {
+		t.Fatalf("shares = %d, want 600 (200 at the bid, three times over)", plan.Shares)
+	}
+	// Cost and risk have to describe the position that will be taken, not the one the
+	// money asked for -- the risk figure is the number on that screen worth reading.
+	if plan.Cost != roundToCent(600*2.92) {
+		t.Fatalf("cost = %v, want it re-derived from 600 shares", plan.Cost)
+	}
+	if plan.Risk != roundToCent(600*(2.92-plan.StopPrice)) {
+		t.Fatalf("risk = %v, want it re-derived from 600 shares", plan.Risk)
+	}
+	if !strings.Contains(plan.SizingRule, "cut to 600") {
+		t.Fatalf("sizing rule %q does not say the book cut it", plan.SizingRule)
+	}
+	if !strings.Contains(strings.Join(plan.RiskFlags, " "), "DEPTH_CAPPED") {
+		t.Fatalf("flags %v do not report the cap", plan.RiskFlags)
+	}
+	if plan.BidValue != roundToCent(200*2.90) {
+		t.Fatalf("bid value = %v, want the money resting at the bid", plan.BidValue)
+	}
+}
+
+// A book that can take the position is left alone, but a position larger than the
+// best bid still says so: the exit walks below it even when nothing was cut.
+func TestPreviewWarnsWhenTheExitWalksBelowTheBid(t *testing.T) {
+	input := terminalInput()
+	input.EntryPrice = 2.00
+	input.Budget = 2000
+	input.BidShares = 500
+	input.BidPrice = 1.99
+
+	plan, err := Preview(input)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if plan.Shares != 1000 {
+		t.Fatalf("shares = %d; 1000 is within 3x a 500-share bid", plan.Shares)
+	}
+	joined := strings.Join(plan.RiskFlags, " ")
+	if !strings.Contains(joined, "DEPTH_THIN") {
+		t.Fatalf("flags %v do not warn that the exit walks the book", plan.RiskFlags)
+	}
+	if strings.Contains(joined, "DEPTH_CAPPED") {
+		t.Fatalf("flags %v claim a cap that did not happen", plan.RiskFlags)
+	}
+}
+
+// No quote is not the same as no limit. Sizing as though the book were unlimited
+// because nobody looked is the failure this whole feature exists to prevent.
+func TestPreviewSaysSoWhenTheBookIsUnknown(t *testing.T) {
+	input := terminalInput()
+	plan, err := Preview(input)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if plan.Shares != plan.RequestedShares {
+		t.Fatalf("unknown depth cut the position from %d to %d",
+			plan.RequestedShares, plan.Shares)
+	}
+	if !strings.Contains(strings.Join(plan.RiskFlags, " "), "DEPTH_UNKNOWN") {
+		t.Fatalf("flags %v do not report that nothing checked the book", plan.RiskFlags)
+	}
+}
+
+// The multiple is a judgement, not a measurement, so it has to be settable.
+func TestTheDepthMultipleIsConfigurable(t *testing.T) {
+	input := terminalInput()
+	input.EntryPrice = 1.00
+	input.Budget = 10000
+	input.BidShares = 100
+	input.BidPrice = 1.00
+	input.MaxDepthMultiple = 1
+
+	plan, err := Preview(input)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if plan.Shares != 100 {
+		t.Fatalf("shares = %d, want 100 at a multiple of one", plan.Shares)
 	}
 }

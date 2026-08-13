@@ -938,6 +938,30 @@ func saveDeterministicTradeReview(
 	return err
 }
 
+// ExitDepth reads the best bid for one symbol, which is what decides how large a
+// position can actually be sold. It returns zeroes when nothing has been observed:
+// unknown depth has to stay distinguishable from no depth.
+func (store *Store) ExitDepth(
+	ctx context.Context, ticker string,
+) (shares float64, price float64, err error) {
+	err = store.pool.QueryRow(ctx, `
+		SELECT coalesce(bid_size, 0), coalesce(bid_price, 0)
+		  FROM market_quotes
+		 WHERE ticker = $1
+		   AND bid_price > 0
+		   AND observed_at > now() - INTERVAL '10 minutes'
+	`, strings.ToUpper(strings.TrimSpace(ticker))).Scan(&shares, &price)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Deliberately not an error. A symbol nobody is streaming has no quote, and
+		// the caller's job is to say the depth is unknown, not to fail the preview.
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("reading the best bid for %s: %w", ticker, err)
+	}
+	return shares, price, nil
+}
+
 func (store *Store) SaveBookQuote(
 	ctx context.Context, quote webull.BookQuote,
 ) error {

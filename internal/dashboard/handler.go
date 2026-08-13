@@ -36,11 +36,15 @@ type Options struct {
 	TicketUSDTHB       float64
 	Gainers            GainersSource
 	Brackets           BracketSource
+	// BookDepth lets a preview size against the market instead of only against the
+	// money. Optional; without it depth is reported as unknown.
+	BookDepth BookDepth
 }
 
 type Handler struct {
 	repository         Repository
 	allowedOrigin      string
+	bookDepth          BookDepth
 	logger             *slog.Logger
 	mux                *http.ServeMux
 	events             EventSource
@@ -74,6 +78,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		ticketLimits:       options.TicketLimits,
 		gainersSource:      options.Gainers,
 		bracketSource:      options.Brackets,
+		bookDepth:          options.BookDepth,
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)

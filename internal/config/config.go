@@ -876,15 +876,12 @@ func load(requireMassive bool) (Config, error) {
 			config.BracketStopOrderType,
 		)
 	}
-	config.RealtimeMaxSymbols, err = intEnv("REALTIME_MAX_SYMBOLS", 60)
+	config.RealtimeMaxSymbols, err = intEnv("REALTIME_MAX_SYMBOLS", 5000)
 	if err != nil {
 		return Config{}, err
 	}
-	if config.RealtimeMaxSymbols < 1 || config.RealtimeMaxSymbols > 100 {
-		return Config{}, errors.New(
-			"REALTIME_MAX_SYMBOLS must be between 1 and 100; the transport refuses more " +
-				"than a hundred symbols in one subscription",
-		)
+	if config.RealtimeMaxSymbols < 1 {
+		return Config{}, errors.New("REALTIME_MAX_SYMBOLS must be positive")
 	}
 	config.BracketFeedOvernight, err = boolEnv("BRACKET_FEED_OVERNIGHT", false)
 	if err != nil {

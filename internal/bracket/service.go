@@ -57,6 +57,17 @@ type OpenInput struct {
 	RelativeVolume    float64 `json:"relative_volume,omitempty"`
 	ExtensionFromOpen float64 `json:"extension_from_open,omitempty"`
 
+	// The book in front of the position. Unlike the fields above this one does more
+	// than warn: it caps the size, because a position larger than the market will take
+	// is not a position with more risk, it is a position with an exit that does not
+	// exist at the price the plan assumed.
+	//
+	// Passed in rather than fetched, so Preview stays a pure function of its input --
+	// the same reason float and volume arrive this way.
+	BidShares        float64 `json:"bid_shares,omitempty"`
+	BidPrice         float64 `json:"bid_price,omitempty"`
+	MaxDepthMultiple float64 `json:"max_depth_multiple,omitempty"`
+
 	Note string `json:"note,omitempty"`
 }
 
@@ -74,11 +85,18 @@ type EntryPlan struct {
 	RewardRisk  float64 `json:"reward_risk"`
 	// BreakevenWinRate is the hit rate this shape needs just to stop losing
 	// money, which is the honest way to read a reward-to-risk number.
-	BreakevenWinRate     float64  `json:"breakeven_win_rate"`
-	RiskPercentOfAccount float64  `json:"risk_percent_of_account,omitempty"`
-	SizingRule           string   `json:"sizing_rule"`
-	RiskFlags            []string `json:"risk_flags"`
-	Config               Config   `json:"config"`
+	BreakevenWinRate     float64 `json:"breakeven_win_rate"`
+	RiskPercentOfAccount float64 `json:"risk_percent_of_account,omitempty"`
+	SizingRule           string  `json:"sizing_rule"`
+	// RequestedShares is what the money asked for before the book was consulted, and
+	// DepthLimitedShares is what the book allowed. They differ exactly when the
+	// position was cut, and both are reported so a smaller fill is never a surprise.
+	RequestedShares    int64    `json:"requested_shares"`
+	DepthLimitedShares int64    `json:"depth_limited_shares,omitempty"`
+	BidShares          float64  `json:"bid_shares,omitempty"`
+	BidValue           float64  `json:"bid_value,omitempty"`
+	RiskFlags          []string `json:"risk_flags"`
+	Config             Config   `json:"config"`
 }
 
 // Preview turns an intent into a plan without touching the broker. It is a pure
@@ -133,16 +151,48 @@ func Preview(input OpenInput) (EntryPlan, error) {
 		return EntryPlan{}, err
 	}
 
+	// The book has the last word on size. Sizing from money answers how much to
+	// spend; only the book answers whether the position can be sold, and a plan that
+	// prices an exit it cannot reach is not a plan.
+	depth := ExitDepth{
+		BidShares:   input.BidShares,
+		BidPrice:    input.BidPrice,
+		MaxMultiple: input.MaxDepthMultiple,
+	}
+	requested := sizing.Shares
+	sizingRule := sizing.Rule
+	if limit, known := depth.Shares(); known && sizing.Shares > limit {
+		// Re-derived rather than scaled, so cost, risk and the account share all
+		// describe the position that will actually be taken.
+		capped, capErr := SizeByShares(
+			limit, input.EntryPrice, stop, input.AccountEquity,
+		)
+		if capErr != nil {
+			return EntryPlan{}, capErr
+		}
+		sizing = capped
+		sizingRule = fmt.Sprintf(
+			"%s, cut to %d by a bid holding %.0f shares", sizing.Rule, limit,
+			depth.BidShares,
+		)
+	}
+
 	reward := roundToCent(float64(sizing.Shares) * (target - input.EntryPrice))
 	plan := EntryPlan{
 		Ticker: ticker, Shares: sizing.Shares, EntryPrice: input.EntryPrice,
 		StopPrice: stop, TargetPrice: target,
 		Cost: sizing.Cost, Risk: sizing.Risk, Reward: reward,
 		RiskPercentOfAccount: sizing.RiskPercentOfAccount,
-		SizingRule:           sizing.Rule,
+		SizingRule:           sizingRule,
+		RequestedShares:      requested,
+		BidShares:            input.BidShares,
+		BidValue:             depth.Value(),
 		Config:               config,
-		RiskFlags: HaltRisk(
-			input.FloatShares, input.RelativeVolume, input.ExtensionFromOpen,
+		RiskFlags: append(
+			HaltRisk(
+				input.FloatShares, input.RelativeVolume, input.ExtensionFromOpen,
+			),
+			DepthRisk(depth, sizing.Shares, requested)...,
 		),
 	}
 	if sizing.Risk > 0 {

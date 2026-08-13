@@ -314,7 +314,10 @@ func runServe(args []string, stderr io.Writer) error {
 		NewsCatalysts:      store,
 		Gainers:            store,
 		Brackets:           bracketService,
-		RuntimeHealth:      runtimeHealth.Snapshot,
+		// The same store the quotes are written to. A preview that sizes from money
+		// alone prices an exit it has not checked exists.
+		BookDepth:     store,
+		RuntimeHealth: runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.
 		TicketUSDTHB: appConfig.TicketUSDTHB,
@@ -2818,12 +2821,15 @@ func startBookStream(
 					wanted := boundRealtimeSymbols(
 						mergeTickers(tickers, dynamic), maxSymbols, logger,
 					)
+					// The same ceiling, not a second hidden one. A literal 100 here was the
+					// real reason the subscription never exceeded a hundred symbols
+					// whatever the configuration said -- two caps, one of them invisible.
 					symbols, validationErr := symbolCache.Filter(
 						validationContext,
 						client,
 						wanted,
 						false,
-						100,
+						maxSymbols,
 					)
 					validationCancel()
 					if validationErr != nil {

@@ -108,6 +108,12 @@ func (client *Client) StreamOrderFlow(
 					subscribeContext, sessionID, symbols,
 				)
 				cancel()
+				// A partial subscription is a working stream missing some symbols, not a
+				// failed one. Retrying it would re-subscribe the symbols that already
+				// took and keep failing on the ones that cannot, forever.
+				if IsPartialSubscription(lastErr) {
+					lastErr = nil
+				}
 				if lastErr == nil {
 					select {
 					case subscribed <- struct{}{}:
