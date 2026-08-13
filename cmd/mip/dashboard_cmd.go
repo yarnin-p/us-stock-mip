@@ -31,6 +31,7 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/market"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
 	"github.com/momentum-intelligence-platform/mip/internal/marketdata/synthetic"
+	"github.com/momentum-intelligence-platform/mip/internal/marketdata/webullfeed"
 	"github.com/momentum-intelligence-platform/mip/internal/massive"
 	"github.com/momentum-intelligence-platform/mip/internal/opening"
 	"github.com/momentum-intelligence-platform/mip/internal/postgres"
@@ -360,7 +361,7 @@ func buildBracketFeed(
 		)
 		return nil, nil
 	}
-	provider, err := buildMarketDataProvider(appConfig, logger)
+	provider, err := buildMarketDataProvider(ctx, appConfig, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +401,7 @@ func buildBracketFeed(
 }
 
 func buildMarketDataProvider(
-	appConfig config.Config, logger *slog.Logger,
+	lifetime context.Context, appConfig config.Config, logger *slog.Logger,
 ) (marketdata.Provider, error) {
 	switch appConfig.BracketFeedAdapter {
 	case "synthetic":
@@ -412,9 +413,25 @@ func buildMarketDataProvider(
 			synthetic.WalkInterval(appConfig.BracketFeedWalkInterval),
 		)
 	case "webull":
-		return nil, errors.New(
-			"the Webull market data adapter is not wired yet; " +
-				"use BRACKET_FEED_ADAPTER=synthetic or none",
+		webullConfig, err := config.LoadWebull()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"the Webull price feed requires valid Webull configuration: %w", err,
+			)
+		}
+		client, err := webull.NewClient(
+			webullConfig.WebullAppKey, webullConfig.WebullSecret,
+			webull.WithBaseURL(webullConfig.WebullTradingBaseURL),
+			webull.WithAlgorithm(webullConfig.WebullAlgorithm),
+			webull.WithAccessToken(webullConfig.WebullAccessToken),
+			webull.WithHTTPClient(&http.Client{Timeout: webullConfig.HTTPTimeout}),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("creating the Webull price feed client: %w", err)
+		}
+		return webullfeed.New(
+			lifetime, client, appConfig.WebullMQTTURL,
+			webullfeed.WithLogger(logger),
 		)
 	default:
 		return nil, fmt.Errorf(
