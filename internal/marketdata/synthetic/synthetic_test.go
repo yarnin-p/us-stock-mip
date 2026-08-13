@@ -267,3 +267,115 @@ func newAdapter(t *testing.T, feeds ...synthetic.Feed) *synthetic.Adapter {
 	}
 	return adapter
 }
+
+var _ marketdata.Provider = (*synthetic.WalkProvider)(nil)
+
+func TestWalkProviderAnswersAnySymbolAndKeepsGoing(t *testing.T) {
+	provider, err := synthetic.NewWalkProvider(
+		synthetic.WalkStart(10),
+		synthetic.WalkVolatility(0.01),
+		synthetic.WalkInterval(time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// A symbol nobody listed must still be servable: the wiring under test is the
+	// engine, not the venue's symbol table.
+	sub, err := provider.Subscribe(ctx, "nobody-listed-this")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	seen := 0
+	for tick := range sub.Ticks() {
+		if tick.Price <= 0 {
+			t.Fatalf("walk produced %v", tick.Price)
+		}
+		if tick.Ticker != "NOBODY-LISTED-THIS" {
+			t.Fatalf("ticker = %q, want it upper-cased", tick.Ticker)
+		}
+		seen++
+		if seen == 25 {
+			// Endless is the point: it is still going when we stop asking.
+			cancel()
+		}
+	}
+	if seen < 25 {
+		t.Fatalf("received %d ticks before the feed ended, want at least 25", seen)
+	}
+	if err := sub.Err(); err != nil {
+		t.Fatalf("a cancelled walk is a clean stop, got %v", err)
+	}
+}
+
+func TestWalkProviderIsReproduciblePerSymbol(t *testing.T) {
+	first := walkPrices(t, "AAA", 12)
+	second := walkPrices(t, "AAA", 12)
+	other := walkPrices(t, "BBB", 12)
+	for index := range first {
+		if first[index] != second[index] {
+			t.Fatalf("the same symbol walked differently at %d", index)
+		}
+	}
+	same := true
+	for index := range first {
+		if first[index] != other[index] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Error("two different symbols walked the same path")
+	}
+}
+
+func TestWalkProviderRejectsUnusableSettings(t *testing.T) {
+	for name, option := range map[string]synthetic.WalkOption{
+		"zero start":      synthetic.WalkStart(0),
+		"zero volatility": synthetic.WalkVolatility(0),
+		"whole vol":       synthetic.WalkVolatility(1),
+		"zero interval":   synthetic.WalkInterval(0),
+	} {
+		if _, err := synthetic.NewWalkProvider(option); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if _, err := provider(t).Subscribe(context.Background(), "  "); err == nil {
+		t.Error("an empty ticker should be refused")
+	}
+}
+
+func provider(t *testing.T) *synthetic.WalkProvider {
+	t.Helper()
+	built, err := synthetic.NewWalkProvider(
+		synthetic.WalkInterval(time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	return built
+}
+
+func walkPrices(t *testing.T, ticker string, count int) []float64 {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, err := provider(t).Subscribe(ctx, ticker)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	prices := make([]float64, 0, count)
+	for tick := range sub.Ticks() {
+		prices = append(prices, tick.Price)
+		if len(prices) == count {
+			return prices
+		}
+	}
+	t.Fatalf("feed ended after %d prices", len(prices))
+	return nil
+}

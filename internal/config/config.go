@@ -16,36 +16,43 @@ const defaultAlpacaDataBaseURL = "https://data.alpaca.markets"
 const defaultAlpacaNewsStreamURL = "wss://stream.data.alpaca.markets/v1beta1/news"
 
 type Config struct {
-	DatabaseURL                    string
-	RedisURL                       string
-	MassiveAPIKey                  string
-	MassiveBaseURL                 string
-	AlpacaNewsEnabled              bool
-	AlpacaAPIKeyID                 string
-	AlpacaAPISecretKey             string
-	AlpacaDataBaseURL              string
-	AlpacaNewsStreamURL            string
-	WebullAppKey                   string
-	WebullSecret                   string
-	WebullAccountID                string
-	WebullAccessToken              string
-	WebullTokenFile                string
-	WebullTokenExpires             int64
-	WebullTokenStatus              string
-	WebullBaseURL                  string
-	WebullTradingBaseURL           string
-	WebullMQTTURL                  string
-	WebullAlgorithm                string
-	SECUserAgent                   string
-	SECBaseURL                     string
-	LLMAPIKey                      string
-	LLMBaseURL                     string
-	LLMModel                       string
-	HTTPTimeout                    time.Duration
-	DBMaxConns                     int32
-	DBMinConns                     int32
-	LogLevel                       string
-	TradingMode                    string
+	DatabaseURL          string
+	RedisURL             string
+	MassiveAPIKey        string
+	MassiveBaseURL       string
+	AlpacaNewsEnabled    bool
+	AlpacaAPIKeyID       string
+	AlpacaAPISecretKey   string
+	AlpacaDataBaseURL    string
+	AlpacaNewsStreamURL  string
+	WebullAppKey         string
+	WebullSecret         string
+	WebullAccountID      string
+	WebullAccessToken    string
+	WebullTokenFile      string
+	WebullTokenExpires   int64
+	WebullTokenStatus    string
+	WebullBaseURL        string
+	WebullTradingBaseURL string
+	WebullMQTTURL        string
+	WebullAlgorithm      string
+	SECUserAgent         string
+	SECBaseURL           string
+	LLMAPIKey            string
+	LLMBaseURL           string
+	LLMModel             string
+	HTTPTimeout          time.Duration
+	DBMaxConns           int32
+	DBMinConns           int32
+	LogLevel             string
+	TradingMode          string
+	// BracketFeedAdapter names the price feed the bracket engine trails against:
+	// "none" leaves brackets recorded but untrailed, "synthetic" walks a fake
+	// price so the whole path can be exercised without a venue, and "webull"
+	// reads the real stream. It is separate from TradingMode on purpose -- a paper
+	// ledger fed by real prices is the only honest forward test.
+	BracketFeedAdapter             string
+	BracketFeedWalkInterval        time.Duration
 	MaxPositionValue               float64
 	MaxGrossExposure               float64
 	MaxCapitalAllocation           float64
@@ -266,6 +273,9 @@ func load(requireMassive bool) (Config, error) {
 		HTTPTimeout:     15 * time.Second,
 		LogLevel:        strings.ToLower(envOrDefault("LOG_LEVEL", "info")),
 		TradingMode:     strings.ToLower(envOrDefault("TRADING_MODE", "paper")),
+		BracketFeedAdapter: strings.ToLower(
+			envOrDefault("BRACKET_FEED_ADAPTER", "none"),
+		),
 	}
 
 	var err error
@@ -792,6 +802,25 @@ func load(requireMassive bool) (Config, error) {
 	case "debug", "info", "warn", "error":
 	default:
 		return Config{}, fmt.Errorf("unsupported LOG_LEVEL %q", config.LogLevel)
+	}
+	config.BracketFeedWalkInterval, err = durationEnv(
+		"BRACKET_FEED_WALK_INTERVAL", time.Second,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.BracketFeedWalkInterval <= 0 {
+		return Config{}, errors.New(
+			"BRACKET_FEED_WALK_INTERVAL must be positive",
+		)
+	}
+	switch config.BracketFeedAdapter {
+	case "none", "synthetic", "webull":
+	default:
+		return Config{}, fmt.Errorf(
+			"BRACKET_FEED_ADAPTER must be none, synthetic or webull, got %q",
+			config.BracketFeedAdapter,
+		)
 	}
 	if config.TradingMode != "paper" && config.TradingMode != "live" {
 		return Config{}, fmt.Errorf(

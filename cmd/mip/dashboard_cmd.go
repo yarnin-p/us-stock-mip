@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -28,6 +29,8 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
 	"github.com/momentum-intelligence-platform/mip/internal/intelligence"
 	"github.com/momentum-intelligence-platform/mip/internal/market"
+	"github.com/momentum-intelligence-platform/mip/internal/marketdata"
+	"github.com/momentum-intelligence-platform/mip/internal/marketdata/synthetic"
 	"github.com/momentum-intelligence-platform/mip/internal/massive"
 	"github.com/momentum-intelligence-platform/mip/internal/opening"
 	"github.com/momentum-intelligence-platform/mip/internal/postgres"
@@ -206,6 +209,22 @@ func runServe(args []string, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("wiring the bracket terminal: %w", err)
 	}
+	bracketFeed, err := buildBracketFeed(ctx, appConfig, store, logger)
+	if err != nil {
+		return fmt.Errorf("wiring the bracket price feed: %w", err)
+	}
+	if bracketFeed != nil {
+		defer func() { _ = bracketFeed.Close() }()
+		bracketService = bracketService.WithFeed(bracketFeed)
+		// Positions that outlived the last process get their feed back before the
+		// API starts answering, so a terminal that opens on a live bracket is never
+		// looking at one nothing is trailing.
+		if err := bracketFeed.Resume(
+			ctx, store, appConfig.TradingMode,
+		); err != nil {
+			return fmt.Errorf("resuming bracket feeds: %w", err)
+		}
+	}
 	handler := dashboard.NewHandler(repository, dashboard.Options{
 		AllowedOrigin:      allowedOrigin,
 		Logger:             logger,
@@ -316,6 +335,120 @@ func runServe(args []string, stderr io.Writer) error {
 		}
 		return fmt.Errorf("serving dashboard API: %w", err)
 	}
+}
+
+// buildBracketFeed assembles the trailing path: a price provider, the engine that
+// plans against it, and the supervisor that keeps one subscription alive per open
+// position. It returns nil when no feed is configured, which leaves brackets
+// recorded and amendable by hand but not trailed -- the honest state for a process
+// with no market data, rather than a half-protection that looks like the real
+// thing.
+//
+// The feed is chosen separately from TradingMode because the useful combination is
+// a paper ledger fed by real prices: that is the only forward test whose numbers
+// mean anything.
+func buildBracketFeed(
+	ctx context.Context,
+	appConfig config.Config,
+	store *postgres.Store,
+	logger *slog.Logger,
+) (*bracket.Supervisor, error) {
+	if appConfig.BracketFeedAdapter == "none" {
+		logger.Info(
+			"bracket price feed disabled; brackets will be recorded but not trailed",
+			"adapter", appConfig.BracketFeedAdapter,
+		)
+		return nil, nil
+	}
+	provider, err := buildMarketDataProvider(appConfig, logger)
+	if err != nil {
+		return nil, err
+	}
+	modifier, err := buildOrderModifier(appConfig)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := bracket.NewEngine(bracket.EngineOptions{
+		Repository: store,
+		Modifier:   modifier,
+		Logger:     logger,
+		Mode:       appConfig.TradingMode,
+		// Webull accepts stop amendments only in the core session. Passing the real
+		// gate is the caller's job precisely because the default allows every
+		// session, which is right for paper and wrong for a live broker.
+		AmendableAt: func(at time.Time) bool {
+			return market.SessionAt(at) == market.SessionRegular
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	supervisor, err := bracket.NewSupervisor(bracket.SupervisorOptions{
+		Lifetime: ctx,
+		Provider: provider,
+		Handler:  engine.HandleTick,
+		Logger:   logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info(
+		"bracket price feed ready",
+		"adapter", appConfig.BracketFeedAdapter, "mode", appConfig.TradingMode,
+	)
+	return supervisor, nil
+}
+
+func buildMarketDataProvider(
+	appConfig config.Config, logger *slog.Logger,
+) (marketdata.Provider, error) {
+	switch appConfig.BracketFeedAdapter {
+	case "synthetic":
+		logger.Warn(
+			"bracket feed is synthetic; prices are generated and mean nothing",
+			"interval", appConfig.BracketFeedWalkInterval,
+		)
+		return synthetic.NewWalkProvider(
+			synthetic.WalkInterval(appConfig.BracketFeedWalkInterval),
+		)
+	case "webull":
+		return nil, errors.New(
+			"the Webull market data adapter is not wired yet; " +
+				"use BRACKET_FEED_ADAPTER=synthetic or none",
+		)
+	default:
+		return nil, fmt.Errorf(
+			"unknown bracket feed adapter %q", appConfig.BracketFeedAdapter,
+		)
+	}
+}
+
+// buildOrderModifier picks the broker the engine amends through. It mirrors
+// buildExecutionService rather than sharing with it, because the bracket engine
+// needs only the amend capability and asking for the whole service would let it
+// place orders it has no business placing.
+func buildOrderModifier(
+	appConfig config.Config,
+) (execution.OrderModifier, error) {
+	if execution.Mode(appConfig.TradingMode) != execution.ModeLive {
+		return execution.NewPaperAdapterWithFees(
+			appConfig.StrategyExitFeeMinimum,
+			appConfig.StrategyExitFeePerShare,
+		)
+	}
+	webullConfig, err := config.LoadWebull()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"live bracket trailing requires valid Webull configuration: %w", err,
+		)
+	}
+	return webull.NewClient(
+		webullConfig.WebullAppKey, webullConfig.WebullSecret,
+		webull.WithBaseURL(webullConfig.WebullTradingBaseURL),
+		webull.WithAlgorithm(webullConfig.WebullAlgorithm),
+		webull.WithAccessToken(webullConfig.WebullAccessToken),
+		webull.WithHTTPClient(&http.Client{Timeout: webullConfig.HTTPTimeout}),
+	)
 }
 
 func buildExecutionService(
