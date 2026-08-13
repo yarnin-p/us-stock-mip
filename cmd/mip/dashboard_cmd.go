@@ -369,6 +369,7 @@ func runServe(args []string, stderr io.Writer) error {
 				appConfig.TradingAllowedSessions,
 				market.SessionOvernight,
 			),
+			appConfig.RealtimeMaxSymbols,
 			logger,
 		); err != nil {
 			return err
@@ -2753,9 +2754,13 @@ func startBookStream(
 	tickers []string,
 	strategyHandlers autonomousStrategyHandlers,
 	overnightDataEnabled bool,
+	// maxSymbols bounds the subscription. Passed in rather than read here so the
+	// number that decides what is streamed lives with the rest of the configuration.
+	maxSymbols int,
 	logger interface {
 		Error(string, ...any)
 		Info(string, ...any)
+		Warn(string, ...any)
 	},
 ) error {
 	webullConfig, err := config.LoadWebull()
@@ -2806,10 +2811,17 @@ func startBookStream(
 						streamContext,
 						webullConfig.HTTPTimeout,
 					)
+					// Bounded before validation, not after: the cap is about what the
+					// subscription costs, and RealtimeTickers already returns the symbols
+					// worth having first -- open positions and open brackets before
+					// anything speculative.
+					wanted := boundRealtimeSymbols(
+						mergeTickers(tickers, dynamic), maxSymbols, logger,
+					)
 					symbols, validationErr := symbolCache.Filter(
 						validationContext,
 						client,
-						mergeTickers(tickers, dynamic),
+						wanted,
 						false,
 						100,
 					)
@@ -3291,6 +3303,31 @@ func mapKeys(values map[string]struct{}) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+// boundRealtimeSymbols caps the streaming subscription and says what it dropped.
+//
+// A silent truncation reads as full coverage. Worse here than usual: what falls off
+// the end is not trailed and not watched, and the whole point of the ordering is that
+// the things which must not fall off are at the front.
+func boundRealtimeSymbols(
+	symbols []string,
+	maximum int,
+	logger interface {
+		Warn(string, ...any)
+	},
+) []string {
+	if maximum <= 0 || len(symbols) <= maximum {
+		return symbols
+	}
+	dropped := symbols[maximum:]
+	logger.Warn(
+		"more symbols wanted realtime quotes than the subscription is allowed to carry; "+
+			"the lowest-priority ones are not being streamed",
+		"wanted", len(symbols), "subscribed", maximum, "dropped", len(dropped),
+		"first_dropped", strings.Join(dropped[:min(5, len(dropped))], ","),
+	)
+	return symbols[:maximum]
 }
 
 func mergeTickers(groups ...[]string) []string {

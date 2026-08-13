@@ -68,6 +68,19 @@ type Config struct {
 	// default because it needs a separate Webull entitlement -- without it every
 	// request comes back 403 MARKET_DATA_NOT_SUBSCRIBED and nothing is trailed at all,
 	// including during the sessions the account *is* entitled to.
+	// RealtimeMaxSymbols bounds the streaming subscription.
+	//
+	// The candidate query returns everything it can justify -- positions, brackets,
+	// watchlist, scanner hits, news, the opening list -- with no limit, and the
+	// transport refuses more than a hundred, so one candidate too many broke the whole
+	// subscription rather than the tail of it. Worse, a topic is a symbol times a data
+	// type: order flow asks for QUOTE and TICK, so a hundred symbols is two hundred
+	// topics, and Webull's topic quota is shared and undocumented. Filling it left
+	// nothing for the feed that moves a stop.
+	//
+	// The query already orders by need, positions and brackets first, so a cap keeps
+	// what matters and drops the speculative tail.
+	RealtimeMaxSymbols   int
 	BracketFeedOvernight bool
 	BracketStopOrderType string
 	// BracketStopEnforcement says who holds the stop: "broker" rests an order at the
@@ -861,6 +874,16 @@ func load(requireMassive bool) (Config, error) {
 		return Config{}, fmt.Errorf(
 			"unsupported BRACKET_STOP_ORDER_TYPE %q; use STOP_LOSS or STOP_LOSS_LIMIT",
 			config.BracketStopOrderType,
+		)
+	}
+	config.RealtimeMaxSymbols, err = intEnv("REALTIME_MAX_SYMBOLS", 60)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.RealtimeMaxSymbols < 1 || config.RealtimeMaxSymbols > 100 {
+		return Config{}, errors.New(
+			"REALTIME_MAX_SYMBOLS must be between 1 and 100; the transport refuses more " +
+				"than a hundred symbols in one subscription",
 		)
 	}
 	config.BracketFeedOvernight, err = boolEnv("BRACKET_FEED_OVERNIGHT", false)
