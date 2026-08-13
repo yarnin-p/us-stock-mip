@@ -56,6 +56,12 @@ func (repository *stubRepository) Bracket(
 	return record, nil
 }
 
+func (repository *stubRepository) OpenBrackets(
+	_ context.Context, mode string,
+) ([]Record, error) {
+	return repository.open(mode, ""), nil
+}
+
 func (repository *stubRepository) OpenBracketsForTicker(
 	_ context.Context, mode, ticker string,
 ) ([]Record, error) {

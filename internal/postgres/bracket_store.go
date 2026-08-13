@@ -68,6 +68,20 @@ func (store *Store) Bracket(
 	return result, err
 }
 
+// OpenBrackets returns everything that still has money at risk, for the one read
+// a supervisor makes at start-up before it begins hearing about opens and closes.
+func (store *Store) OpenBrackets(
+	ctx context.Context, mode string,
+) ([]bracket.Record, error) {
+	return store.queryBrackets(
+		ctx,
+		`SELECT `+bracketColumns+` FROM brackets
+		  WHERE mode = $1 AND state IN ('PENDING', 'ACTIVE')
+		  ORDER BY opened_at DESC`,
+		mode,
+	)
+}
+
 // OpenBracketsForTicker answers the question a pushed price asks. The engine is
 // handed one symbol at whatever rate the feed produces, so this is the hot path:
 // it stays a narrow indexed lookup rather than a filter over the whole book.

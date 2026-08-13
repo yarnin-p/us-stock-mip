@@ -133,6 +133,10 @@ func Preview(input OpenInput) (EntryPlan, error) {
 type Service struct {
 	repository Repository
 	mode       string
+	// feed is told when a symbol gains or loses a live bracket. It is optional so
+	// a caller that only reads brackets -- a test, a report -- does not have to
+	// stand up a market-data connection to do it.
+	feed Feed
 }
 
 func NewService(repository Repository, mode string) (*Service, error) {
@@ -144,6 +148,29 @@ func NewService(repository Repository, mode string) (*Service, error) {
 		mode = "paper"
 	}
 	return &Service{repository: repository, mode: mode}, nil
+}
+
+// WithFeed attaches the feed the service reports opens and closes to. Without one
+// a bracket is still recorded and still amendable by hand; it simply has nothing
+// trailing it, which is the honest behaviour for a process wired without market
+// data rather than a silent half-protection.
+func (service *Service) WithFeed(feed Feed) *Service {
+	service.feed = feed
+	return service
+}
+
+// watch and unwatch keep the nil check in one place, so every lifecycle edge can
+// report itself without repeating the guard.
+func (service *Service) watch(ticker string) {
+	if service.feed != nil {
+		service.feed.Watch(ticker)
+	}
+}
+
+func (service *Service) unwatch(ticker string) {
+	if service.feed != nil {
+		service.feed.Unwatch(ticker)
+	}
 }
 
 func (service *Service) Mode() string { return service.mode }
@@ -171,6 +198,10 @@ func (service *Service) Open(
 	if err != nil {
 		return Record{}, fmt.Errorf("opening bracket for %s: %w", plan.Ticker, err)
 	}
+	// Watched from the moment it exists, not from the moment it fills: the
+	// high-water mark should start at the first print the position could have
+	// been measured against.
+	service.watch(created.Ticker)
 	return created, nil
 }
 
@@ -253,7 +284,14 @@ func (service *Service) Close(
 	default:
 		return Record{}, fmt.Errorf("%s is not a closing state", state)
 	}
-	return service.repository.SaveBracketState(ctx, id, state, note)
+	closed, err := service.repository.SaveBracketState(ctx, id, state, note)
+	if err != nil {
+		return Record{}, err
+	}
+	// Released after the state is durable. Unwatching first would stop the feed
+	// for a position that is still open if the write then failed.
+	service.unwatch(closed.Ticker)
+	return closed, nil
 }
 
 func (service *Service) List(ctx context.Context, limit int) ([]Record, error) {

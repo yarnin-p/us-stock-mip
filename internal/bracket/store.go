@@ -74,6 +74,10 @@ type AdjustmentRecord struct {
 type Repository interface {
 	CreateBracket(context.Context, Record) (Record, error)
 	Bracket(context.Context, int64) (Record, error)
+	// OpenBrackets is read once at start-up, to re-attach a feed to every position
+	// that was already live when the process died. It is not a polling loop: after
+	// boot the service reports each open and close as it happens.
+	OpenBrackets(context.Context, string) ([]Record, error)
 	// OpenBracketsForTicker is what a pushed price needs: the engine is handed one
 	// symbol and must not read the whole book to find out whether it cares.
 	OpenBracketsForTicker(context.Context, string, string) ([]Record, error)
@@ -85,4 +89,3 @@ type Repository interface {
 	SaveBracketState(context.Context, int64, State, string) (Record, error)
 	BracketAdjustments(context.Context, int64) ([]AdjustmentRecord, error)
 }
-
