@@ -107,7 +107,23 @@ const clock = (at: Date, zone: string) =>
 
 /* ── market session ────────────────────────────────────────────────────── */
 
-function marketState(now: Date) {
+/* The market session, or the honest absence of one.
+ *
+ * now is nullable because this page is prerendered: the HTML is written at build
+ * time, so the server cannot know what time it is when somebody opens it. Rendering
+ * a clock anyway is what broke hydration -- the build-time second and the load-time
+ * second are never the same, React 19 treats that as an error rather than a warning,
+ * and the whole screen went behind the dev overlay.
+ *
+ * So nothing time-derived is rendered until the browser has a clock. known says which
+ * of the two states this is, so a caller shows dashes rather than a confident "Market
+ * Closed" that it worked out from nothing. */
+function marketState(now: Date | null) {
+  if (!now) {
+    return {
+      open: false, label: "—", countdown: "--:--:--", weekend: false, known: false,
+    };
+  }
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
@@ -132,7 +148,7 @@ function marketState(now: Date) {
   const countdown = [
     Math.floor(remain / 3600), Math.floor((remain % 3600) / 60), remain % 60,
   ].map((part) => String(part).padStart(2, "0")).join(":");
-  return { open, label, countdown, weekend };
+  return { open, label, countdown, weekend, known: true };
 }
 
 /* ── tiny charts (no dependency; 2px strokes, no frame) ────────────────── */
@@ -280,10 +296,14 @@ export function TradeEdgeApp({ section }: { section: string }) {
     // "/" is the hub now, so every rail item is its own route.
     router.push(`/${key}`);
   }, [router]);
-  const [now, setNow] = useState(() => new Date());
+  /* Null until the browser has mounted, and deliberately so -- see marketState. The
+   * first read happens in the effect rather than waiting for the interval's first
+   * tick, so the clock appears immediately rather than a second late. */
+  const [now, setNow] = useState<Date | null>(null);
   const [focus, setFocus] = useState("");
 
   useEffect(() => {
+    setNow(new Date());
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -377,7 +397,8 @@ function Sidebar({
       <div className={`te-market-card ${session.open ? "" : "closed"}`}>
         <b><i />{session.open ? "Market is Open" : session.label}</b>
         <small>
-          {session.weekend ? "Reopens Monday"
+          {!session.known ? "Checking the clock…"
+            : session.weekend ? "Reopens Monday"
             : session.open ? `Closes in ${session.countdown}`
             : `Opens in ${session.countdown}`}
         </small>
@@ -400,12 +421,24 @@ function Sidebar({
   );
 }
 
-function Header({ session, now }: { session: ReturnType<typeof marketState>; now: Date }) {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Bangkok", hour: "2-digit", hour12: false })
-      .format(now),
-  );
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+function Header({
+  session, now,
+}: {
+  session: ReturnType<typeof marketState>; now: Date | null;
+}) {
+  // "Welcome back" until there is a clock to say better. It is true at any hour,
+  // which is the point: the alternative is picking one of the three and being wrong
+  // for two thirds of the day on the first frame.
+  const greeting = now
+    ? (() => {
+        const hour = Number(
+          new Intl.DateTimeFormat("en-US", {
+            timeZone: "Asia/Bangkok", hour: "2-digit", hour12: false,
+          }).format(now),
+        );
+        return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+      })()
+    : "Welcome back";
   return (
     <header className="te-header">
       <div className="te-greet">
@@ -417,7 +450,7 @@ function Header({ session, now }: { session: ReturnType<typeof marketState>; now
           <span className="te-clock-flag" aria-hidden="true">🇺🇸</span>
           <span>
             <b><i />{session.label}</b>
-            <small>{clock(now, "Asia/Bangkok")} ICT</small>
+            <small>{now ? `${clock(now, "Asia/Bangkok")} ICT` : "--:--:-- ICT"}</small>
           </span>
         </div>
         <div className="te-search">
