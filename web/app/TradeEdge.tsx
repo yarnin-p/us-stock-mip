@@ -273,11 +273,12 @@ const BUILT: readonly string[] = [
 export function TradeEdgeApp({ section }: { section: string }) {
   const router = useRouter();
   const view = (NAV_KEYS.includes(section)
-    ? section : "dashboard") as NavKey;
+    ? section : "scanner") as NavKey;
   // Navigation is a route change, not a state change: the URL is what survives
   // a refresh and what can be sent to someone else.
   const setView = useCallback((key: NavKey) => {
-    router.push(key === "dashboard" ? "/" : `/${key}`);
+    // "/" is the hub now, so every rail item is its own route.
+    router.push(`/${key}`);
   }, [router]);
   const [now, setNow] = useState(() => new Date());
   const [focus, setFocus] = useState("");
@@ -307,10 +308,9 @@ export function TradeEdgeApp({ section }: { section: string }) {
       <div className="te-main">
         <Header session={session} now={now} />
         <div className="te-content">
-          {view === "dashboard" && (
-            <Dashboard paper={paper} watch={watch ?? []} positions={positions ?? []}
-              onFocus={setFocus} focus={focus} onView={setView} />
-          )}
+          {/* The dashboard branch went with the rail item. The hub answers what that
+              screen answered, and better, so leaving a second version of it reachable
+              by URL would only be a way of seeing worse numbers. */}
           {view === "gainers" && <GainersView />}
           {view === "scanner" && <ScannerView />}
           {view === "watchlist" && <WatchlistView items={watch ?? []} />}

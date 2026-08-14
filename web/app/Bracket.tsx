@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { sanitizeDecimal } from "./inputs";
+import { sanitizeDecimal, sanitizeInteger } from "./inputs";
 import { useCurrency } from "./currency";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
@@ -272,6 +272,10 @@ export function BracketView({ id }: { id: number }) {
             </div>
           </section>
 
+          {record.state === "PENDING" && (
+            <EntryPanel record={record} onChanged={refresh} />
+          )}
+
           <AdjustPanel record={record} onChanged={refresh} />
 
           {open && (
@@ -315,6 +319,202 @@ export function BracketView({ id }: { id: number }) {
         </div>
       </section>
     </div>
+  );
+}
+
+/* Getting into the position, and handing it to the engine.
+ *
+ * Only shown while the bracket is PENDING, because that is the only state in which
+ * either action means anything: once it is armed the engine is driving and the rest of
+ * the screen is about watching it.
+ *
+ * This panel has now been lost twice -- both times by replacing the list that rendered
+ * it without carrying its children across -- and both times the symptom was the same:
+ * a plan could be written and then nothing could be done with it. It lives on the
+ * bracket's own page now, which is where the actions for a bracket belong.
+ */
+function EntryPanel({
+  record, onChanged,
+}: {
+  record: Record_;
+  onChanged: () => void;
+}) {
+  const [order, setOrder] = useState<{
+    id: number; state: string; estimated_cost: number; estimated_fee: number;
+    filled_quantity: number; average_fill_price: number;
+    risk?: { allowed: boolean; reasons?: string[] };
+  } | null>(null);
+  const [fill, setFill] = useState(String(record.requested_entry));
+  const [shares, setShares] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState("");
+  const [error, setError] = useState("");
+
+  const call = useCallback(async (path: string, body?: unknown) => {
+    const response = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const answer = await response.json();
+    if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`);
+    return answer;
+  }, []);
+
+  // Create and cost together: an order with no costing is not something anyone can
+  // decide on, so the two arrive as one press.
+  const draft = async () => {
+    setBusy(true); setError(""); setSaid("");
+    try {
+      const created = await call("/execution/orders", {
+        ticker: record.ticker,
+        side: "BUY",
+        order_type: "LIMIT",
+        quantity: record.quantity,
+        limit_price: record.requested_entry,
+        time_in_force: "DAY",
+        reason: `bracket ${record.id}`,
+      });
+      let costed = created;
+      try {
+        costed = await call(`/execution/orders/${created.id}/preview`);
+      } catch (cause) {
+        // The order exists either way, and saying so matters: a failed costing that
+        // read as a failed create would have someone make a second one.
+        setError(
+          `The order was created (#${created.id}) but the costing failed: ` +
+            (cause instanceof Error ? cause.message : "unknown"),
+        );
+      }
+      setOrder(costed);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "could not create the order");
+    } finally { setBusy(false); }
+  };
+
+  const send = async () => {
+    if (!order) return;
+    setBusy(true); setError("");
+    try {
+      await call(`/execution/orders/${order.id}/approve`);
+      const sent = await call(`/execution/orders/${order.id}/submit`);
+      setOrder(sent);
+      setSaid("Sent.");
+      // Prefill from what happened, not from what was asked for.
+      if (sent.average_fill_price > 0) setFill(String(sent.average_fill_price));
+      if (sent.filled_quantity > 0) setShares(String(sent.filled_quantity));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "the send failed");
+    } finally { setBusy(false); }
+  };
+
+  const arm = async () => {
+    setBusy(true); setError("");
+    try {
+      await call(`/brackets/${record.id}/arm`, {
+        fill_price: Number(fill),
+        ...(Number(shares) > 0 ? { quantity: Number(shares) } : {}),
+      });
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "the arm failed");
+    } finally { setBusy(false); }
+  };
+
+  const blocked = order?.risk?.allowed === false;
+
+  return (
+    <section className="tg-plane">
+      <div className="tg-planehead">
+        <h2>Get in, then hand it over</h2>
+        <span className="tg-step">step 1 send the buy · step 2 arm the ladder</span>
+      </div>
+
+      <div className="tg-entrystep">
+        <p className="tg-setnote">
+          The buy goes through the execution path so it cannot route around the risk
+          gate or the kill switch — {record.quantity.toLocaleString()} {record.ticker} at
+          ${money(record.requested_entry)}.
+        </p>
+        {!order ? (
+          <button type="button" className="tg-go" disabled={busy} onClick={draft}>
+            {busy ? "Working…" : "DRAFT THE ORDER AND COST IT"}
+          </button>
+        ) : (
+          <>
+            <div className="tg-brstats">
+              <div className="tg-brstat">
+                <span>State</span><b>{order.state}</b>
+              </div>
+              <div className="tg-brstat">
+                <span>Estimated cost</span><b>${money(order.estimated_cost)}</b>
+              </div>
+              <div className="tg-brstat">
+                <span>Fee</span><b>${money(order.estimated_fee)}</b>
+              </div>
+              {order.filled_quantity > 0 && (
+                <div className="tg-brstat">
+                  <span>Filled</span>
+                  <b className="good">
+                    {order.filled_quantity.toLocaleString()} @ ${money(order.average_fill_price)}
+                  </b>
+                </div>
+              )}
+            </div>
+            {blocked && (
+              <div className="tg-riskrefusal">
+                <strong>The risk gate refused this</strong>
+                <p>{order.risk?.reasons?.join(" · ") || "no reason given"}</p>
+                <em>Raise the ceiling on the Risk &amp; Controls screen, or size down.</em>
+              </div>
+            )}
+            {order.filled_quantity <= 0 && (
+              <button
+                type="button" className="tg-go" disabled={busy || blocked} onClick={send}
+              >
+                {busy ? "Sending…" : "APPROVE AND SEND"}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="tg-entrystep">
+        <p className="tg-setnote">
+          <strong>Arm</strong> places the real stop and target at the broker and lets the
+          engine follow them. Enter the price you <strong>actually got</strong>, not the
+          one you asked for — every rung is measured from it. A fill you made by hand at
+          the broker goes here too.
+        </p>
+        <div className="tg-setgrid">
+          <label className="tg-card">
+            <span>Fill price</span>
+            <span className="tg-inwrap">
+              <i className="tg-prefix">$</i>
+              <input className="tg-in" inputMode="decimal" value={fill}
+                onChange={(event) => setFill(sanitizeDecimal(event.target.value))} />
+            </span>
+          </label>
+          <label className="tg-card">
+            <span>Shares filled — empty means as planned</span>
+            <input className="tg-in" inputMode="numeric" value={shares}
+              placeholder={String(record.quantity)}
+              onChange={(event) => setShares(sanitizeInteger(event.target.value))} />
+          </label>
+        </div>
+        <button
+          type="button" className="tg-go" disabled={busy || !(Number(fill) > 0)}
+          onClick={arm}
+        >
+          {busy ? "Arming…" : "ARM — PLACE SL/TP AND HAND IT TO THE ENGINE"}
+        </button>
+        {!(Number(fill) > 0) && (
+          <p className="tg-err">Enter the fill price first — every level is measured from it.</p>
+        )}
+      </div>
+      {said && <p className="tg-said">{said}</p>}
+      {error && <p className="tg-err">{error}</p>}
+    </section>
   );
 }
 

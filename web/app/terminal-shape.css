@@ -1305,3 +1305,14 @@
 .tg-tlwhat { color: var(--tg-paper); }
 .tg-tlwhat em { font-style: normal; color: var(--tg-red); }
 .tg-tlvalue { text-align: right; font-weight: 700; color: var(--tg-paper); }
+
+.tg-entrystep { display: flex; flex-direction: column; gap: 12px; }
+.tg-riskrefusal {
+  background: rgba(242, 112, 92, 0.13);
+  border: 1px solid var(--tg-red);
+  border-radius: var(--tg-r-inner);
+  padding: 14px 16px;
+}
+.tg-riskrefusal strong { color: var(--tg-red); font-size: 13.5px; }
+.tg-riskrefusal p { margin: 6px 0 0; font-size: 13px; color: var(--tg-text); }
+.tg-riskrefusal em { display: block; font-style: normal; margin-top: 6px; font-size: 12.5px; color: var(--tg-small); }
