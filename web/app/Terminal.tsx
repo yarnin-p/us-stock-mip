@@ -15,6 +15,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  LadderPlane, LadderValues, ladderErrorOf, presetLadder,
+} from "./Ladder";
 import { useCurrency } from "./currency";
 import { sanitizeDecimal, sanitizeInteger, sanitizeTicker } from "./inputs";
 
@@ -143,44 +146,6 @@ const DIME_VAT = 1.07;
 const dimeRoundTrip = (price: number) =>
   2 * DIME_VAT * (price > 0 ? Math.max(DIME_PER_SHARE / price, DIME_RATE) : DIME_RATE);
 
-/* Three shapes of the same ladder, from the handoff. They are a starting point, not a
- * recommendation: what separates them is how much of an open gain the trail is allowed
- * to give back before the floors take over.
- *
- * Every one of them satisfies the ordering the engine enforces -- floors below their
- * own activation, break-even before profit lock, profit lock before the trail, partial
- * above the trail -- so picking one can never produce the 400 that ladderError exists
- * to explain. That was checked by hand against all five rules when these were written;
- * there is no test framework in web/ yet to hold it, so editing a number here means
- * re-checking it against ladderError below. */
-const LADDER_PRESETS = {
-  conservative: {
-    label: "conservative",
-    note: "banks capital early, gives the runner little room",
-    breakEven: { after: "2", floor: "1" },
-    profitLock: { after: "4", floor: "2.5" },
-    trail: { stopAfter: "8", targetAfter: "16", stopDistance: "7", targetDistance: "12" },
-    partial: { after: "20", fraction: "40", minShares: "10" },
-  },
-  balanced: {
-    label: "balanced",
-    note: "the middle setting",
-    breakEven: { after: "3", floor: "1.5" },
-    profitLock: { after: "6", floor: "3" },
-    trail: { stopAfter: "10", targetAfter: "20", stopDistance: "10", targetDistance: "15" },
-    partial: { after: "30", fraction: "25", minShares: "10" },
-  },
-  runner: {
-    label: "runner",
-    note: "accepts a deeper give-back to hold a long runner",
-    breakEven: { after: "4", floor: "1" },
-    profitLock: { after: "10", floor: "4" },
-    trail: { stopAfter: "14", targetAfter: "28", stopDistance: "16", targetDistance: "22" },
-    partial: { after: "45", fraction: "20", minShares: "10" },
-  },
-} as const;
-
-type PresetName = keyof typeof LADDER_PRESETS;
 
 /* Structural warnings are written out in full rather than shown as badges. A
  * three-letter tag is easy to scroll past; a sentence explaining that a stop may
@@ -225,18 +190,6 @@ export function TerminalView() {
   // the chart is a price. The wire contract stays in percent either way.
   const [exitUnit, setExitUnit] = useState<"pct" | "price">("pct");
   const [advanced, setAdvanced] = useState(false);
-  const [trailStopAfter, setTrailStopAfter] = useState("10");
-  const [trailStopDistance, setTrailStopDistance] = useState("10");
-  const [trailTargetAfter, setTrailTargetAfter] = useState("20");
-  const [trailTargetDistance, setTrailTargetDistance] = useState("15");
-  // The rungs under the trail. Each is opt-in, because a floor that is on by
-  // default is a rule you did not choose being applied to your money.
-  const [breakEvenOn, setBreakEvenOn] = useState(true);
-  const [breakEvenAfter, setBreakEvenAfter] = useState("3");
-  const [breakEvenFloor, setBreakEvenFloor] = useState("1.5");
-  const [profitLockOn, setProfitLockOn] = useState(true);
-  const [profitLockAfter, setProfitLockAfter] = useState("6");
-  const [profitLockFloor, setProfitLockFloor] = useState("3");
   // Empty means "work it out from the entry price", which is right for Dime and right
   // for almost every edit. It is an override rather than a fixed default because
   // another broker, or a promotion, is a number this screen cannot know -- but a blank
@@ -246,11 +199,12 @@ export function TerminalView() {
   /* Currency and rate are shared with every other screen, so switching here or on the
    * hub switches both. Prices stay in dollars either way -- see currency.ts. */
   const { currency, setCurrency, rate, setRate, format } = useCurrency();
-  // The design opens on the balanced preset with every rung armed.
-  const [partialOn, setPartialOn] = useState(true);
-  const [partialAfter, setPartialAfter] = useState("30");
-  const [partialFraction, setPartialFraction] = useState("25");
-  const [partialMinShares, setPartialMinShares] = useState("10");
+  /* The ladder, as one value rather than fourteen. The bracket screen renders the same
+   * component from the same shape, which is what stops the screen you adjust a live
+   * position on from drifting away from the screen you planned it on.
+   *
+   * The design opens on the balanced preset with every rung armed. */
+  const [ladder, setLadder] = useState<LadderValues>(() => presetLadder("balanced"));
 
   const [plan, setPlan] = useState<EntryPlan | null>(null);
   const [planError, setPlanError] = useState("");
@@ -331,68 +285,6 @@ export function TerminalView() {
     [entry, exitUnit, stopPct],
   );
 
-  const applyPreset = useCallback((name: PresetName) => {
-    const shape = LADDER_PRESETS[name];
-    setBreakEvenOn(true);
-    setBreakEvenAfter(shape.breakEven.after);
-    setBreakEvenFloor(shape.breakEven.floor);
-    setProfitLockOn(true);
-    setProfitLockAfter(shape.profitLock.after);
-    setProfitLockFloor(shape.profitLock.floor);
-    setTrailStopAfter(shape.trail.stopAfter);
-    setTrailTargetAfter(shape.trail.targetAfter);
-    setTrailStopDistance(shape.trail.stopDistance);
-    setTrailTargetDistance(shape.trail.targetDistance);
-    setPartialOn(true);
-    setPartialAfter(shape.partial.after);
-    setPartialFraction(shape.partial.fraction);
-    setPartialMinShares(shape.partial.minShares);
-  }, []);
-
-  /* Which pill is lit is read back from the fields rather than remembered from the
-   * click. Remembering it means a highlighted "balanced" can sit over numbers that
-   * were edited afterwards -- a label making a claim about the ladder that the ladder
-   * no longer supports. Derived, it cannot drift: change one number and no pill is
-   * lit, change it back and the pill returns. */
-  const activePreset = useMemo(() => {
-    const current = {
-      breakEven: { after: breakEvenAfter, floor: breakEvenFloor },
-      profitLock: { after: profitLockAfter, floor: profitLockFloor },
-      trail: {
-        stopAfter: trailStopAfter, targetAfter: trailTargetAfter,
-        stopDistance: trailStopDistance, targetDistance: trailTargetDistance,
-      },
-      partial: {
-        after: partialAfter, fraction: partialFraction, minShares: partialMinShares,
-      },
-    };
-    if (!breakEvenOn || !profitLockOn || !partialOn) return null;
-    const same = (a: string, b: string) => Number(a) === Number(b);
-    for (const [name, shape] of Object.entries(LADDER_PRESETS)) {
-      if (
-        same(current.breakEven.after, shape.breakEven.after) &&
-        same(current.breakEven.floor, shape.breakEven.floor) &&
-        same(current.profitLock.after, shape.profitLock.after) &&
-        same(current.profitLock.floor, shape.profitLock.floor) &&
-        same(current.trail.stopAfter, shape.trail.stopAfter) &&
-        same(current.trail.targetAfter, shape.trail.targetAfter) &&
-        same(current.trail.stopDistance, shape.trail.stopDistance) &&
-        same(current.trail.targetDistance, shape.trail.targetDistance) &&
-        same(current.partial.after, shape.partial.after) &&
-        same(current.partial.fraction, shape.partial.fraction) &&
-        same(current.partial.minShares, shape.partial.minShares)
-      ) {
-        return name as PresetName;
-      }
-    }
-    return null;
-  }, [
-    breakEvenOn, breakEvenAfter, breakEvenFloor,
-    profitLockOn, profitLockAfter, profitLockFloor,
-    trailStopAfter, trailTargetAfter, trailStopDistance, trailTargetDistance,
-    partialOn, partialAfter, partialFraction, partialMinShares,
-  ]);
-
   /* The fee the rest of the screen spends. An override wins when one is typed;
    * otherwise it follows the entry price down, which is the whole point. `auto` is
    * kept so the field can say which of the two is in force -- a computed number that
@@ -445,30 +337,30 @@ export function TerminalView() {
       account_equity: Number(equity) || 0,
       ...(advanced
         ? {
-            trail_stop_after: Number(trailStopAfter) / 100,
-            trail_stop_distance: Number(trailStopDistance) / 100,
-            trail_target_after: Number(trailTargetAfter) / 100,
-            trail_target_distance: Number(trailTargetDistance) / 100,
+            trail_stop_after: Number(ladder.trailStopAfter) / 100,
+            trail_stop_distance: Number(ladder.trailStopDistance) / 100,
+            trail_target_after: Number(ladder.trailTargetAfter) / 100,
+            trail_target_distance: Number(ladder.trailTargetDistance) / 100,
             fee_round_trip_percent: fee.fraction,
             // Omitted rather than zeroed when off: the server refuses a floor with
             // no activation, and sending halves of a disabled rung would trip that.
-            ...(breakEvenOn
+            ...(ladder.breakEvenOn
               ? {
-                  break_even_after: Number(breakEvenAfter) / 100,
-                  break_even_floor: Number(breakEvenFloor) / 100,
+                  break_even_after: Number(ladder.breakEvenAfter) / 100,
+                  break_even_floor: Number(ladder.breakEvenFloor) / 100,
                 }
               : {}),
-            ...(profitLockOn
+            ...(ladder.profitLockOn
               ? {
-                  profit_lock_after: Number(profitLockAfter) / 100,
-                  profit_lock_floor: Number(profitLockFloor) / 100,
+                  profit_lock_after: Number(ladder.profitLockAfter) / 100,
+                  profit_lock_floor: Number(ladder.profitLockFloor) / 100,
                 }
               : {}),
-            ...(partialOn
+            ...(ladder.partialOn
               ? {
-                  partial_tp_after: Number(partialAfter) / 100,
-                  partial_tp_fraction: Number(partialFraction) / 100,
-                  partial_tp_min_shares: Number(partialMinShares),
+                  partial_tp_after: Number(ladder.partialAfter) / 100,
+                  partial_tp_fraction: Number(ladder.partialFraction) / 100,
+                  partial_tp_min_shares: Number(ladder.partialMinShares),
                 }
               : {}),
           }
@@ -476,41 +368,18 @@ export function TerminalView() {
     };
   }, [
     ticker, entry, basis, amount, equity, exits, advanced,
-    trailStopAfter, trailStopDistance, trailTargetAfter, trailTargetDistance,
-    breakEvenOn, breakEvenAfter, breakEvenFloor,
-    profitLockOn, profitLockAfter, profitLockFloor, fee,
-    partialOn, partialAfter, partialFraction, partialMinShares,
+    ladder.trailStopAfter, ladder.trailStopDistance, ladder.trailTargetAfter, ladder.trailTargetDistance,
+    ladder.breakEvenOn, ladder.breakEvenAfter, ladder.breakEvenFloor,
+    ladder.profitLockOn, ladder.profitLockAfter, ladder.profitLockFloor, fee,
+    ladder.partialOn, ladder.partialAfter, ladder.partialFraction, ladder.partialMinShares,
   ]);
 
-  /* The order of the rungs is the whole design, and getting it wrong is a 400 from
-   * the server with no clue attached. Checking it here turns that into a sentence
-   * that says which two numbers are in the wrong order. The server is still the
-   * authority -- this only saves a round trip to be told so. */
-  const ladderError = useMemo(() => {
-    if (!advanced) return "";
-    const trail = Number(trailStopAfter);
-    const be = Number(breakEvenAfter);
-    const lock = Number(profitLockAfter);
-    if (breakEvenOn && !(Number(breakEvenFloor) < be)) {
-      return "Break-even: the floor must sit below the gain that arms it, or it is a target rather than a floor.";
-    }
-    if (profitLockOn && !(Number(profitLockFloor) < lock)) {
-      return "Profit lock: the floor must sit below the gain that arms it.";
-    }
-    if (breakEvenOn && profitLockOn && !(be < lock)) {
-      return "Break-even must arm before profit lock — the ladder only climbs.";
-    }
-    if (profitLockOn && !(lock < trail)) {
-      return "Profit lock must arm before the trail.";
-    }
-    if (partialOn && !(Number(partialAfter) > trail)) {
-      return "Partial take-profit must arm above the trail — selling before the trail engages cuts into the runner the trail exists to hold.";
-    }
-    return "";
-  }, [
-    advanced, trailStopAfter, breakEvenOn, breakEvenAfter, breakEvenFloor,
-    profitLockOn, profitLockAfter, profitLockFloor, partialOn, partialAfter,
-  ]);
+  // The ordering rules live with the ladder itself, so both screens refuse the same
+  // shapes for the same reasons.
+  const ladderError = useMemo(
+    () => (advanced ? ladderErrorOf(ladder) : ""),
+    [advanced, ladder],
+  );
 
   // Switching units converts what is already typed, so the levels do not jump.
   const switchUnit = useCallback((next: "pct" | "price") => {
@@ -593,29 +462,9 @@ export function TerminalView() {
   const budgetUse = plan?.risk_percent_of_account
     ? Math.min(1, plan.risk_percent_of_account / 0.01)
     : 0;
-  const armed = [breakEvenOn, profitLockOn, true, partialOn].filter(Boolean).length;
+  const armed = [ladder.breakEvenOn, ladder.profitLockOn, true, ladder.partialOn].filter(Boolean).length;
   const canSend =
     Boolean(request) && ladderError === "" && Boolean(plan) && !symbolBad;
-
-  /* Percentages take a decimal point; a share count does not. "Skip under 10.5 shares"
-   * is not a rule anyone can act on, and the server rounds it anyway. */
-  const field = (
-    label: string,
-    value: string,
-    set: (next: string) => void,
-    whole = false,
-  ) => (
-    <label className="tg-rungfield">
-      <span>{label}</span>
-      <input
-        value={value}
-        inputMode={whole ? "numeric" : "decimal"}
-        onChange={(event) =>
-          set(whole ? sanitizeInteger(event.target.value) : sanitizeDecimal(event.target.value))
-        }
-      />
-    </label>
-  );
 
   return (
     <div className="tg tg-page">
@@ -894,101 +743,13 @@ export function TerminalView() {
         </div>
       </div>
 
-      <section className="tg-plane tg-ladderplane">
-        <div className="tg-planehead">
-          <div>
-            <h2>The exit ladder <span className="tg-step">step 2 of 2</span></h2>
-            <p className="tg-laddersub">
-              Every rung only raises the floor — none of them lowers it.
-            </p>
-          </div>
-          <div className="tg-presetgroup">
-            {(Object.keys(LADDER_PRESETS) as PresetName[]).map((name) => (
-              <button
-                key={name} type="button"
-                className={`tg-presetpill${activePreset === name ? " on" : ""}`}
-                aria-pressed={activePreset === name}
-                onClick={() => applyPreset(name)}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="tg-rungs">
-          <div className={`tg-rung${breakEvenOn ? "" : " off"}`}>
-            <div className="tg-runghead">
-              <button type="button" className="tg-rungno" aria-pressed={breakEvenOn}
-                aria-label="toggle rung 1"
-                onClick={() => setBreakEvenOn((value) => !value)}>1</button>
-              <span className="tg-rungname">Break-even</span>
-            </div>
-            <p className="tg-rungwhat">Stops a winner from turning into a loss.</p>
-            <div className="tg-rungfields">
-              {field("Arm at gain %", breakEvenAfter, setBreakEvenAfter)}
-              {field("Lift SL to gain %", breakEvenFloor, setBreakEvenFloor)}
-            </div>
-            <p className="tg-rungnote">
-              If it stalls here it exits at this floor — a small gain, never red.
-            </p>
-          </div>
-
-          <div className={`tg-rung${profitLockOn ? "" : " off"}`}>
-            <div className="tg-runghead">
-              <button type="button" className="tg-rungno" aria-pressed={profitLockOn}
-                aria-label="toggle rung 2"
-                onClick={() => setProfitLockOn((value) => !value)}>2</button>
-              <span className="tg-rungname">Profit lock</span>
-            </div>
-            <p className="tg-rungwhat">Banks a real slice instead of giving it all back.</p>
-            <div className="tg-rungfields">
-              {field("Arm at gain %", profitLockAfter, setProfitLockAfter)}
-              {field("Lift SL to gain %", profitLockFloor, setProfitLockFloor)}
-            </div>
-            <p className="tg-rungnote">
-              This floor sits above rung one; however far price retraces, it holds.
-            </p>
-          </div>
-
-          <div className="tg-rung">
-            <div className="tg-runghead">
-              <span className="tg-rungno static">3</span>
-              <span className="tg-rungname">Trail</span>
-            </div>
-            <p className="tg-rungwhat">Lets a runner run, following at a fixed distance.</p>
-            <div className="tg-rungfields">
-              {field("SL trails from gain %", trailStopAfter, setTrailStopAfter)}
-              {field("TP widens from gain %", trailTargetAfter, setTrailTargetAfter)}
-              {field("SL below high %", trailStopDistance, setTrailStopDistance)}
-              {field("TP above high %", trailTargetDistance, setTrailTargetDistance)}
-            </div>
-            <p className="tg-rungnote">
-              Rungs one and two measure from entry; the trail measures from the high.
-            </p>
-          </div>
-
-          <div className={`tg-rung${partialOn ? "" : " off"}`}>
-            <div className="tg-runghead">
-              <button type="button" className="tg-rungno" aria-pressed={partialOn}
-                aria-label="toggle rung 4"
-                onClick={() => setPartialOn((value) => !value)}>4</button>
-              <span className="tg-rungname">Partial take-profit</span>
-            </div>
-            <p className="tg-rungwhat">Takes cash off the table without closing the runner.</p>
-            <div className="tg-rungfields">
-              {field("Arm at gain %", partialAfter, setPartialAfter)}
-              {field("Sell % of position", partialFraction, setPartialFraction)}
-              {field("Skip under N shares", partialMinShares, setPartialMinShares, true)}
-            </div>
-            <p className="tg-rungnote">
-              Sent as a limit at the arm price, never market — it will not walk down its
-              own book.
-            </p>
-          </div>
-        </div>
-        {ladderError && <p className="tg-err">{ladderError}</p>}
-      </section>
+      <LadderPlane
+        values={ladder}
+        onChange={setLadder}
+        title={<>The exit ladder <span className="tg-step">step 2 of 2</span></>}
+        subtitle="Every rung only raises the floor — none of them lowers it."
+        error={ladderError}
+      />
 
       <PlansInPlay reload={reload} />
 

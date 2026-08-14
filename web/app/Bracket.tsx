@@ -15,6 +15,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { sanitizeDecimal, sanitizeInteger } from "./inputs";
+import {
+  LadderRungs, LadderValues, configFromLadder, ladderErrorOf, ladderFromConfig,
+} from "./Ladder";
 import { useCurrency } from "./currency";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
@@ -529,58 +532,6 @@ function EntryPanel({
  * The engine keeps driving afterwards. Editing a rung is not taking the wheel -- that
  * is the hold switch -- so a rung above where the price already is will still fire.
  */
-const RUNGS = [
-  {
-    n: 1, name: "Break-even", what: "Stops a winner from turning into a loss.",
-    fields: [
-      ["Arm at gain %", "BreakEvenAfter"],
-      ["Lift SL to gain %", "BreakEvenFloor"],
-    ] as const,
-    note: "If it stalls here it exits at this floor — a small gain, never red.",
-  },
-  {
-    n: 2, name: "Profit lock", what: "Banks a real slice instead of giving it all back.",
-    fields: [
-      ["Arm at gain %", "ProfitLockAfter"],
-      ["Lift SL to gain %", "ProfitLockFloor"],
-    ] as const,
-    note: "This floor sits above rung one; however far price retraces, it holds.",
-  },
-  {
-    n: 3, name: "Trail", what: "Lets a runner run, following at a fixed distance.",
-    fields: [
-      ["SL trails from gain %", "TrailStopAfter"],
-      ["TP widens from gain %", "TrailTargetAfter"],
-      ["SL below high %", "TrailStopDistance"],
-      ["TP above high %", "TrailTargetDistance"],
-    ] as const,
-    note: "Rungs one and two measure from entry; the trail measures from the high.",
-  },
-  {
-    n: 4, name: "Partial take-profit", what: "Takes cash off the table without closing the runner.",
-    fields: [
-      ["Arm at gain %", "PartialTPAfter"],
-      ["Sell % of position", "PartialTPFraction"],
-    ] as const,
-    note: "Sent as a limit at the arm price, never market — it will not walk down its own book.",
-  },
-] as const;
-
-// Everything but the share count is a fraction on the wire.
-const WHOLE_FIELDS = new Set(["PartialTPMinShares"]);
-
-function toPercent(value: number | undefined): string {
-  if (value === undefined || value === null) return "";
-  const shown = value * 100;
-  return String(Number(shown.toFixed(4)));
-}
-
-/* Moving the levels by hand.
- *
- * Closed rather than open by default. The engine is managing this position and the
- * common case is watching it do so; putting the editor behind a press means an
- * accidental keystroke cannot move a live stop.
- */
 function AdjustPanel({
   record, onChanged,
 }: {
@@ -594,19 +545,21 @@ function AdjustPanel({
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState("");
   const [error, setError] = useState("");
-  /* The ladder as typed, in percent. Seeded from the bracket's own config when the
-   * panel opens rather than held from mount, so re-opening after the engine has moved
-   * a rung shows what is running now instead of what was running when the page
-   * loaded. */
-  const [rules, setRules] = useState<Record<string, string>>({});
+  /* The same ladder the plan was written on, carrying this bracket's own numbers.
+   *
+   * Seeded when the panel opens rather than held from mount, so re-opening after the
+   * engine has moved a rung shows what is running now instead of what was running when
+   * the page loaded. */
+  const [ladder, setLadder] = useState<LadderValues>(
+    () => ladderFromConfig(record.config),
+  );
+  const [touched, setTouched] = useState(false);
   useEffect(() => {
-    if (!open || !record.config) return;
-    const seeded: Record<string, string> = {};
-    for (const [key, value] of Object.entries(record.config)) {
-      seeded[key] = WHOLE_FIELDS.has(key) ? String(value) : toPercent(value);
-    }
-    setRules(seeded);
+    if (!open) return;
+    setLadder(ladderFromConfig(record.config));
+    setTouched(false);
   }, [open, record.config]);
+  const ladderError = ladderErrorOf(ladder);
 
   const apply = async () => {
     setBusy(true);
@@ -620,19 +573,11 @@ function AdjustPanel({
           ...(Number(stop) > 0 ? { stop_price: Number(stop) } : {}),
           ...(Number(target) > 0 ? { target_price: Number(target) } : {}),
           ...(note.trim() ? { note: note.trim() } : {}),
-          // The server replaces the rules wholesale, so every field goes even when
-          // one changed. Sending a partial config would silently zero the rest, and
-          // a zeroed rung is a rung that never fires.
-          ...(Object.keys(rules).length
-            ? {
-                config: Object.fromEntries(
-                  Object.entries(rules).map(([key, value]) => [
-                    key,
-                    WHOLE_FIELDS.has(key) ? Number(value) : Number(value) / 100,
-                  ]),
-                ),
-              }
-            : {}),
+          // The whole config, merged over what the bracket already holds. The server
+          // replaces the rules wholesale, so sending only the fields on screen would
+          // silently zero the stop-loss percent and the fee -- and a zeroed rung is a
+          // rung that never fires. Sent only once the ladder has been touched.
+          ...(touched ? { config: configFromLadder(ladder, record.config) } : {}),
         }),
       });
       const answer = await response.json();
@@ -641,6 +586,7 @@ function AdjustPanel({
       setStop("");
       setTarget("");
       setNote("");
+      setTouched(false);
       setOpen(false);
       onChanged();
     } catch (cause) {
@@ -715,50 +661,14 @@ function AdjustPanel({
               </span>
             </label>
           </div>
-          <div className="tg-rungs">
-            {RUNGS.map((rung) => (
-              <div className="tg-rung" key={rung.n}>
-                <div className="tg-runghead">
-                  <span className="tg-rungno static">{rung.n}</span>
-                  <span className="tg-rungname">{rung.name}</span>
-                </div>
-                <p className="tg-rungwhat">{rung.what}</p>
-                <div className="tg-rungfields">
-                  {rung.fields.map(([label, key]) => (
-                    <label className="tg-rungfield" key={key}>
-                      <span>{label}</span>
-                      <input
-                        value={rules[key] ?? ""}
-                        inputMode="decimal"
-                        onChange={(event) =>
-                          setRules((current) => ({
-                            ...current,
-                            [key]: sanitizeDecimal(event.target.value),
-                          }))
-                        }
-                      />
-                    </label>
-                  ))}
-                  {rung.n === 4 && (
-                    <label className="tg-rungfield">
-                      <span>Skip under N shares</span>
-                      <input
-                        value={rules.PartialTPMinShares ?? ""}
-                        inputMode="numeric"
-                        onChange={(event) =>
-                          setRules((current) => ({
-                            ...current,
-                            PartialTPMinShares: sanitizeInteger(event.target.value),
-                          }))
-                        }
-                      />
-                    </label>
-                  )}
-                </div>
-                <p className="tg-rungnote">{rung.note}</p>
-              </div>
-            ))}
-          </div>
+          <LadderRungs
+            values={ladder}
+            onChange={(next) => {
+              setLadder(next);
+              setTouched(true);
+            }}
+          />
+          {ladderError && <p className="tg-err">{ladderError}</p>}
 
           <input
             className="tg-notefield dark" value={note}
@@ -766,7 +676,10 @@ function AdjustPanel({
             onChange={(event) => setNote(event.target.value)} />
           <button
             type="button" className="tg-go"
-            disabled={busy || (!(Number(stop) > 0) && !(Number(target) > 0) && !Object.keys(rules).length)}
+            disabled={
+              busy || Boolean(ladderError) ||
+              (!(Number(stop) > 0) && !(Number(target) > 0) && !touched)
+            }
             onClick={apply}
           >
             {busy ? "Applying…" : "APPLY TO THE LIVE BRACKET"}
