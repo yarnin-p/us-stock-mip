@@ -2,9 +2,12 @@ package bracket
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
 
 func terminalInput() OpenInput {
@@ -198,6 +201,9 @@ func TestActivateRefusesABracketThatIsNotPending(t *testing.T) {
 
 func TestAmendLetsTheOperatorWidenAStopDeliberately(t *testing.T) {
 	service, _ := newTestService(t)
+	// Moving a level reaches the venue now, so these need something to reach.
+	service = service.WithBroker(&recordingBroker{}, fixedAccount{}, nil).
+		WithWithdrawer(&recordingBroker{})
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
 		context.Background(), created.ID, 7.77, "stop-1", "target-1",
@@ -328,6 +334,9 @@ func TestAmendRefusesALadderWhoseRungsAreOutOfOrder(t *testing.T) {
 
 func TestHoldAndReleasePutTheOperatorInCharge(t *testing.T) {
 	service, repository := newTestService(t)
+	// Moving a level reaches the venue now, so these need something to reach.
+	service = service.WithBroker(&recordingBroker{}, fixedAccount{}, nil).
+		WithWithdrawer(&recordingBroker{})
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
 		context.Background(), created.ID, 10, "stop-1", "target-1",
@@ -475,5 +484,101 @@ func TestTheDepthMultipleIsConfigurable(t *testing.T) {
 	}
 	if plan.Shares != 100 {
 		t.Fatalf("shares = %d, want 100 at a multiple of one", plan.Shares)
+	}
+}
+
+/* A broker that records what it was asked to do.
+ *
+ * Amending a level has to reach the venue -- writing the record alone leaves the
+ * screen reporting a stop nothing is holding -- so the tests that move a level now
+ * need something to move it at, and something to assert against.
+ */
+type recordingBroker struct {
+	placed    []execution.BrokerOrderRequest
+	cancelled []string
+	placeErr  error
+	cancelErr error
+}
+
+func (broker *recordingBroker) PlaceOrder(
+	_ context.Context, request execution.BrokerOrderRequest,
+) (execution.Submission, error) {
+	if broker.placeErr != nil {
+		return execution.Submission{}, broker.placeErr
+	}
+	broker.placed = append(broker.placed, request)
+	return execution.Submission{BrokerOrderID: request.ClientOrderID}, nil
+}
+
+func (broker *recordingBroker) CancelOrder(
+	_ context.Context, _ string, clientOrderID string,
+) error {
+	if broker.cancelErr != nil {
+		return broker.cancelErr
+	}
+	broker.cancelled = append(broker.cancelled, clientOrderID)
+	return nil
+}
+
+type fixedAccount struct{}
+
+func (fixedAccount) DefaultBrokerAccount(context.Context) (string, error) {
+	return "acct-1", nil
+}
+
+/* Moving a level by hand must take the old order back and place a new one at the new
+ * price. It used to write the record and stop there, which is how the screen came to
+ * report a stop at a level the broker had never been told about. */
+func TestAmendMovesTheOrderAtTheBrokerToo(t *testing.T) {
+	service, _ := newTestService(t)
+	broker := &recordingBroker{}
+	service = service.WithBroker(broker, fixedAccount{}, nil).WithWithdrawer(broker)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	if _, err := service.Activate(
+		context.Background(), created.ID, 7.77, "stop-1", "target-1",
+	); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	before := len(broker.placed)
+	if _, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 6.50}); err != nil {
+		t.Fatalf("amend: %v", err)
+	}
+	if len(broker.cancelled) != 1 || broker.cancelled[0] != "stop-1" {
+		t.Fatalf("cancelled = %v, want the old stop order withdrawn", broker.cancelled)
+	}
+	if len(broker.placed) != before+1 {
+		t.Fatalf("placed %d orders, want one replacement", len(broker.placed)-before)
+	}
+	fresh := broker.placed[len(broker.placed)-1]
+	if fresh.StopPrice != 6.50 {
+		t.Fatalf("replacement stop = %v, want 6.50", fresh.StopPrice)
+	}
+	if fresh.Side != "SELL" {
+		t.Fatalf("replacement side = %s, want SELL", fresh.Side)
+	}
+}
+
+/* When the replacement cannot be placed the old one has already gone, so the position
+ * is bare. Saying so is the only useful thing left to do -- reporting success would
+ * leave a screen claiming protection that does not exist. */
+func TestAmendRefusesWhenTheReplacementCannotBePlaced(t *testing.T) {
+	service, _ := newTestService(t)
+	broker := &recordingBroker{}
+	service = service.WithBroker(broker, fixedAccount{}, nil).WithWithdrawer(broker)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	if _, err := service.Activate(
+		context.Background(), created.ID, 7.77, "stop-1", "target-1",
+	); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	broker.placeErr = errors.New("venue refused")
+	_, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 6.50})
+	if err == nil {
+		t.Fatal("a failed replacement was reported as a successful amendment")
+	}
+	if !strings.Contains(err.Error(), "no stop protecting it") {
+		t.Fatalf("error = %v, want it to say the position is unprotected", err)
 	}
 }

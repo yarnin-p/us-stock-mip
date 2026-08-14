@@ -631,6 +631,26 @@ func (service *Service) Amend(
 			reason += "; engine released"
 		}
 	}
+	/* The broker before the database.
+	 *
+	 * This wrote the record and stopped, so moving a stop by hand changed the number
+	 * on the screen and left the order at the broker exactly where it was. Every
+	 * later screen then read the new number and reported a position protected at a
+	 * level nothing was holding -- the one lie this system must never tell.
+	 *
+	 * Cancel and replace rather than amend, because amend does not work: probing the
+	 * account on 2026-08-14 found none of the four documented modify paths recognised,
+	 * including the one the adapter sends. Cancel and place are proven, and they are
+	 * what arming already uses.
+	 *
+	 * The order matters and so does the failure. Cancel first, place second, and if
+	 * the place fails the position is left with no resting stop -- so that case
+	 * returns an error loud enough to act on rather than a record quietly saved.
+	 */
+	if err := service.replaceProtection(ctx, &record, previousStop, previousTarget); err != nil {
+		return Record{}, err
+	}
+
 	return service.repository.SaveBracket(ctx, record, AdjustmentRecord{
 		BracketID: id, Trigger: TriggerManual,
 		PreviousStop: previousStop, NewStop: record.StopPrice,
@@ -843,4 +863,82 @@ func (service *Service) Exit(
 		"quantity", quantity, "order_type", orderType,
 	)
 	return closed, nil
+}
+
+/* Moving a resting protective order by taking it back and placing a new one.
+ *
+ * Used by the manual amend. The engine has its own path that tries ModifyOrder first,
+ * and that path is currently broken at the venue -- when it is fixed, or replaced with
+ * this, the two should meet here.
+ *
+ * Only the legs whose price actually changed are touched. Cancelling and re-placing an
+ * order at the price it already has is a window of no protection bought for nothing.
+ */
+func (service *Service) replaceProtection(
+	ctx context.Context, record *Record, previousStop, previousTarget float64,
+) error {
+	legs := []struct {
+		name      string
+		orderID   *string
+		price     float64
+		was       float64
+		orderType string
+		isStop    bool
+	}{
+		{"stop", &record.StopOrderID, record.StopPrice, previousStop,
+			service.stopShape.OrderType, true},
+		{"target", &record.TargetOrderID, record.TargetPrice, previousTarget,
+			"LIMIT", false},
+	}
+	for _, leg := range legs {
+		// Nothing to do when the price did not move, and nothing to move when no order
+		// was ever rested. Changing the ladder rules or taking the wheel touches
+		// neither, which is why the broker is only required once a level actually
+		// changes.
+		if leg.price == leg.was || *leg.orderID == "" {
+			continue
+		}
+		if service.protector == nil {
+			return fmt.Errorf(
+				"no broker is wired, so the %s cannot be moved where it matters",
+				leg.name,
+			)
+		}
+		if service.withdrawer != nil {
+			if err := service.withdrawer.CancelOrder(
+				ctx, record.AccountID, *leg.orderID,
+			); err != nil {
+				// Nothing has been withdrawn, so the old level is still protecting the
+				// position. Refusing here leaves it that way.
+				return fmt.Errorf(
+					"withdrawing the %s order to move it: %w -- the level was not changed",
+					leg.name, err,
+				)
+			}
+		}
+		fresh := fmt.Sprintf(
+			"bracket-%d-%s-%d", record.ID, leg.name, time.Now().UnixMilli(),
+		)
+		request := execution.BrokerOrderRequest{
+			AccountID: record.AccountID, ClientOrderID: fresh,
+			Ticker: record.Ticker, Side: "SELL", OrderType: leg.orderType,
+			TimeInForce: "GTC", TradingSession: "ALL", Quantity: record.Quantity,
+		}
+		if leg.isStop {
+			request.StopPrice = leg.price
+			request.LimitPrice = service.stopShape.LimitFor(leg.price)
+		} else {
+			request.LimitPrice = leg.price
+		}
+		if _, err := service.protector.PlaceOrder(ctx, request); err != nil {
+			*leg.orderID = ""
+			return fmt.Errorf(
+				"placing the new %s order at %.4f: %w -- the old one has been withdrawn, "+
+					"so this position has no %s protecting it and needs one by hand now",
+				leg.name, leg.price, err, leg.name,
+			)
+		}
+		*leg.orderID = fresh
+	}
+	return nil
 }
