@@ -189,7 +189,6 @@ export function TerminalView() {
   // natural depends on the trade: a fixed risk rule is a percentage, a level off
   // the chart is a price. The wire contract stays in percent either way.
   const [exitUnit, setExitUnit] = useState<"pct" | "price">("pct");
-  const [advanced, setAdvanced] = useState(false);
   // Empty means "work it out from the entry price", which is right for Dime and right
   // for almost every edit. It is an override rather than a fixed default because
   // another broker, or a promotion, is a number this screen cannot know -- but a blank
@@ -335,39 +334,46 @@ export function TerminalView() {
       stop_loss_percent: exits.stop,
       take_profit_percent: exits.target,
       account_equity: Number(equity) || 0,
-      ...(advanced
+      /* The ladder goes with every plan.
+       *
+       * This used to be gated on an `advanced` flag from the design before the
+       * handoff, where the rungs lived behind a toggle. The handoff made the ladder
+       * step two of two -- always shown, always editable -- and the toggle went, but
+       * the gate stayed. Nothing ever set the flag again, so every plan saved from
+       * this screen carried a bare stop and target while the screen showed four rungs
+       * and the bar agreed with it. The numbers were read, validated, priced and
+       * displayed, and then dropped on the way out.
+       *
+       * There is no flag now. What is on the screen is what is sent. */
+      trail_stop_after: Number(ladder.trailStopAfter) / 100,
+      trail_stop_distance: Number(ladder.trailStopDistance) / 100,
+      trail_target_after: Number(ladder.trailTargetAfter) / 100,
+      trail_target_distance: Number(ladder.trailTargetDistance) / 100,
+      fee_round_trip_percent: fee.fraction,
+      // Omitted rather than zeroed when off: the server refuses a floor with
+      // no activation, and sending halves of a disabled rung would trip that.
+      ...(ladder.breakEvenOn
         ? {
-            trail_stop_after: Number(ladder.trailStopAfter) / 100,
-            trail_stop_distance: Number(ladder.trailStopDistance) / 100,
-            trail_target_after: Number(ladder.trailTargetAfter) / 100,
-            trail_target_distance: Number(ladder.trailTargetDistance) / 100,
-            fee_round_trip_percent: fee.fraction,
-            // Omitted rather than zeroed when off: the server refuses a floor with
-            // no activation, and sending halves of a disabled rung would trip that.
-            ...(ladder.breakEvenOn
-              ? {
-                  break_even_after: Number(ladder.breakEvenAfter) / 100,
-                  break_even_floor: Number(ladder.breakEvenFloor) / 100,
-                }
-              : {}),
-            ...(ladder.profitLockOn
-              ? {
-                  profit_lock_after: Number(ladder.profitLockAfter) / 100,
-                  profit_lock_floor: Number(ladder.profitLockFloor) / 100,
-                }
-              : {}),
-            ...(ladder.partialOn
-              ? {
-                  partial_tp_after: Number(ladder.partialAfter) / 100,
-                  partial_tp_fraction: Number(ladder.partialFraction) / 100,
-                  partial_tp_min_shares: Number(ladder.partialMinShares),
-                }
-              : {}),
+            break_even_after: Number(ladder.breakEvenAfter) / 100,
+            break_even_floor: Number(ladder.breakEvenFloor) / 100,
+          }
+        : {}),
+      ...(ladder.profitLockOn
+        ? {
+            profit_lock_after: Number(ladder.profitLockAfter) / 100,
+            profit_lock_floor: Number(ladder.profitLockFloor) / 100,
+          }
+        : {}),
+      ...(ladder.partialOn
+        ? {
+            partial_tp_after: Number(ladder.partialAfter) / 100,
+            partial_tp_fraction: Number(ladder.partialFraction) / 100,
+            partial_tp_min_shares: Number(ladder.partialMinShares),
           }
         : {}),
     };
   }, [
-    ticker, entry, basis, amount, equity, exits, advanced,
+    ticker, entry, basis, amount, equity, exits,
     ladder.trailStopAfter, ladder.trailStopDistance, ladder.trailTargetAfter, ladder.trailTargetDistance,
     ladder.breakEvenOn, ladder.breakEvenAfter, ladder.breakEvenFloor,
     ladder.profitLockOn, ladder.profitLockAfter, ladder.profitLockFloor, fee,
@@ -376,10 +382,9 @@ export function TerminalView() {
 
   // The ordering rules live with the ladder itself, so both screens refuse the same
   // shapes for the same reasons.
-  const ladderError = useMemo(
-    () => (advanced ? ladderErrorOf(ladder) : ""),
-    [advanced, ladder],
-  );
+  // Always, for the same reason the rungs are always sent: this was gated too, so a
+  // ladder the server would have refused reached SAVE PLAN looking fine.
+  const ladderError = useMemo(() => ladderErrorOf(ladder), [ladder]);
 
   // Switching units converts what is already typed, so the levels do not jump.
   const switchUnit = useCallback((next: "pct" | "price") => {
@@ -948,18 +953,34 @@ function PlansInPlay({ reload }: { reload: number }) {
         {shown.map((row) => {
           const trailing = (row.high_water ?? 0) > (row.entry_price ?? 0);
           const open = row.state === "PENDING" || row.state === "ACTIVE";
+          /* A plan that has not filled is not armed, and must not be dressed as one.
+           *
+           * Both of these read the wrong field. Status called PENDING and ACTIVE the
+           * same thing, so a plan with nothing at the broker said "Armed" beside a
+           * banner saying nothing had reached the broker. Entry showed entry_price,
+           * which only exists once a fill has been recorded, so a saved plan showed
+           * $0.00 and the price the operator actually typed was nowhere on screen. */
+          const pending = row.state === "PENDING";
+          const entryShown = pending
+            ? row.requested_entry ?? 0
+            : row.entry_price ?? 0;
           return (
             <a className="tg-plansrow" key={row.id} href={`/bracket/${row.id}`}>
               <span className="t">{row.ticker}</span>
               <span
-                className={`st ${open ? (trailing ? "trailing" : "armed") : "done"}`}
+                className={`st ${
+                  open ? (pending ? "planned" : trailing ? "trailing" : "armed") : "done"
+                }`}
               >
                 {open
-                  ? trailing ? "Trailing" : "Armed"
+                  ? pending ? "Planned" : trailing ? "Trailing" : "Armed"
                   : row.state.charAt(0) + row.state.slice(1).toLowerCase()}
               </span>
               <span className="n">{row.quantity.toLocaleString()}</span>
-              <span className="n px">${money(row.entry_price ?? 0)}</span>
+              <span className={`n px${pending ? " planned" : ""}`}>
+                ${money(entryShown)}
+                {pending && <i className="tg-plannedmark">planned</i>}
+              </span>
               <span className="n sl">${money(row.stop_price ?? 0)}</span>
               <span className="n tp">${money(row.target_price ?? 0)}</span>
               <span className="n">${money(row.high_water ?? 0)}</span>

@@ -1330,3 +1330,23 @@
   color: var(--tg-amber);
   white-space: normal;
 }
+
+/* A planned price is not a filled one, and the row says which it is looking at.
+   Dimmer than a real fill and carrying the word, because the two sit in the same
+   column and a number alone cannot tell them apart. */
+.tg .tg-plansrow .px.planned {
+  color: var(--tg-text);
+}
+.tg .tg-plannedmark {
+  margin-left: 6px;
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+/* Planned shares the armed shape but not its colour: nothing is at the broker yet. */
+.tg .tg-plansrow .st.planned::before,
+.tg .tg-plansrow .st.planned {
+  color: var(--tg-text);
+}
