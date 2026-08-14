@@ -90,6 +90,33 @@ func runWebullProbe(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "history    ok      %d orders\n", len(orders))
 	}
 
+	// Every path the adapter sends, before the amend candidates. A path can be wrong
+	// for as long as nobody sends it, and the moment it matters is the moment a stop
+	// needs to move -- so the report leads with which of them the venue actually has.
+	if reach, reachErr := client.ProbeReach(ctx, target); reachErr != nil {
+		fmt.Fprintf(stdout, "\nreach      FAILED  %v\n", reachErr)
+	} else {
+		fmt.Fprintln(stdout,
+			"\nevery path this adapter sends (reads, and orders that were never placed)")
+		for _, probe := range reach {
+			mark := "  "
+			if probe.Verdict != webull.VerdictRecognised &&
+				probe.Verdict != webull.VerdictAcceptedNothing {
+				mark = "! "
+			}
+			fmt.Fprintf(
+				stdout, "%s%-30s %-34s %s\n",
+				mark, probe.Purpose, probe.Path, probe.Verdict,
+			)
+			if probe.Detail != "" && mark == "! " {
+				fmt.Fprintf(stdout, "      %s\n", probe.Detail)
+			}
+		}
+		fmt.Fprintln(stdout,
+			"  place                          /openapi/trade/order/place         "+
+				"NOT TESTED -- proving it means placing an order")
+	}
+
 	probes, err := client.ProbeModifyEndpoints(ctx, target)
 	if err != nil {
 		return err
