@@ -1061,3 +1061,21 @@
 }
 .tg-symbad { font-style: normal; font-size: 11.5px; color: var(--tg-red); line-height: 1.4; }
 .tg-symcheck { font-style: normal; font-size: 11.5px; color: var(--tg-small); }
+
+/* A row opens the panel below it. It is a button rather than a link because it acts
+ * on this page; using an anchor for something that does not navigate is a promise the
+ * browser keeps and the page breaks. */
+.tg .tg-plansrow {
+  border: 0;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+.tg .tg-plansrow.open { background: var(--tg-hover); box-shadow: inset 0 0 0 1px var(--tg-amber); }
+.tg-planspanel {
+  margin-top: 10px;
+  background: var(--tg-deeper);
+  border-radius: var(--tg-r-rung);
+  padding: 20px 22px;
+}

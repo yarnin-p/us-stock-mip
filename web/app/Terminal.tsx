@@ -1139,6 +1139,11 @@ function PlansInPlay({ reload }: { reload: number }) {
   const [rows, setRows] = useState<BracketRecord[]>([]);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"live" | "closed">("live");
+  /* Which row is open for work. Arming, moving a level and closing all live here --
+   * the design shows this plane as a list, and the list is the only place those
+   * actions can be reached from, so a row has to be able to open. */
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     fetch(`${API}/brackets?limit=50`)
@@ -1168,7 +1173,7 @@ function PlansInPlay({ reload }: { reload: number }) {
           </div>
           <span className="tg-step">only plans the engine is still watching live</span>
         </div>
-        <a className="tg-back" href="/orders">Open Orders app ›</a>
+        <a className="tg-back" href="/positions">Open Orders app ›</a>
       </div>
 
       {error && <p className="tg-err">{error}</p>}
@@ -1187,7 +1192,13 @@ function PlansInPlay({ reload }: { reload: number }) {
           const trailing = (row.high_water ?? 0) > (row.entry_price ?? 0);
           const open = row.state === "PENDING" || row.state === "ACTIVE";
           return (
-            <a className="tg-plansrow" key={row.id} href={`/orders#${row.id}`}>
+            <button
+              type="button"
+              className={`tg-plansrow${openId === row.id ? " open" : ""}`}
+              key={row.id}
+              aria-expanded={openId === row.id}
+              onClick={() => setOpenId((current) => (current === row.id ? null : row.id))}
+            >
               <span className="t">{row.ticker}</span>
               <span
                 className={`st ${open ? (trailing ? "trailing" : "armed") : "done"}`}
@@ -1201,17 +1212,26 @@ function PlansInPlay({ reload }: { reload: number }) {
               <span className="n sl">${money(row.stop_price ?? 0)}</span>
               <span className="n tp">${money(row.target_price ?? 0)}</span>
               <span className="n">${money(row.high_water ?? 0)}</span>
-              <span className="n log">History</span>
-            </a>
+              <span className="n log">{openId === row.id ? "Close" : "Open"}</span>
+            </button>
           );
         })}
         {shown.length === 0 && !error && (
           <p className="tg-empty">Nothing here yet.</p>
         )}
       </div>
+      {openId !== null && (
+        <div className="tg-planspanel">
+          <Manage
+            bracket={rows.find((row) => row.id === openId)}
+            onChanged={() => setTick((value) => value + 1)}
+          />
+        </div>
+      )}
+
       <div className="tg-plansfoot">
         <span>{live.length} live now · {rows.length} plans in total history</span>
-        <a href="/orders">See the full history ›</a>
+        <a href="/positions">See the full history ›</a>
       </div>
     </section>
   );
