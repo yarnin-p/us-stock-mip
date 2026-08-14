@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCurrency } from "./currency";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
@@ -79,6 +80,8 @@ export function HubView() {
   const [rows, setRows] = useState<BracketRow[]>([]);
   const [loadError, setLoadError] = useState("");
   const [mode, setMode] = useState("");
+  // Same control as the terminal, same stored choice.
+  const { currency, setCurrency } = useCurrency();
 
   useEffect(() => {
     fetch(`${API}/brackets?limit=50`)
@@ -135,6 +138,19 @@ export function HubView() {
           <i>T</i> TradeEdge portal
         </span>
         <span className="tg-barspacer" />
+        <span className="tg-fx">
+          <span className="tg-seg">
+            {(["THB", "USD"] as const).map((code) => (
+              <button
+                key={code} type="button" aria-pressed={currency === code}
+                className={currency === code ? "on" : ""}
+                onClick={() => setCurrency(code)}
+              >
+                {code}
+              </button>
+            ))}
+          </span>
+        </span>
         {mode && (
           <span className={`tg-pill tg-modepill${mode === "live" ? " live" : ""}`}>
             {mode.toUpperCase()}

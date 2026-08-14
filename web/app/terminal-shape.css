@@ -814,14 +814,8 @@
 .tg-modepill { letter-spacing: 0.1em; font-weight: 800; }
 .tg .tg-modepill { background: var(--tg-amber); color: var(--tg-ink); }
 .tg .tg-modepill.live { background: var(--tg-red); }
-.tg-avatar {
-  width: 40px; height: 40px;
-  border-radius: 50%;
-  display: grid; place-items: center;
-  background: var(--tg-plane);
-  color: var(--tg-text);
-  font-weight: 700;
-}
+/* .tg-avatar is declared once, with the portal bar above. Declaring it again here
+ * put the hub's plane colour on the terminal's avatar, because later wins. */
 
 .tg-hero {
   display: grid;
@@ -1003,3 +997,47 @@
   .tg-feedrow { grid-template-columns: 1fr; }
   .tg-feedvalue { text-align: left; }
 }
+
+/* globals.css puts a focus ring on every input, and :focus-visible outranks the
+ * outline:none set on the base state -- which is where the amber rectangle around the
+ * amount field came from. The design has no such ring: its focus affordance is the
+ * underline turning solid amber, and that is a visible indicator in its own right, so
+ * dropping the outline on these fields loses nothing.
+ *
+ * Buttons keep a ring. The design gives them a hover state and no focus state, and
+ * leaving keyboard users with nothing at all is not a fidelity question. */
+.tg input:focus-visible,
+.tg input:focus {
+  outline: none;
+}
+.tg button:focus-visible,
+.tg a:focus-visible {
+  outline: 2px solid var(--tg-amber);
+  outline-offset: 2px;
+}
+
+/* ---- currency control ------------------------------------------------------- */
+
+.tg-fx { display: flex; align-items: center; gap: 8px; }
+.tg-fxrate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1e2023;
+  border-radius: 999px;
+  padding: 9px 12px 9px 16px;
+}
+.tg-fxrate span { font-size: 12px; color: var(--tg-label); white-space: nowrap; }
+.tg-fxrate input {
+  width: 56px;
+  border: 0;
+  background: transparent;
+  color: var(--tg-paper);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  outline: none;
+}
+.tg-fx .tg-seg { background: #1e2023; }
+.tg .tg-fx .tg-seg button { padding: 7px 14px; font-size: 12.5px; font-weight: 700; }

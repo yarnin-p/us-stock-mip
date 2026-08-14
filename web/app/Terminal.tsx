@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCurrency } from "./currency";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
@@ -121,6 +122,8 @@ type Adjustment = {
 
 const money = (value: number) =>
   value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const formatBaht = (usd: number, rate: number) =>
+  "฿" + Math.round(usd * rate).toLocaleString("en-US");
 const pct = (value: number, digits = 1) => `${(value * 100).toFixed(digits)}%`;
 
 /* Dime charges max($0.01 per share, 0.15% of value) each way, then 7% VAT on the
@@ -239,10 +242,9 @@ export function TerminalView() {
   // field that quietly uses 0.35% at $0.40 is how a break-even rung ends up losing
   // 4.7% of the position.
   const [feeOverride, setFeeOverride] = useState("");
-  /* The rate the baht figure is converted at. Typed rather than fetched: the preview
-   * does not carry one, and a hard-coded 33.6 dressed up as live data would be a lie
-   * told in the largest type on the screen. */
-  const [usdThb, setUsdThb] = useState("33.60");
+  /* Currency and rate are shared with every other screen, so switching here or on the
+   * hub switches both. Prices stay in dollars either way -- see currency.ts. */
+  const { currency, setCurrency, rate, setRate, format } = useCurrency();
   // The design opens on the balanced preset with every rung armed.
   const [partialOn, setPartialOn] = useState(true);
   const [partialAfter, setPartialAfter] = useState("30");
@@ -561,7 +563,7 @@ export function TerminalView() {
 
 
   const riskUsd = plan?.risk ?? 0;
-  const riskThb = riskUsd * (Number(usdThb) || 0);
+  const riskMoney = format(riskUsd);
   const budgetUse = plan?.risk_percent_of_account
     ? Math.min(1, plan.risk_percent_of_account / 0.01)
     : 0;
@@ -591,7 +593,12 @@ export function TerminalView() {
             {Number(entry) > 0 && <em>${money(Number(entry))}</em>}
           </span>
         )}
+        <CurrencySwitch
+          currency={currency} onCurrency={setCurrency}
+          rate={rate} onRate={setRate}
+        />
         <ModeBadge />
+        <span className="tg-avatar">Y</span>
       </div>
 
       <div className="tg-titlerow">
@@ -668,9 +675,10 @@ export function TerminalView() {
               </span>
             </div>
             <div className="tg-quick">
-              {[100, 200, 500, 1000].map((value) => (
-                <button key={value} type="button" onClick={() => setAmount(String(value))}>
-                  ${value.toLocaleString()}
+              {/* Labels exactly as the design writes them: "1000", not "1,000". */}
+              {["100", "200", "500", "1000"].map((value) => (
+                <button key={value} type="button" onClick={() => setAmount(value)}>
+                  ${value}
                 </button>
               ))}
             </div>
@@ -698,7 +706,7 @@ export function TerminalView() {
               <div className="tg-exitfoot">
                 {exits
                   ? `$${exits.stopPrice.toFixed(2)}${
-                      plan ? ` · −฿${Math.round(plan.risk * (Number(usdThb) || 0)).toLocaleString()}` : ""
+                      plan ? ` · −${format(plan.risk)}` : ""
                     }`
                   : "below entry"}
               </div>
@@ -768,11 +776,10 @@ export function TerminalView() {
             <h2>WHAT YOU ARE RISKING</h2>
             <div className="tg-risktop">
               <div>
-                <div className="tg-riskbaht">
-                  ฿{riskThb ? Math.round(riskThb).toLocaleString() : "0"}
-                </div>
+                <div className="tg-riskbaht">{riskMoney}</div>
                 <div className="tg-risksub">
-                  ${money(riskUsd)} · USD/THB {(Number(usdThb) || 0).toFixed(2)}
+                  {currency === "THB" ? `$${money(riskUsd)}` : formatBaht(riskUsd, rate)}
+                  {" · "}USD/THB {rate.toFixed(2)}
                 </div>
               </div>
               <div className="tg-riskpct">
@@ -965,9 +972,8 @@ export function TerminalView() {
               {plan.shares.toLocaleString()} {plan.ticker} @ ${money(plan.entry_price)}
             </div>
             <div className="detail">
-              SL ${money(plan.stop_price)} · TP ${money(plan.target_price)} · risk ฿
-              {Math.round(riskThb).toLocaleString()} (${money(plan.risk)}) · {armed} of 4
-              rungs armed
+              SL ${money(plan.stop_price)} · TP ${money(plan.target_price)} · risk{" "}
+              {riskMoney} · {armed} of 4 rungs armed
             </div>
           </div>
           <div className="tg-sheetactions">
@@ -988,7 +994,7 @@ export function TerminalView() {
         </div>
         <div className="tg-barstat">
           <span>Risk</span>
-          <b className="risk">{plan ? `$${money(plan.risk)}` : "—"}</b>
+          <b className="risk">{plan ? riskMoney : "—"}</b>
         </div>
         <div className="tg-barstat">
           <span>Reward : risk</span>
@@ -1010,6 +1016,45 @@ export function TerminalView() {
       </div>
       {openError && <p className="tg-err">{openError}</p>}
     </div>
+  );
+}
+
+/* The currency control. A segment for the choice and the rate beside it, because a
+ * converted figure without its rate is a number you cannot check. Hidden entirely
+ * while USD is selected -- there is nothing to convert, so the rate would be noise. */
+function CurrencySwitch({
+  currency, onCurrency, rate, onRate,
+}: {
+  currency: "THB" | "USD";
+  onCurrency: (next: "THB" | "USD") => void;
+  rate: number;
+  onRate: (next: number) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  return (
+    <span className="tg-fx">
+      <span className="tg-seg">
+        {(["THB", "USD"] as const).map((code) => (
+          <button
+            key={code} type="button" aria-pressed={currency === code}
+            className={currency === code ? "on" : ""}
+            onClick={() => onCurrency(code)}
+          >
+            {code}
+          </button>
+        ))}
+      </span>
+      {currency === "THB" && (
+        <label className="tg-fxrate">
+          <span>USD/THB</span>
+          <input
+            value={draft || rate.toFixed(2)} inputMode="decimal"
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={() => { const next = Number(draft); if (next > 0) onRate(next); setDraft(""); }}
+          />
+        </label>
+      )}
+    </span>
   );
 }
 
