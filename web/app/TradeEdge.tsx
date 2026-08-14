@@ -165,7 +165,7 @@ function EquityChart({ points }: { points: { date: string; value: number }[] }) 
   const width = 720;
   const height = 210;
   if (points.length < 2) {
-    return <div className="te-note">ยังไม่มีข้อมูลพอสำหรับวาดกราฟ</div>;
+    return <div className="te-note">Not enough data to draw this yet</div>;
   }
   const values = points.map((point) => point.value);
   const min = Math.min(...values, 0);
@@ -482,7 +482,7 @@ function Dashboard({
     <>
       <div className="te-kpis">
         <UnsourcedKpi label="Market Trend"
-          why="ยังไม่มี endpoint ดัชนีตลาด (SPY / breadth)" />
+          why="no market-index endpoint yet (SPY / breadth)" />
 
         <div className="te-kpi">
           <span className="te-kpi-label">Top Gainer (Pre-Market)</span>
@@ -572,8 +572,8 @@ function Dashboard({
           </div>
           {watch.length === 0 ? (
             <div className="te-empty">
-              <b>ยังไม่มีรายการเฝ้าดู</b>
-              <small>เพิ่ม ticker เพื่อให้ระบบติดตามราคาและข่าวให้</small>
+              <b>Nothing on the watchlist</b>
+              <small>Add a ticker and the system follows its price and news</small>
             </div>
           ) : (
             <div className="te-table-scroll">
@@ -653,7 +653,7 @@ const SESSION_META: Record<string, { label: string; clock: string }> = {
 };
 
 // Each tag is restated as a sentence carrying the row's own number. A chip
-// reading "float หมุนหนักมาก" tells you a threshold was crossed; it does not
+// reading "float turned over heavily" tells you a threshold was crossed; it does not
 // tell you the float turned over eleven times, which is the fact worth having.
 function explain(tag: string, row: GainerRow): string {
   const rotation = row.float_rotation?.toFixed(1);
@@ -661,35 +661,35 @@ function explain(tag: string, row: GainerRow): string {
   const float = compact(row.float_shares);
   switch (tag) {
     case "EXTREME_ROTATION":
-      return `หุ้นหมุนเวียนทั้งก้อนเปลี่ยนมือ ${rotation} รอบในหนึ่ง session — ระดับนี้แปลว่ามีคนเข้ามาไล่กันจริง ไม่ใช่ราคาขยับลอยๆ`;
+      return `The entire float changed hands ${rotation} times in one session — at that level people are genuinely chasing, not just marking the price`;
     case "HIGH_ROTATION":
-      return `float หมุน ${rotation} รอบ — เกินเกณฑ์ 2 เท่าที่วัดได้ว่าโอกาส spike ขึ้นจาก 11% เป็น 46%`;
+      return `The float turned over ${rotation} times — past the 2× threshold measured to lift spike odds from 11% to 46%`;
     case "MICRO_FLOAT":
-      return `float เพียง ${float} หุ้น — เงินก้อนไม่ใหญ่ก็ดันราคาได้ และลงก็เร็วเท่ากัน`;
+      return `A float of only ${float} shares — modest money moves the price, and it falls just as fast`;
     case "LOW_FLOAT":
-      return `float ${float} หุ้น ถือว่าน้อย ราคาจึงตอบสนองแรงกว่าปกติ`;
+      return `A float of ${float} shares is small, so the price reacts harder than usual`;
     case "EXTREME_RVOL":
-      return `ปริมาณซื้อขาย ${rvol} เท่าของค่าเฉลี่ย 10 วัน — ผิดปกติชัดเจน`;
+      return `Volume ${rvol}× the 10-day average — clearly abnormal`;
     case "HIGH_RVOL":
-      return `ปริมาณซื้อขาย ${rvol} เท่าของค่าเฉลี่ย — มีคนสนใจมากกว่าปกติ`;
+      return `Volume ${rvol}× the average — more interest than usual`;
     case "STRONG_CATALYST":
-      return `ข่าวถูกจัดว่าเป็นตัวเร่งระดับแรง (คะแนน ${row.catalyst_score?.toFixed(2) ?? "—"})`;
+      return `The news scored as a strong catalyst (${row.catalyst_score?.toFixed(2) ?? "—"})`;
     case "NEWS_CATALYST":
-      return "มีข่าวในฐานข้อมูลช่วงเวลาที่เกี่ยวข้อง แต่ไม่ถึงเกณฑ์ตัวเร่งแรง";
+      return "There is news in the window, but not enough to score as a strong catalyst";
     case "NO_STORED_NEWS":
-      return "ไม่มีข่าวในฐานข้อมูล — เป็นข้อเท็จจริงเกี่ยวกับฟีดข่าวของเรา ไม่ได้แปลว่าไม่มีข่าวในโลกจริง";
+      return "No news in the database — a fact about our feed, not about the world";
     case "SUB_DOLLAR":
-      return "ราคาต่ำกว่า $1 — เข้าเขตเกณฑ์ราคาขั้นต่ำของ Nasdaq ถ้ายืนนานพอ";
+      return "Under $1 — in Nasdaq minimum-bid territory if it stays there long enough";
     case "NANO_CAP":
-      return `มูลค่าตลาด ${money(row.market_cap, 0)} — เล็กพอที่แรงซื้อไม่มากก็เปลี่ยนราคาได้`;
+      return `Market cap ${money(row.market_cap, 0)} — small enough that modest buying moves it`;
     case "FADED_FROM_HIGH":
-      return `ถอยจากจุดสูงสุดของ session ${giveback(row).toFixed(0)}% — คนที่ไล่ตอนสูงสุดขาดทุนก่อนจบวัน`;
+      return `Gave back ${giveback(row).toFixed(0)}% from the session high — anyone chasing the top was down before the close`;
     case "CLOSED_AT_HIGH":
-      return "ปิด session ใกล้จุดสูงสุด — แรงซื้อยังอยู่จนจบ ไม่ได้ถูกเทออก";
+      return "Closed the session near its high — the buying held to the end rather than being unloaded";
     case "NEW_52W_HIGH":
-      return "ทำจุดสูงสุดใหม่ในรอบ 52 สัปดาห์ — ไม่มีคนติดดอยเหนือราคานี้";
+      return "A new 52-week high — nobody is trapped above this price";
     case "NEAR_52W_LOW":
-      return "อยู่ใกล้จุดต่ำสุดรอบ 52 สัปดาห์ — หลุดลงไปคือไม่มีแนวรับในอดีตให้อ้างอิง";
+      return "Near the 52-week low — below it there is no past support to refer to";
     default:
       return tag;
   }
@@ -754,7 +754,7 @@ function GainersView() {
           <h2>Gainers</h2>
           <div className="te-spacer te-datepick">
             <label>
-              <span>วันที่</span>
+              <span>Date</span>
               <input
                 type="date"
                 value={day || tradingDate}
@@ -767,14 +767,14 @@ function GainersView() {
                 out loud rather than leaving three empty tabs to imply the
                 market was quiet. */}
             {day && !dates.includes(day) && (
-              <em className="te-datepick-warn">ไม่มีข้อมูลที่เก็บไว้ของวันนี้</em>
+              <em className="te-datepick-warn">nothing stored for this date</em>
             )}
             {day && (
               <button className="te-ghost-btn" onClick={() => setParam({ date: null })}>
-                ล่าสุด
+                Latest
               </button>
             )}
-            <span className="te-datepick-count">{dates.length} วันที่เก็บไว้</span>
+            <span className="te-datepick-count">{dates.length} dates stored</span>
           </div>
         </div>
       </section>
@@ -851,7 +851,7 @@ function SessionTable({
       </div>
 
       {payload?.note && (
-        <div className="te-empty"><b>ไม่มีข้อมูล</b><small>{payload.note}</small></div>
+        <div className="te-empty"><b>No data</b><small>{payload.note}</small></div>
       )}
 
       {rows.length > 0 && (
@@ -910,7 +910,7 @@ function SessionTable({
                         </span>
                       ) : "—"}
                     </td>
-                    <td className="te-open-cell">ดูรายละเอียด →</td>
+                    <td className="te-open-cell">Open →</td>
                   </tr>
                 );
               })}
@@ -949,9 +949,9 @@ function GainerDetail({
     return (
       <section className="te-card">
         <div className="te-detail-head">
-          <button className="te-back" onClick={onBack}>← กลับ</button>
+          <button className="te-back" onClick={onBack}>← Back</button>
         </div>
-        <div className="te-empty"><b>{ticker}</b><small>ไม่พบข้อมูลของวันนี้</small></div>
+        <div className="te-empty"><b>{ticker}</b><small>nothing found for this date</small></div>
       </section>
     );
   }
@@ -960,7 +960,7 @@ function GainerDetail({
     <>
       <section className="te-card">
         <div className="te-detail-head">
-          <button className="te-back" onClick={onBack}>← กลับ</button>
+          <button className="te-back" onClick={onBack}>← Back</button>
           <div className="te-detail-title">
             <h2>{ticker}</h2>
             <small>{tradingDate}</small>
@@ -968,7 +968,7 @@ function GainerDetail({
           <div className="te-detail-key">
             <span><small>float</small><b>{compact(primary.float_shares)}</b></span>
             <span><small>mcap</small><b>{money(primary.market_cap, 0)}</b></span>
-            <span><small>ปรากฏใน</small><b>{appearances.length} session</b></span>
+            <span><small>appears in</small><b>{appearances.length} sessions</b></span>
           </div>
         </div>
 
@@ -981,7 +981,7 @@ function GainerDetail({
                 <div className="te-journey-cell muted" key={key}>
                   <small>{meta.label}</small>
                   <b>—</b>
-                  <em>ไม่ติดอันดับ</em>
+                  <em>unranked</em>
                 </div>
               );
             }
@@ -997,12 +997,12 @@ function GainerDetail({
                 </em>
                 <span className="te-journey-meta">
                   best {entry.row.max_change_pct ? pct(entry.row.max_change_pct, 1) : "—"}
-                  {gave > 0 ? ` · คืน ${gave.toFixed(0)}%` : " · ปิดใกล้ high"}
+                  {gave > 0 ? ` · gave back ${gave.toFixed(0)}%` : " · closed near the high"}
                 </span>
                 <span className="te-journey-meta">
                   rank #{entry.row.rank}
                   {entry.row.float_rotation
-                    ? ` · หมุน ${entry.row.float_rotation.toFixed(1)}×` : ""}
+                    ? ` · turned ${entry.row.float_rotation.toFixed(1)}×` : ""}
                 </span>
               </div>
             );
@@ -1012,7 +1012,7 @@ function GainerDetail({
 
       <div className="te-detail-grid">
         <section className="te-card">
-          <div className="te-card-head"><h2>ทำไมมันถึงขึ้น</h2></div>
+          <div className="te-card-head"><h2>Why it moved</h2></div>
           <div className="te-reasons">
             {appearances.map(({ key, row }) => (
               <div className="te-reason-group" key={key}>
@@ -1032,37 +1032,37 @@ function GainerDetail({
 
         <div style={{ display: "grid", gap: "var(--te-gap)", alignContent: "start" }}>
           <section className="te-card">
-            <div className="te-card-head"><h2>ข่าวที่ผูกกับการเคลื่อนไหว</h2></div>
+            <div className="te-card-head"><h2>News tied to the move</h2></div>
             {primary.has_news && primary.news_title ? (
               <div className="te-card-body">
                 <p className="te-news-title">{primary.news_title}</p>
                 <div className="te-news-meta">
                   {primary.news_published_at && (
-                    <span>เผยแพร่ {new Date(primary.news_published_at)
+                    <span>published {new Date(primary.news_published_at)
                       .toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</span>
                   )}
                   {primary.catalyst_score ? (
-                    <span>คะแนนตัวเร่ง {primary.catalyst_score.toFixed(2)}</span>
+                    <span>catalyst score {primary.catalyst_score.toFixed(2)}</span>
                   ) : null}
                 </div>
                 <p className="te-news-caveat">
-                  ข่าวถูกจับคู่ตามช่วงเวลา ไม่ใช่การพิสูจน์ว่าเป็นสาเหตุ —
-                  ระบบเลือกข่าวที่คะแนนสูงสุดในกรอบเวลาที่เกี่ยวข้องเท่านั้น
+                  News is matched by time window, which is not proof of cause —
+                  the system only picks the highest-scoring item inside that window.
                 </p>
               </div>
             ) : (
               <div className="te-empty">
-                <b>ไม่มีข่าวในฐานข้อมูล</b>
+                <b>No news in the database</b>
                 <small>
-                  นี่คือข้อเท็จจริงเกี่ยวกับฟีดข่าวของเรา ไม่ได้แปลว่าไม่มีข่าวในโลกจริง —
-                  ตัวที่ไม่มีข่าวแต่ volume ระเบิดคือกลุ่มที่ระบบวัดได้ว่า hit rate สูงกว่ากลุ่มมีข่าว
+                  This is a fact about our feed, not about the world —
+                  names with no news but exploding volume measured a higher hit rate than the ones with news.
                 </small>
               </div>
             )}
           </section>
 
           <section className="te-card">
-            <div className="te-card-head"><h2>ตัวเลขทั้งหมด</h2></div>
+            <div className="te-card-head"><h2>Every number</h2></div>
             <table className="te-table">
               <thead>
                 <tr>
@@ -1090,8 +1090,8 @@ function GainerDetail({
               </tbody>
             </table>
             <p className="te-news-caveat" style={{ padding: "0 20px 16px" }}>
-              Ref คือราคาที่ใช้วัดการเคลื่อนไหวของ session นั้น — pre-market และ regular
-              วัดจากราคาปิดวันก่อน ส่วน after-hours วัดจากราคาปิดตลาดปกติวันเดียวกัน
+              Ref is the price each session's move is measured from — pre-market and regular
+              measure from the prior close, after-hours from that day's regular close.
             </p>
           </section>
         </div>
@@ -1130,7 +1130,7 @@ function ScannerCard({ compact: isCompact, onView }: { compact?: boolean; onView
     <section className="te-card">
       <div className="te-card-head"><h2>Daily Scanner</h2></div>
       {rows.length === 0 ? (
-        <div className="te-empty"><b>ยังไม่มีข้อมูล</b><small>รอการเก็บรอบถัดไป</small></div>
+        <div className="te-empty"><b>No data yet</b><small>waiting for the next collection</small></div>
       ) : (
         <div className="te-table-scroll">
           <table className="te-table">
@@ -1167,8 +1167,8 @@ function ScannerView() {
       <div className="te-card-head"><h2>Daily Scanner — live candidates</h2></div>
       {loading && <p className="te-note">Loading…</p>}
       {!loading && rows.length === 0 && (
-        <div className="te-empty"><b>ไม่มี candidate ตอนนี้</b>
-          <small>ตัวจัดอันดับทำงานเฉพาะช่วงที่ตลาดเปิด</small></div>
+        <div className="te-empty"><b>No candidates right now</b>
+          <small>the ranker only runs while the market is open</small></div>
       )}
       {rows.length > 0 && (
         <div className="te-table-scroll">
@@ -1208,8 +1208,8 @@ function WatchlistView({ items }: { items: WatchItem[] }) {
     <section className="te-card">
       <div className="te-card-head"><h2>Watchlist</h2></div>
       {items.length === 0 ? (
-        <div className="te-empty"><b>ยังไม่มีรายการ</b>
-          <small>เพิ่ม ticker เพื่อติดตามราคาและข่าว</small></div>
+        <div className="te-empty"><b>Nothing here yet</b>
+          <small>add a ticker to follow its price and news</small></div>
       ) : (
         <table className="te-table">
           <thead><tr><th>Symbol</th><th>Note</th></tr></thead>
@@ -1232,7 +1232,7 @@ function PositionsView({ positions }: { positions: ExecutionPosition[] }) {
     <section className="te-card">
       <div className="te-card-head"><h2>Positions</h2></div>
       {positions.length === 0 ? (
-        <div className="te-empty"><b>ไม่มีสถานะเปิด</b><small>ทุกไม้ปิดหมดแล้ว</small></div>
+        <div className="te-empty"><b>No open positions</b><small>everything is closed</small></div>
       ) : (
         <table className="te-table">
           <thead><tr><th>Symbol</th><th className="num">Shares</th>
@@ -1380,8 +1380,8 @@ function NotBuilt({ label }: { label: string }) {
       <div className="te-empty">
         <b>{label}</b>
         <small>
-          หน้านี้ยังไม่ได้ต่อกับข้อมูลจริง — ผมจะไม่ใส่ตัวเลขสมมติไว้
-          เพราะแดชบอร์ดที่แต่งตัวเลขเองอันตรายกว่าแดชบอร์ดที่มีช่องว่าง
+          This screen is not wired to real data yet, and no invented numbers are shown
+          — a dashboard that makes figures up is more dangerous than one with a gap in it.
         </small>
       </div>
     </section>

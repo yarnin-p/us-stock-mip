@@ -152,7 +152,7 @@ const dimeRoundTrip = (price: number) =>
 const LADDER_PRESETS = {
   conservative: {
     label: "conservative",
-    note: "เก็บทุนเร็ว ปล่อยให้วิ่งน้อย",
+    note: "banks capital early, gives the runner little room",
     breakEven: { after: "2", floor: "1" },
     profitLock: { after: "4", floor: "2.5" },
     trail: { stopAfter: "8", targetAfter: "16", stopDistance: "7", targetDistance: "12" },
@@ -160,7 +160,7 @@ const LADDER_PRESETS = {
   },
   balanced: {
     label: "balanced",
-    note: "กลางๆ",
+    note: "the middle setting",
     breakEven: { after: "3", floor: "1.5" },
     profitLock: { after: "6", floor: "3" },
     trail: { stopAfter: "10", targetAfter: "20", stopDistance: "10", targetDistance: "15" },
@@ -168,7 +168,7 @@ const LADDER_PRESETS = {
   },
   runner: {
     label: "runner",
-    note: "ยอมย่อลึกเพื่อจับตัววิ่งยาว",
+    note: "accepts a deeper give-back to hold a long runner",
     breakEven: { after: "4", floor: "1" },
     profitLock: { after: "10", floor: "4" },
     trail: { stopAfter: "14", targetAfter: "28", stopDistance: "16", targetDistance: "22" },
@@ -183,28 +183,28 @@ type PresetName = keyof typeof LADDER_PRESETS;
  * not fill is not. */
 const FLAG_COPY: Record<string, { title: string; body: string }> = {
   MICRO_FLOAT: {
-    title: "float เล็ก — stop อาจไม่ทำงาน",
-    body: "หุ้น float ต่ำ halt บ่อย และระหว่าง halt คุณส่งคำสั่งไม่ได้ พอเปิดกลับมาราคาอาจกระโดดข้าม stop ไปแล้ว ขนาดไม้คือการควบคุมเดียวที่ยังทำงาน",
+    title: "small float — the stop may not work",
+    body: "Low-float names halt often, and no order can be sent during a halt. Price can reopen straight through the stop. Position size is the only control still working.",
   },
   EXTREME_RVOL: {
-    title: "volume พุ่งผิดปกติ",
-    body: "ราคาถูกกำหนดโดยสมุดคำสั่งที่แทบว่าง เคลื่อนไหวได้รุนแรงทั้งสองทาง",
+    title: "volume far above normal",
+    body: "The price is being set by an almost empty book, and can move violently in either direction.",
   },
   OVEREXTENDED: {
-    title: "วิ่งมาไกลแล้ว",
-    body: "จากที่วัด 1,930 ตัว-วัน ตัวที่วิ่งเกิน +100% ปิดบวกเพียง 29% และย่อลึกกว่าที่ขึ้นต่อ",
+    title: "already extended",
+    body: "Measured over 1,930 name-days: of those up more than 100%, only 29% closed green, and the give-back ran deeper than the continuation.",
   },
   DEPTH_CAPPED: {
-    title: "ไม้ถูกตัดตามความลึกของ book",
-    body: "เงินขอมากกว่าที่ตลาดรับได้ ขนาดจึงถูกลดลงมาให้เท่าที่ขายออกได้จริง — ไม้ที่ใหญ่กว่า book ไม่ได้เสี่ยงมากขึ้น แต่คือไม้ที่ไม่มีทางออกที่ราคาที่แผนคิดไว้",
+    title: "size cut to what the book will take",
+    body: "The money asked for more than the market will absorb, so the size was cut to what can actually be sold. A position larger than the book is not one with more risk; it is one whose exit does not exist at the price the plan assumed.",
   },
   DEPTH_THIN: {
-    title: "book บางเทียบกับขนาดไม้",
-    body: "ราคาเสนอซื้อที่ดีที่สุดรับได้น้อยกว่าที่ถืออยู่มาก ตอนขายจะต้องไล่ลงไปกินไม้ล่างๆ ซึ่งคือการทำราคาลงเอง — stop ที่คำนวณไว้จะไม่ได้ราคานั้น",
+    title: "thin book against this size",
+    body: "The best bid holds far less than the position. Selling means walking down into the levels below, which is moving the price yourself — the stop will not fill where it was calculated.",
   },
   DEPTH_UNKNOWN: {
-    title: "ยังไม่รู้ความลึกของ book",
-    body: "ไม่มีราคาเสนอซื้อในระบบสำหรับตัวนี้ ขนาดไม้จึงยังไม่ผ่านการตรวจกับ book เลย ต้องดูความลึกบนจอโบรกเองก่อนส่ง",
+    title: "book depth unknown",
+    body: "No bid has been observed for this name, so the size has not been checked against the book at all. Read the depth on the broker screen before sending.",
   },
 };
 
@@ -243,7 +243,8 @@ export function TerminalView() {
    * does not carry one, and a hard-coded 33.6 dressed up as live data would be a lie
    * told in the largest type on the screen. */
   const [usdThb, setUsdThb] = useState("33.60");
-  const [partialOn, setPartialOn] = useState(false);
+  // The design opens on the balanced preset with every rung armed.
+  const [partialOn, setPartialOn] = useState(true);
   const [partialAfter, setPartialAfter] = useState("30");
   const [partialFraction, setPartialFraction] = useState("25");
   const [partialMinShares, setPartialMinShares] = useState("10");
@@ -450,19 +451,19 @@ export function TerminalView() {
     const be = Number(breakEvenAfter);
     const lock = Number(profitLockAfter);
     if (breakEvenOn && !(Number(breakEvenFloor) < be)) {
-      return "break-even: floor ต้องต่ำกว่าจุดที่มัน arm ไม่งั้นมันคือ TP ไม่ใช่ floor";
+      return "Break-even: the floor must sit below the gain that arms it, or it is a target rather than a floor.";
     }
     if (profitLockOn && !(Number(profitLockFloor) < lock)) {
-      return "profit lock: floor ต้องต่ำกว่าจุดที่มัน arm";
+      return "Profit lock: the floor must sit below the gain that arms it.";
     }
     if (breakEvenOn && profitLockOn && !(be < lock)) {
-      return "break-even ต้อง arm ก่อน profit lock — บันไดขึ้นทางเดียว";
+      return "Break-even must arm before profit lock — the ladder only climbs.";
     }
     if (profitLockOn && !(lock < trail)) {
-      return "profit lock ต้อง arm ก่อน trail";
+      return "Profit lock must arm before the trail.";
     }
     if (partialOn && !(Number(partialAfter) > trail)) {
-      return "partial TP ต้อง arm สูงกว่า trail — ขายก่อน trail ทำงานคือหั่นตัววิ่งที่ trail มีไว้จับ";
+      return "Partial take-profit must arm above the trail — selling before the trail engages cuts into the runner the trail exists to hold.";
     }
     return "";
   }, [
@@ -728,16 +729,15 @@ export function TerminalView() {
               <input value={equity} inputMode="decimal"
                 onChange={(event) => setEquity(event.target.value)} />
             </label>
-            <label className="tg-pillfield">
-              <span>USD/THB</span>
-              <input value={usdThb} inputMode="decimal"
-                onChange={(event) => setUsdThb(event.target.value)} />
-            </label>
             <label className="tg-pillfield narrow">
-              <span>Fee %{fee.auto ? " auto" : ""}</span>
-              <input value={feeOverride} inputMode="decimal"
-                placeholder={(fee.fraction * 100).toFixed(2)}
-                onChange={(event) => setFeeOverride(event.target.value)} />
+              <span>Fee %</span>
+              {/* Shows the effective rate, which is the Dime one worked out from the
+                  entry price unless something has been typed over it. */}
+              <input
+                value={feeOverride || (fee.fraction * 100).toFixed(2)}
+                inputMode="decimal"
+                onChange={(event) => setFeeOverride(event.target.value)}
+              />
             </label>
           </div>
           {!exits && Number(entry) > 0 && (
@@ -813,7 +813,6 @@ export function TerminalView() {
             </div>
           </div>
 
-          {plan && <ExitLiquidity plan={plan} feeFraction={fee.fraction} />}
           {plan && <AccountRiskWarning share={plan.risk_percent_of_account} />}
           {plan?.risk_flags.map((flag) => {
             const key = flag.split(":")[0];
@@ -1137,35 +1136,35 @@ function ExitLiquidity({
 
   return (
     <div className={`tm-liquidity${unknown || thin ? " warn" : ""}`}>
-      <span className="tm-liquidity-head">ออกได้แค่ไหน</span>
+      <span className="tm-liquidity-head">CAN YOU GET OUT</span>
       <div className="tm-liquidity-grid">
         <Figure
-          label="bid ที่รับได้"
-          value={unknown ? "ไม่รู้" : `${bidShares.toLocaleString()} หุ้น`}
-          note={unknown ? "ยังไม่เห็นราคาเสนอซื้อ" : `$${money(bidValue)}`}
+          label="best bid holds"
+          value={unknown ? "unknown" : `${bidShares.toLocaleString()} sh`}
+          note={unknown ? "no bid observed" : `$${money(bidValue)}`}
         />
         <Figure
-          label="ไม้เทียบ bid"
+          label="position vs bid"
           value={unknown ? "—" : `${cover.toFixed(1)}×`}
-          note={unknown ? "ประเมินไม่ได้" : cover <= 1 ? "ออกได้ในไม้เดียว" : "ต้องกินลึกกว่า bid แรก"}
+          note={unknown ? "cannot be judged" : cover <= 1 ? "leaves on the bid showing" : "must eat below the first bid"}
           tone={thin ? "risk" : undefined}
         />
         <Figure
-          label="ค่าธรรมเนียมไป-กลับ"
+          label="round-trip fee"
           value={pct(feeFraction, 2)}
-          note="ยังไม่รวม spread"
+          note="spread not included"
         />
       </div>
       {capped && (
         <p className="tm-liquidity-note">
-          เงินขอ <strong>{requested.toLocaleString()}</strong> หุ้น แต่ book รับได้{" "}
-          <strong>{plan.shares.toLocaleString()}</strong> — ตัดให้แล้วตามความลึกจริง
+          The money asked for <strong>{requested.toLocaleString()}</strong> shares; the book takes{" "}
+          <strong>{plan.shares.toLocaleString()}</strong> — cut to the depth actually there.
         </p>
       )}
       {unknown && (
         <p className="tm-liquidity-note">
-          ไม่มีราคาเสนอซื้อในระบบสำหรับตัวนี้ — ขนาดไม้ยังไม่ผ่านการตรวจกับ book
-          เช็คความลึกบนจอโบรกก่อนส่ง
+          No bid observed for this name — the size has not been checked against the book.
+          Read the depth on the broker screen before sending.
         </p>
       )}
     </div>
@@ -1179,8 +1178,8 @@ function AccountRiskWarning({ share }: { share?: number }) {
   if (!share || share <= 0.02) return null;
   return (
     <p className="tm-warn">
-      ไม้นี้เสี่ยง {pct(share)} ของพอร์ต — ถ้าเสียเต็มจำนวน
-      ต้องทำกำไร {pct(share / (1 - share))} เพื่อกลับมาเท่าเดิม
+      This position risks {pct(share)} of the account — losing all of it
+      needs {pct(share / (1 - share))} to get back to even.
     </p>
   );
 }
@@ -1243,18 +1242,18 @@ function BracketList({ reload }: { reload: number }) {
 
   return (
     <section className="tm-card">
-      <h2 className="tm-card-title">ไม้ที่บันทึกไว้</h2>
+      <h2 className="tm-card-title">Saved plans</h2>
       {error && <p className="tm-error">{error}</p>}
-      {!error && rows.length === 0 && <p className="tm-empty">ยังไม่มีไม้</p>}
+      {!error && rows.length === 0 && <p className="tm-empty">No plans yet.</p>}
       {rows.length > 0 && (
         <div className="tm-table-wrap">
           <table className="tm-table">
             <thead>
               <tr>
-                <th>Ticker</th><th>สถานะ</th><th className="num">หุ้น</th>
+                <th>Ticker</th><th>Status</th><th className="num">Sh</th>
                 <th className="num">Entry</th><th className="num">SL</th>
                 <th className="num">TP</th><th className="num">High</th>
-                <th>ธง</th><th /><th />
+                <th>Flags</th><th /><th />
               </tr>
             </thead>
             <tbody>
@@ -1265,33 +1264,33 @@ function BracketList({ reload }: { reload: number }) {
                     <span className={`tm-state s-${row.state}`}>{row.state}</span>
                     {/* A held bracket must not read as a trailed one: nothing is
                       * moving its stop while this is on. */}
-                    {row.manual_hold && <span className="tm-held">มือ</span>}
+                    {row.manual_hold && <span className="tm-held">held</span>}
                   </td>
                   <td className="num">
                     {row.quantity.toLocaleString()}
                     {(row.partial_taken_quantity ?? 0) > 0 && (
                       <em className="tm-pending">
-                        {" "}ขายแล้ว {row.partial_taken_quantity?.toLocaleString()}
+                        {" "}sold {row.partial_taken_quantity?.toLocaleString()}
                       </em>
                     )}
                   </td>
                   <td className="num">
                     ${money(row.entry_price ?? row.requested_entry)}
-                    {!row.entry_price && <em className="tm-pending"> ขอไว้</em>}
+                    {!row.entry_price && <em className="tm-pending"> requested</em>}
                   </td>
                   <td className="num tone-risk">
                     {row.stop_price ? `$${money(row.stop_price)}` : "—"}
                     {row.state === "ACTIVE" && row.stop_price ? (
                       row.stop_fired ? (
-                        <em className="tm-pending"> ขายแล้ว</em>
+                        <em className="tm-pending"> sold</em>
                       ) : row.stop_order_id ? (
-                        <span className="tm-holder broker" title="stop order วางอยู่ที่โบรก — รอดแม้ MIP ดับ">
-                          โบรก
+                        <span className="tm-holder broker" title="the stop order rests at the broker — it survives MIP going down">
+                          broker
                         </span>
                       ) : (
                         <span
                           className="tm-holder engine"
-                          title="Webull ไม่รับ stop order นอก regular session — engine เฝ้าราคาและจะยิง limit sell เอง ถ้า MIP ดับจะไม่มีอะไรคุ้ม"
+                          title="Webull will not hold a stop outside the regular session — the engine watches every print and fires the limit sell itself. If MIP goes down nothing is protecting this."
                         >
                           engine
                         </span>
@@ -1314,7 +1313,7 @@ function BracketList({ reload }: { reload: number }) {
                       type="button" className="tm-link"
                       onClick={() => setOpenId(openId === row.id ? null : row.id)}
                     >
-                      {openId === row.id ? "ปิด" : "ประวัติ"}
+                      {openId === row.id ? "Close" : "History"}
                     </button>
                   </td>
                   <td>
@@ -1323,7 +1322,7 @@ function BracketList({ reload }: { reload: number }) {
                         type="button" className="tm-link"
                         onClick={() => setManageId(manageId === row.id ? null : row.id)}
                       >
-                        {manageId === row.id ? "ปิด" : "จัดการ"}
+                        {manageId === row.id ? "Close" : "Manage"}
                       </button>
                     )}
                   </td>
@@ -1393,7 +1392,7 @@ function Manage({
         setSaid(what);
         onChanged();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "ไม่สำเร็จ");
+        setError(cause instanceof Error ? cause.message : "failed");
       } finally {
         setBusy(false);
       }
@@ -1416,7 +1415,7 @@ function Manage({
         if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`);
         onChanged();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "ไม่สำเร็จ");
+        setError(cause instanceof Error ? cause.message : "failed");
       } finally {
         setBusy(false);
       }
@@ -1432,45 +1431,45 @@ function Manage({
     <div className="tm-manage">
       <h3 className="tm-manage-title">
         {bracket.ticker} #{bracket.id}
-        {held && <span className="tm-held">คุณกำลังขับ</span>}
+        {held && <span className="tm-held">you are driving</span>}
       </h3>
 
       {pending && <Entry bracket={bracket} onChanged={onChanged} />}
 
       {bracket.state === "ACTIVE" && !bracket.stop_order_id && !bracket.stop_fired && (
         <div className="tm-flag">
-          <strong>stop นี้ engine ถืออยู่ ไม่ได้อยู่ที่โบรก</strong>
+          <strong>this stop is held by the engine, not by the broker</strong>
           <p>
-            Webull ไม่รับ stop order นอกเวลา 21:30–04:00 น. — engine เฝ้าทุก print
-            และจะยิง limit sell เองเมื่อราคาแตะ ตลาดเปิดแล้วมันจะส่ง stop ไปวางที่โบรกให้
-            <strong> ระหว่างนี้ถ้า MIP ดับหรือเน็ตหลุด จะไม่มีอะไรคุ้มไม้นี้</strong>
+            Webull will not hold a stop outside the regular session — the engine watches every print
+            and fires the limit sell itself when price touches it. At the open it hands the stop back to the broker.
+            <strong> Until then, if MIP stops or the connection drops, nothing is protecting this position.</strong>
           </p>
         </div>
       )}
 
       <div className="tm-manage-block">
         <p className="tm-hint">
-          ย้ายเส้นตรงๆ · ปล่อยว่างไว้ = ไม่แตะเส้นนั้น ·
-          engine ยังขับอยู่ถ้าไม่ได้กด hold
-          {pending && " · ไม้นี้ยัง PENDING — engine ยังไม่ได้ตามอะไร จนกด arm"}
+          Move a level directly · leave a field empty to not touch it ·
+          the engine keeps driving unless hold is on
+          {pending && " · this plan is still PENDING — the engine follows nothing until it is armed"}
         </p>
         <div className="tm-row">
           <label className="tm-field">
-            <span>SL ราคา</span>
+            <span>SL price</span>
             <input className="tm-input" value={stop} inputMode="decimal"
               onChange={(event) => setStop(event.target.value)} />
           </label>
           <label className="tm-field">
-            <span>TP ราคา</span>
+            <span>TP price</span>
             <input className="tm-input" value={target} inputMode="decimal"
               onChange={(event) => setTarget(event.target.value)} />
           </label>
         </div>
         <label className="tm-field">
-          <span>เหตุผล (ลงในประวัติ)</span>
+          <span>Reason (goes in the log)</span>
           <input className="tm-input" value={note}
             onChange={(event) => setNote(event.target.value)}
-            placeholder="เช่น อ่านว่ามันจะ pump กลับ" />
+            placeholder="e.g. read it as pumping back" />
         </label>
         <button
           type="button" className="tm-btn" disabled={busy}
@@ -1481,48 +1480,48 @@ function Manage({
                 ...(Number(target) > 0 ? { target_price: Number(target) } : {}),
                 note: note.trim(),
               },
-              "ย้ายเส้นแล้ว",
+              "levels moved",
             )
           }
         >
-          ย้ายเส้น
+          Move the levels
         </button>
       </div>
 
       <div className="tm-manage-block">
         <p className="tm-hint">
           {held
-            ? "engine กำลังบันทึกว่ามันอยากทำอะไร แต่ไม่ส่งอะไรเลย — ดูได้ในประวัติ"
-            : "กดแล้ว engine จะหยุดส่งคำสั่งทันที แต่ยังบันทึกว่ามันอยากทำอะไร ปล่อยกลับได้ทุกเมื่อโดยไม่เสียประวัติช่วงนั้น"}
+            ? "The engine is recording what it wants to do and sending nothing — visible in the log."
+            : "Press this and the engine stops sending immediately while still recording what it wanted. Hand it back at any time without losing that record."}
         </p>
         <button
           type="button" className={held ? "tm-btn" : "tm-btn warn"} disabled={busy}
           onClick={() =>
-            send({ hold: !held, note: note.trim() }, held ? "คืนพวงมาลัยแล้ว" : "คุณขับแล้ว")
+            send({ hold: !held, note: note.trim() }, held ? "handed back to the engine" : "you are driving")
           }
         >
-          {held ? "ให้ engine ขับต่อ" : "ผมขับเอง (hold)"}
+          {held ? "Let the engine drive" : "I will drive (hold)"}
         </button>
       </div>
 
       <div className="tm-manage-block danger">
         <p className="tm-hint">
-          ปิดไม้นี้ใน MIP — engine เลิกตาม และปล่อย subscription ราคาทิ้ง
-          <strong> การขายจริงยังต้องกดที่โบรก</strong> เพราะคำสั่งขายต้องผ่าน execution path
-          ที่เห็น kill switch
+          Close this plan in MIP — the engine stops following it and releases the price subscription.
+          <strong> Selling for real still happens at the broker</strong>, because a sell has to go through the execution path
+          that can see the kill switch.
         </p>
         <div className="tm-row">
           <button type="button" className="tm-btn warn" disabled={busy}
             onClick={() => close("CANCELLED")}>
-            ยกเลิกไม้ (ยังไม่ได้ขาย)
+            Cancel plan (nothing sold)
           </button>
           <button type="button" className="tm-btn danger" disabled={busy}
             onClick={() => close("STOPPED")}>
-            ปิดว่าโดน SL
+            Close as stopped out
           </button>
           <button type="button" className="tm-btn" disabled={busy}
             onClick={() => close("TARGETED")}>
-            ปิดว่าได้ TP
+            Close as target hit
           </button>
         </div>
       </div>
@@ -1596,13 +1595,13 @@ function Entry({
         // The order exists either way, and saying so matters: a failed costing that
         // looked like a failed create would have someone create a second one.
         setError(
-          `คำสั่งถูกสร้างแล้ว (#${created.id}) แต่ preview ไม่ผ่าน: ` +
+          `The order was created (#${created.id}) but the costing failed: ` +
             (cause instanceof Error ? cause.message : "unknown"),
         );
       }
       setOrder(costed);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "สร้างคำสั่งไม่ได้");
+      setError(cause instanceof Error ? cause.message : "could not create the order");
     } finally {
       setBusy(false);
     }
@@ -1616,12 +1615,12 @@ function Entry({
       await call(`/execution/orders/${order.id}/approve`);
       const sent = (await call(`/execution/orders/${order.id}/submit`)) as ExecutionOrder;
       setOrder(sent);
-      setSaid("ส่งแล้ว");
+      setSaid("sent");
       // Prefill from what actually happened, not from what was asked for.
       if (sent.average_fill_price > 0) setFill(String(sent.average_fill_price));
       if (sent.filled_quantity > 0) setShares(String(sent.filled_quantity));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "ส่งไม่สำเร็จ");
+      setError(cause instanceof Error ? cause.message : "send failed");
     } finally {
       setBusy(false);
     }
@@ -1637,7 +1636,7 @@ function Entry({
       });
       onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "arm ไม่สำเร็จ");
+      setError(cause instanceof Error ? cause.message : "arm failed");
     } finally {
       setBusy(false);
     }
@@ -1649,23 +1648,23 @@ function Entry({
     <>
       <div className="tm-manage-block">
         <p className="tm-hint">
-          ส่งคำสั่งซื้อผ่าน execution path — ผ่าน risk gate และ kill switch
-          {bracket.quantity.toLocaleString()} หุ้น @ ${money(bracket.requested_entry)}
+          Sends the buy through the execution path — past the risk gate and the kill switch.
+          {bracket.quantity.toLocaleString()} sh @ ${money(bracket.requested_entry)}
         </p>
         {!order && (
           <button type="button" className="tm-btn" disabled={busy} onClick={draft}>
-            เตรียมคำสั่ง + คิดค่าใช้จ่าย
+            Draft the order and cost it
           </button>
         )}
         {order && (
           <>
             <div className="tm-numbers">
-              <Figure label="สถานะ" value={order.state} />
-              <Figure label="ต้นทุนประมาณ" value={`$${money(order.estimated_cost)}`} />
-              <Figure label="ค่าธรรมเนียม" value={`$${money(order.estimated_fee)}`} />
+              <Figure label="State" value={order.state} />
+              <Figure label="Estimated cost" value={`$${money(order.estimated_cost)}`} />
+              <Figure label="Fee" value={`$${money(order.estimated_fee)}`} />
               {order.filled_quantity > 0 && (
                 <Figure
-                  label="ได้จริง"
+                  label="Filled"
                   value={`${order.filled_quantity.toLocaleString()} @ $${money(order.average_fill_price)}`}
                   tone="reward"
                 />
@@ -1673,8 +1672,8 @@ function Entry({
             </div>
             {blocked && (
               <div className="tm-flag">
-                <strong>risk gate ไม่ให้ผ่าน</strong>
-                <p>{order.risk?.reasons?.join(" · ") || "ไม่ระบุเหตุผล"}</p>
+                <strong>the risk gate refused this</strong>
+                <p>{order.risk?.reasons?.join(" · ") || "no reason given"}</p>
               </div>
             )}
             {order.filled_quantity <= 0 && (
@@ -1682,7 +1681,7 @@ function Entry({
                 type="button" className="tm-btn danger" disabled={busy || blocked}
                 onClick={send}
               >
-                ยืนยัน — อนุมัติและส่งจริง
+                Confirm — approve and send for real
               </button>
             )}
           </>
@@ -1691,19 +1690,19 @@ function Entry({
 
       <div className="tm-manage-block">
         <p className="tm-hint">
-          <strong>arm</strong> = วาง SL/TP จริงที่โบรก แล้วเปิดให้ engine ตาม ·
-          ใส่ราคาที่<strong>ได้จริง</strong> ไม่ใช่ราคาที่ขอ เพราะทุกเส้นคิดจากราคานี้ ·
-          ซื้อมือที่โบรกเองก็กรอกตรงนี้ได้
+          <strong>Arm</strong> places the real SL and TP at the broker and lets the engine follow them ·
+          enter the price you <strong>actually got</strong>, not the one you asked for, because every level is measured from it ·
+          a fill you made by hand at the broker goes here too
         </p>
         <div className="tm-row">
           <label className="tm-field">
-            <span>ราคาที่ได้จริง</span>
+            <span>Fill price</span>
             <input className="tm-input" value={fill} inputMode="decimal"
               onChange={(event) => setFill(event.target.value)}
               placeholder={String(bracket.requested_entry)} />
           </label>
           <label className="tm-field">
-            <span>จำนวนจริง (ว่าง = ตามแผน)</span>
+            <span>Shares filled (empty = as planned)</span>
             <input className="tm-input" value={shares} inputMode="decimal"
               onChange={(event) => setShares(event.target.value)}
               placeholder={String(bracket.quantity)} />
@@ -1713,10 +1712,10 @@ function Entry({
           type="button" className="tm-btn" disabled={busy || !(Number(fill) > 0)}
           onClick={arm}
         >
-          arm — วาง SL/TP แล้วให้ engine ตาม
+          Arm — place SL/TP and hand it to the engine
         </button>
         {!(Number(fill) > 0) && (
-          <p className="tm-error">ใส่ราคาที่ได้จริงก่อน — ทุกเส้นคิดจากราคานี้</p>
+          <p className="tm-error">Enter the fill price first — every level is measured from it.</p>
         )}
       </div>
 
@@ -1744,7 +1743,7 @@ function History({ id }: { id: number }) {
   }, [id]);
 
   if (error) return <p className="tm-error">{error}</p>;
-  if (rows.length === 0) return <p className="tm-empty">ยังไม่มีการขยับ</p>;
+  if (rows.length === 0) return <p className="tm-empty">Nothing has moved yet.</p>;
   return (
     <div className="tm-history">
       {rows.map((row) => (
@@ -1763,13 +1762,13 @@ function History({ id }: { id: number }) {
               <> · TP ${money(row.previous_target)} → ${money(row.new_target)}</>
             )}
             {!row.previous_stop && row.new_stop && (
-              <>ตั้ง SL ${money(row.new_stop)} · TP ${money(row.new_target ?? 0)}</>
+              <>set SL ${money(row.new_stop)} · TP ${money(row.new_target ?? 0)}</>
             )}
           </span>
           <span className="tm-history-price">@ ${money(row.last_price)}</span>
           {!row.applied && (
             <span className="tm-history-error">
-              ไม่สำเร็จ — {row.broker_error || "โบรกเกอร์ปฏิเสธ"}
+              failed — {row.broker_error || "the broker refused it"}
             </span>
           )}
         </div>
