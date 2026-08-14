@@ -985,13 +985,15 @@ export function TerminalView() {
           <span>Exit ladder</span>
           <b>{armed} of 4 rungs</b>
         </div>
-        <span className="tg-barhint">Enter review · Enter send · Esc cancel</span>
-        <button
-          type="button" className="tg-go" disabled={!canSend || opening}
-          onClick={() => setConfirming(true)}
-        >
-          {plan ? `SAVE ${plan.shares.toLocaleString()} ${plan.ticker}` : "SAVE PLAN"}
-        </button>
+        <div className="tg-barright">
+          <span className="tg-barhint">Enter review · Enter send · Esc cancel</span>
+          <button
+            type="button" className="tg-go" disabled={!canSend || opening}
+            onClick={() => setConfirming(true)}
+          >
+            {plan ? `SAVE ${plan.shares.toLocaleString()} ${plan.ticker}` : "SAVE PLAN"}
+          </button>
+        </div>
       </div>
       {openError && <p className="tg-err">{openError}</p>}
     </div>
@@ -1065,36 +1067,39 @@ function PlansInPlay({ reload }: { reload: number }) {
       </div>
 
       {error && <p className="tg-err">{error}</p>}
-      <div className="tg-plansscroll">
-        <table className="tg-plans">
-          <thead>
-            <tr>
-              <th>Ticker</th><th>Status</th><th className="n">Sh</th>
-              <th className="n">Entry</th><th className="n">SL</th>
-              <th className="n">TP</th><th className="n">High</th><th className="n">Log</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((row) => (
-              <tr key={row.id}>
-                <td className="t">{row.ticker}</td>
-                <td>
-                  <span className={`tg-state s-${row.state}`}>
-                    {row.state === "ACTIVE"
-                      ? (row.high_water ?? 0) > (row.entry_price ?? 0) ? "Trailing" : "Armed"
-                      : row.state.charAt(0) + row.state.slice(1).toLowerCase()}
-                  </span>
-                </td>
-                <td className="n">{row.quantity.toLocaleString()}</td>
-                <td className="n">${money(row.entry_price ?? 0)}</td>
-                <td className="n sl">${money(row.stop_price ?? 0)}</td>
-                <td className="n tp">${money(row.target_price ?? 0)}</td>
-                <td className="n">${money(row.high_water ?? 0)}</td>
-                <td className="n"><a href={`/orders#${row.id}`}>History</a></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="tg-plansgrid">
+        <span>Ticker</span>
+        <span>Status</span>
+        <span className="n">Sh</span>
+        <span className="n">Entry</span>
+        <span className="n">SL</span>
+        <span className="n">TP</span>
+        <span className="n">High</span>
+        <span className="n">Log</span>
+      </div>
+      <div className="tg-plansbody">
+        {shown.map((row) => {
+          const trailing = (row.high_water ?? 0) > (row.entry_price ?? 0);
+          const open = row.state === "PENDING" || row.state === "ACTIVE";
+          return (
+            <a className="tg-plansrow" key={row.id} href={`/orders#${row.id}`}>
+              <span className="t">{row.ticker}</span>
+              <span
+                className={`st ${open ? (trailing ? "trailing" : "armed") : "done"}`}
+              >
+                {open
+                  ? trailing ? "Trailing" : "Armed"
+                  : row.state.charAt(0) + row.state.slice(1).toLowerCase()}
+              </span>
+              <span className="n">{row.quantity.toLocaleString()}</span>
+              <span className="n px">${money(row.entry_price ?? 0)}</span>
+              <span className="n sl">${money(row.stop_price ?? 0)}</span>
+              <span className="n tp">${money(row.target_price ?? 0)}</span>
+              <span className="n">${money(row.high_water ?? 0)}</span>
+              <span className="n log">History</span>
+            </a>
+          );
+        })}
         {shown.length === 0 && !error && (
           <p className="tg-empty">Nothing here yet.</p>
         )}
