@@ -59,7 +59,7 @@ func TestAPlanBecomesAProtectedPositionAndExitsOnItsStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if opened.State != StatePending {
+	if opened.State != StateDraft {
 		t.Fatalf("state = %s, want PENDING", opened.State)
 	}
 	// And the engine ignores it, which is exactly the trap: a ladder configured on a
@@ -74,7 +74,7 @@ func TestAPlanBecomesAProtectedPositionAndExitsOnItsStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("arm: %v", err)
 	}
-	if armed.State != StateActive {
+	if armed.State != StateProtected {
 		t.Fatalf("state = %s, want ACTIVE", armed.State)
 	}
 	initialStop := armed.StopPrice

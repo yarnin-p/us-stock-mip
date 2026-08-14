@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LadderPlane, LadderValues, countRungs, ladderErrorOf, presetLadder,
 } from "./Ladder";
+import { describe as describeState, live as isLive } from "./bracketState";
 import { useCurrency } from "./currency";
 import { sanitizeDecimal, sanitizeInteger, sanitizeTicker } from "./inputs";
 
@@ -918,8 +919,8 @@ function PlansInPlay({ reload }: { reload: number }) {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "load failed"));
   }, [reload]);
 
-  const live = rows.filter((row) => row.state === "PENDING" || row.state === "ACTIVE");
-  const closed = rows.filter((row) => row.state !== "PENDING" && row.state !== "ACTIVE");
+  const live = rows.filter((row: BracketRecord) => isLive(row.state));
+  const closed = rows.filter((row: BracketRecord) => !isLive(row.state));
   const shown = tab === "live" ? live : closed.slice(0, 5);
 
   return (
@@ -952,7 +953,6 @@ function PlansInPlay({ reload }: { reload: number }) {
       <div className="tg-plansbody">
         {shown.map((row) => {
           const trailing = (row.high_water ?? 0) > (row.entry_price ?? 0);
-          const open = row.state === "PENDING" || row.state === "ACTIVE";
           /* A plan that has not filled is not armed, and must not be dressed as one.
            *
            * Both of these read the wrong field. Status called PENDING and ACTIVE the
@@ -960,26 +960,28 @@ function PlansInPlay({ reload }: { reload: number }) {
            * banner saying nothing had reached the broker. Entry showed entry_price,
            * which only exists once a fill has been recorded, so a saved plan showed
            * $0.00 and the price the operator actually typed was nowhere on screen. */
-          const pending = row.state === "PENDING";
-          const entryShown = pending
+          const drafted = row.state === "DRAFT";
+          const status = describeState(row.state);
+          const entryShown = drafted
             ? row.requested_entry ?? 0
             : row.entry_price ?? 0;
           return (
             <a className="tg-plansrow" key={row.id} href={`/bracket/${row.id}`}>
               <span className="t">{row.ticker}</span>
+              {/* One vocabulary, from bracketState. The row used to work the label
+                  out from three booleans and got it wrong twice: PENDING and ACTIVE
+                  both read as "Armed", so a plan with nothing at the broker sat under
+                  the same word as a position with a live stop. */}
               <span
-                className={`st ${
-                  open ? (pending ? "planned" : trailing ? "trailing" : "armed") : "done"
-                }`}
+                className={`st ${status.tone}${trailing ? " trailing" : ""}`}
+                title={status.hint}
               >
-                {open
-                  ? pending ? "Planned" : trailing ? "Trailing" : "Armed"
-                  : row.state.charAt(0) + row.state.slice(1).toLowerCase()}
+                {trailing && status.tone === "good" ? "Trailing" : status.label}
               </span>
               <span className="n">{row.quantity.toLocaleString()}</span>
-              <span className={`n px${pending ? " planned" : ""}`}>
+              <span className={`n px${drafted ? " planned" : ""}`}>
                 ${money(entryShown)}
-                {pending && <i className="tg-plannedmark">planned</i>}
+                {drafted && <i className="tg-plannedmark">planned</i>}
               </span>
               <span className="n sl">${money(row.stop_price ?? 0)}</span>
               <span className="n tp">${money(row.target_price ?? 0)}</span>

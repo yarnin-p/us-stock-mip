@@ -186,7 +186,7 @@ func TestAFilledTargetClosesTheBracket(t *testing.T) {
 	); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	if states := finisher.states(); len(states) != 1 || states[0] != StateTargeted {
+	if states := finisher.states(); len(states) != 1 || states[0] != StateTargetHit {
 		t.Fatalf("closed as %v, want one TARGETED", states)
 	}
 }
@@ -236,7 +236,7 @@ func TestAStopThatHasNotFilledLeavesTheBracketOpen(t *testing.T) {
 	if states := finisher.states(); len(states) != 0 {
 		t.Fatalf("closed %v on a price that only reached the stop", states)
 	}
-	if stored := repository.stored(t, record.ID); stored.State != StateActive {
+	if stored := repository.stored(t, record.ID); stored.State != StateProtected {
 		t.Fatalf("state = %s, want it left ACTIVE", stored.State)
 	}
 }
@@ -258,7 +258,7 @@ func TestAnUnreachableBrokerStillLetsTheTrailRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("the failure to confirm must be reported, not swallowed")
 	}
-	if stored := repository.stored(t, record.ID); stored.State != StateActive {
+	if stored := repository.stored(t, record.ID); stored.State != StateProtected {
 		t.Fatalf("state = %s; an unreachable broker must not close a bracket",
 			stored.State)
 	}
@@ -382,7 +382,7 @@ func TestWithoutAnInspectorNothingIsSettled(t *testing.T) {
 	); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	if stored := repository.stored(t, record.ID); stored.State != StateActive {
+	if stored := repository.stored(t, record.ID); stored.State != StateProtected {
 		t.Fatalf("state = %s, want it untouched", stored.State)
 	}
 }

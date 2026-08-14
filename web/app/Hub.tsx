@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { live as isLive } from "./bracketState";
 import { useCurrency } from "./currency";
 import { sanitizeTicker } from "./inputs";
 
@@ -112,7 +113,7 @@ export function HubView() {
   }, []);
 
   const live = useMemo(
-    () => rows.filter((row) => row.state === "PENDING" || row.state === "ACTIVE"),
+    () => rows.filter((row: BracketRow) => isLive(row.state)),
     [rows],
   );
 

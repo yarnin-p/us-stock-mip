@@ -1350,3 +1350,16 @@
 .tg .tg-plansrow .st.planned {
   color: var(--tg-text);
 }
+
+/* Status tones from bracketState. Alarm is the only one allowed to shout, and it is
+   reserved for the two conditions an operator has to act on now: a refused entry and
+   stock held with nothing behind it. */
+.tg .tg-plansrow .st.quiet   { color: var(--tg-text); }
+.tg .tg-plansrow .st.working { color: var(--tg-amber); }
+.tg .tg-plansrow .st.good    { color: #43c98b; }
+.tg .tg-plansrow .st.done    { color: var(--tg-text); opacity: 0.65; }
+.tg .tg-plansrow .st.alarm {
+  color: #ff5f56;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}

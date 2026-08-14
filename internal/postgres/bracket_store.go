@@ -91,7 +91,7 @@ func (store *Store) OpenBrackets(
 	return store.queryBrackets(
 		ctx,
 		`SELECT `+bracketColumns+` FROM brackets
-		  WHERE mode = $1 AND state IN ('PENDING', 'ACTIVE')
+		  WHERE mode = $1 AND state IN ('DRAFT', 'WORKING', 'PROTECTED', 'UNPROTECTED')
 		  ORDER BY opened_at DESC`,
 		mode,
 	)
@@ -106,7 +106,7 @@ func (store *Store) OpenBracketsForTicker(
 	return store.queryBrackets(
 		ctx,
 		`SELECT `+bracketColumns+` FROM brackets
-		  WHERE mode = $1 AND ticker = $2 AND state IN ('PENDING', 'ACTIVE')
+		  WHERE mode = $1 AND ticker = $2 AND state IN ('DRAFT', 'WORKING', 'PROTECTED', 'UNPROTECTED')
 		  ORDER BY opened_at DESC`,
 		mode, strings.ToUpper(strings.TrimSpace(ticker)),
 	)
@@ -319,7 +319,7 @@ func (store *Store) SaveBracketState(
 	ctx context.Context, id int64, state bracket.State, note string,
 ) (bracket.Record, error) {
 	closing := state == bracket.StateStopped ||
-		state == bracket.StateTargeted ||
+		state == bracket.StateTargetHit ||
 		state == bracket.StateCancelled
 	row := store.pool.QueryRow(
 		ctx,

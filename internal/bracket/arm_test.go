@@ -94,7 +94,7 @@ func armService(
 
 func pendingRecord() Record {
 	record := activeRecord()
-	record.State = StatePending
+	record.State = StateDraft
 	record.EntryPrice = 0
 	record.StopPrice = 0
 	record.TargetPrice = 0
@@ -119,7 +119,7 @@ func TestArmingPlacesBothOrdersAndTurnsTheBracketOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("arm: %v", err)
 	}
-	if armed.State != StateActive {
+	if armed.State != StateProtected {
 		t.Fatalf("state = %s; the engine skips anything that is not ACTIVE", armed.State)
 	}
 	orders := protector.orders()
@@ -178,7 +178,7 @@ func TestAFailedStopLeavesTheBracketPendingRatherThanArmed(t *testing.T) {
 	if !strings.Contains(err.Error(), "unprotected") {
 		t.Errorf("the error should say the position is unprotected: %v", err)
 	}
-	if stored := repository.stored(t, record.ID); stored.State != StatePending {
+	if stored := repository.stored(t, record.ID); stored.State != StateDraft {
 		t.Fatalf("state = %s, want it left PENDING", stored.State)
 	}
 	if orders := protector.orders(); len(orders) != 0 {
@@ -200,7 +200,7 @@ func TestAFailedTargetStillArmsAndSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("arm: %v", err)
 	}
-	if armed.State != StateActive {
+	if armed.State != StateProtected {
 		t.Fatalf("state = %s; the stop is in, so the bracket is live", armed.State)
 	}
 	stored := repository.stored(t, record.ID)
@@ -252,7 +252,7 @@ func TestArmingRefusesWithoutWhatItNeeds(t *testing.T) {
 		if !strings.Contains(err.Error(), testCase.wants) {
 			t.Errorf("%s: error %q does not mention %q", name, err, testCase.wants)
 		}
-		if stored := repository.stored(t, record.ID); stored.State != StatePending {
+		if stored := repository.stored(t, record.ID); stored.State != StateDraft {
 			t.Errorf("%s: state = %s, want PENDING", name, stored.State)
 		}
 	}

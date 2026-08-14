@@ -239,7 +239,7 @@ func (engine *Engine) HandleTick(
 
 	var failures error
 	for _, record := range records {
-		if record.State != StateActive {
+		if record.State != StateProtected {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -536,7 +536,7 @@ func (engine *Engine) settle(
 	if record.TargetOrderID != "" && record.TargetPrice > 0 &&
 		tick.Price >= record.TargetPrice {
 		done, err := engine.settleExit(
-			ctx, record, record.TargetOrderID, StateTargeted, tick,
+			ctx, record, record.TargetOrderID, StateTargetHit, tick,
 		)
 		if err != nil {
 			failures = errors.Join(failures, err)

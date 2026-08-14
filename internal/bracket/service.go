@@ -326,7 +326,7 @@ func (service *Service) Arm(
 	if err != nil {
 		return Record{}, err
 	}
-	if record.State != StatePending {
+	if record.State != StateDraft {
 		return Record{}, fmt.Errorf(
 			"bracket %d is %s; only a pending one can be armed", id, record.State,
 		)
@@ -454,7 +454,7 @@ func (service *Service) Open(
 	}
 	record := Record{
 		Mode: service.mode, AccountID: accountID, Ticker: plan.Ticker,
-		State: StatePending, Quantity: float64(plan.Shares),
+		State: StateDraft, Quantity: float64(plan.Shares),
 		RequestedEntry: plan.EntryPrice,
 		StopPrice:      plan.StopPrice, TargetPrice: plan.TargetPrice,
 		Config: plan.Config, RiskFlags: plan.RiskFlags,
@@ -481,7 +481,7 @@ func (service *Service) Activate(
 	if err != nil {
 		return Record{}, err
 	}
-	if record.State != StatePending {
+	if record.State != StateDraft {
 		return Record{}, fmt.Errorf(
 			"bracket %d is %s and cannot be activated", id, record.State,
 		)
@@ -507,7 +507,7 @@ func (service *Service) Activate(
 	}); err != nil {
 		return Record{}, err
 	}
-	return service.repository.SaveBracketState(ctx, id, StateActive, "")
+	return service.repository.SaveBracketState(ctx, id, StateProtected, "")
 }
 
 // Amend sets the levels by hand. The ratchet does not apply here -- an operator
@@ -546,7 +546,7 @@ func (service *Service) Amend(
 	if err != nil {
 		return Record{}, err
 	}
-	if record.State != StateActive {
+	if record.State != StateProtected {
 		return Record{}, fmt.Errorf(
 			"bracket %d is %s and has no live protective orders", id, record.State,
 		)
@@ -643,7 +643,7 @@ func (service *Service) Close(
 	ctx context.Context, id int64, state State, note string,
 ) (Record, error) {
 	switch state {
-	case StateStopped, StateTargeted, StateCancelled:
+	case StateStopped, StateTargetHit, StateCancelled:
 	default:
 		return Record{}, fmt.Errorf("%s is not a closing state", state)
 	}
@@ -774,7 +774,7 @@ func (service *Service) Exit(
 	if err != nil {
 		return Record{}, err
 	}
-	if record.State != StateActive && record.State != StatePending {
+	if record.State != StateProtected && record.State != StateDraft {
 		return Record{}, fmt.Errorf("%s is already closed", record.State)
 	}
 	quantity := input.Quantity

@@ -20,17 +20,59 @@ import (
 	"strings"
 )
 
-// State is where a bracket sits in its life. The protective orders exist only
-// while it is Active; everything else is either waiting for a fill or finished.
+/* State is where a bracket sits in its life, named for what it means to the person
+ * reading it at the moment they are frightened.
+ *
+ * The question then is always the same: am I holding stock, and is anything behind
+ * it. So the words answer that first and the mechanism second.
+ *
+ *	DRAFT        no          written, nothing sent
+ *	REFUSED      no          sent, and the risk gate said no
+ *	WORKING      not yet     a buy is live at the venue
+ *	PROTECTED    yes         stop and target resting at the venue
+ *	UNPROTECTED  yes         nothing behind it
+ *	STOPPED      no          the stop filled
+ *	TARGET_HIT   no          the target filled
+ *	CANCELLED    no          abandoned
+ *
+ * These replace PENDING, ACTIVE and TARGETED. PENDING covered a plan nobody had sent
+ * and a plan the gate had refused, which call for opposite actions from the same
+ * word. ACTIVE said a bracket was running without saying whether a stop was actually
+ * at the broker. TARGETED read as "has a target" rather than "the target filled".
+ * And there was no word at all for stock held with nothing behind it, so that state
+ * would have had to borrow one of the others and lie about the only fact that
+ * matters.
+ */
 type State string
 
 const (
-	StatePending   State = "PENDING"   // entry order is working
-	StateActive    State = "ACTIVE"    // entry filled, stop and target live
-	StateStopped   State = "STOPPED"   // stop filled
-	StateTargeted  State = "TARGETED"  // target filled
-	StateCancelled State = "CANCELLED" // abandoned before or after entry
+	StateDraft       State = "DRAFT"
+	StateRefused     State = "REFUSED"
+	StateWorking     State = "WORKING"
+	StateProtected   State = "PROTECTED"
+	StateUnprotected State = "UNPROTECTED"
+	StateStopped     State = "STOPPED"
+	StateTargetHit   State = "TARGET_HIT"
+	StateCancelled   State = "CANCELLED"
 )
+
+// Holding reports whether stock is in the account in this state. It is the first
+// question, so it is a method rather than something every caller re-derives from a
+// list it might get wrong.
+func (state State) Holding() bool {
+	return state == StateProtected || state == StateUnprotected
+}
+
+// Live reports whether this bracket still occupies its ticker: a plan that could be
+// sent, a buy at the venue, or stock held. The one-open-per-ticker index is defined
+// on exactly this set, and so is the list of what the operator sees as in play.
+func (state State) Live() bool {
+	switch state {
+	case StateDraft, StateWorking, StateProtected, StateUnprotected:
+		return true
+	}
+	return false
+}
 
 // Trigger names why an adjustment is being proposed, so the audit trail records
 // intent rather than only the numbers.
@@ -493,7 +535,7 @@ func Plan(current Bracket, lastPrice float64) (Adjustment, error) {
 	if !positiveFinite(lastPrice) {
 		return Adjustment{}, errors.New("last price must be positive")
 	}
-	if current.State != StateActive {
+	if current.State != StateProtected {
 		return Adjustment{}, fmt.Errorf(
 			"bracket in state %s has no protective orders to adjust",
 			current.State,

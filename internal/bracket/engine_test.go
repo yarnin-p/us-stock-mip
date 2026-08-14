@@ -79,7 +79,7 @@ func (repository *stubRepository) open(mode, ticker string) []Record {
 		if ticker != "" && record.Ticker != ticker {
 			continue
 		}
-		if record.State == StateActive || record.State == StatePending {
+		if record.State == StateProtected || record.State == StateDraft {
 			result = append(result, record)
 		}
 	}
@@ -236,7 +236,7 @@ func quietLogger() *slog.Logger {
 func activeRecord() Record {
 	return Record{
 		ID: 1, Mode: "paper", AccountID: "acct-1", Ticker: "TEST",
-		State: StateActive, Quantity: 100, RequestedEntry: 10, EntryPrice: 10,
+		State: StateProtected, Quantity: 100, RequestedEntry: 10, EntryPrice: 10,
 		StopPrice: 9, TargetPrice: 12.5, HighWater: 10,
 		Config: DefaultConfig(), StopOrderID: "stop-1", TargetOrderID: "target-1",
 	}
@@ -490,7 +490,7 @@ func TestHandleTickIgnoresOtherSymbols(t *testing.T) {
 
 func TestHandleTickSkipsBracketsThatAreNotActive(t *testing.T) {
 	record := activeRecord()
-	record.State = StatePending
+	record.State = StateDraft
 	repository := newStubRepository(record)
 	modifier := &stubModifier{}
 	engine := newTestEngine(repository, modifier)

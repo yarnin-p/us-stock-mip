@@ -12,7 +12,7 @@ func activeBracket(config Config) Bracket {
 		panic(err)
 	}
 	return Bracket{
-		Ticker: "TEST", State: StateActive, Config: config, Quantity: 100,
+		Ticker: "TEST", State: StateProtected, Config: config, Quantity: 100,
 		EntryPrice: 10, StopPrice: stop, TargetPrice: target, HighWater: 10,
 	}
 }
@@ -201,7 +201,7 @@ func TestPlanKeepsTheStopBelowTheTarget(t *testing.T) {
 
 func TestPlanRequiresAnActiveBracket(t *testing.T) {
 	for _, state := range []State{
-		StatePending, StateStopped, StateTargeted, StateCancelled,
+		StateDraft, StateStopped, StateTargetHit, StateCancelled,
 	} {
 		current := activeBracket(DefaultConfig())
 		current.State = state

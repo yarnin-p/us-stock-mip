@@ -18,6 +18,7 @@ import { sanitizeDecimal, sanitizeInteger } from "./inputs";
 import {
   LadderRungs, LadderValues, configFromLadder, ladderErrorOf, ladderFromConfig,
 } from "./Ladder";
+import { describe as describeState, live as isLive } from "./bracketState";
 import { useCurrency } from "./currency";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
@@ -160,7 +161,7 @@ export function BracketView({ id }: { id: number }) {
     );
   }
 
-  const open = record.state === "ACTIVE" || record.state === "PENDING";
+  const open = isLive(record.state);
   const lifted = numbers.stop > numbers.fill;
 
   return (
@@ -276,7 +277,7 @@ export function BracketView({ id }: { id: number }) {
             </div>
           </section>
 
-          {record.state === "PENDING" && (
+          {record.state === "DRAFT" && (
             <EntryPanel record={record} onChanged={refresh} />
           )}
 

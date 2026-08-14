@@ -135,7 +135,7 @@ func TestOpenRecordsPendingWithoutPlacingAnything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if record.State != StatePending {
+	if record.State != StateDraft {
 		t.Fatalf("state = %s, want PENDING", record.State)
 	}
 	// Nothing may claim to be protecting a position that has not filled.
@@ -160,7 +160,7 @@ func TestActivateRederivesLevelsFromTheActualFill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if activated.State != StateActive {
+	if activated.State != StateProtected {
 		t.Fatalf("state = %s, want ACTIVE", activated.State)
 	}
 	stored, err := service.Get(context.Background(), created.ID)
@@ -264,7 +264,7 @@ func TestCloseRejectsANonClosingState(t *testing.T) {
 	service, _ := newTestService(t)
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Close(
-		context.Background(), created.ID, StateActive, "",
+		context.Background(), created.ID, StateProtected, "",
 	); err == nil {
 		t.Fatal("ACTIVE was accepted as a closing state")
 	}
