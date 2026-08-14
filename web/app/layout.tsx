@@ -6,6 +6,7 @@ import "./tradeedge.css";
 // to .tg: every other screen keeps the warm-white surface.
 import "./theme-graphite.css";
 import "./terminal.css";
+import "./terminal-shape.css";
 
 export const metadata: Metadata = {
   title: "TradeEdge — Momentum Suite",

@@ -239,6 +239,10 @@ export function TerminalView() {
   // field that quietly uses 0.35% at $0.40 is how a break-even rung ends up losing
   // 4.7% of the position.
   const [feeOverride, setFeeOverride] = useState("");
+  /* The rate the baht figure is converted at. Typed rather than fetched: the preview
+   * does not carry one, and a hard-coded 33.6 dressed up as live data would be a lie
+   * told in the largest type on the screen. */
+  const [usdThb, setUsdThb] = useState("33.60");
   const [partialOn, setPartialOn] = useState(false);
   const [partialAfter, setPartialAfter] = useState("30");
   const [partialFraction, setPartialFraction] = useState("25");
@@ -249,6 +253,41 @@ export function TerminalView() {
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState("");
   const [reload, setReload] = useState(0);
+  /* The review step. Nothing is written until it has been seen once -- the design's
+   * two-step, and the reason the primary button opens a sheet instead of acting. */
+  const [confirming, setConfirming] = useState(false);
+  const [saved, setSaved] = useState<{ id: number; ticker: string } | null>(null);
+
+  // ±0.5 in percent, ±0.01 in price. Clamped at zero: a negative stop is not a stop.
+  const nudge = useCallback(
+    (set: (value: string) => void, current: string, direction: 1 | -1) => {
+      const step = exitUnit === "pct" ? 0.5 : 0.01;
+      const next = Math.max(0, (Number(current) || 0) + direction * step);
+      set(exitUnit === "pct" ? String(Number(next.toFixed(2))) : next.toFixed(2));
+    },
+    [exitUnit],
+  );
+
+  /* The ratio pills set the target from the stop and force percent, because a ratio
+   * is a statement about distances and only percent expresses that without knowing
+   * the price. */
+  const setRatio = useCallback(
+    (ratio: number) => {
+      const stop = Number(exitUnit === "pct" ? stopPct : stopPct);
+      if (exitUnit === "price") {
+        const entryPrice = Number(entry);
+        if (!(entryPrice > 0) || !(stop > 0)) return;
+        const stopFraction = 1 - stop / entryPrice;
+        setStopPct(String(Number((stopFraction * 100).toFixed(2))));
+        setTargetPct(String(Number((stopFraction * 100 * ratio).toFixed(2))));
+        setExitUnit("pct");
+        return;
+      }
+      if (!(stop > 0)) return;
+      setTargetPct(String(Number((stop * ratio).toFixed(2))));
+    },
+    [entry, exitUnit, stopPct],
+  );
 
   const applyPreset = useCallback((name: PresetName) => {
     const shape = LADDER_PRESETS[name];
@@ -494,6 +533,8 @@ export function TerminalView() {
       const answer = await response.json();
       if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`);
       setReload((value) => value + 1);
+      setConfirming(false);
+      setSaved({ id: answer?.id ?? 0, ticker: request.ticker });
       setTicker("");
       setEntry("");
       setAmount("");
@@ -504,352 +545,260 @@ export function TerminalView() {
     }
   }, [request]);
 
+  const riskUsd = plan?.risk ?? 0;
+  const riskThb = riskUsd * (Number(usdThb) || 0);
+  const budgetUse = plan?.risk_percent_of_account
+    ? Math.min(1, plan.risk_percent_of_account / 0.01)
+    : 0;
+  const canSend = Boolean(request) && ladderError === "" && Boolean(plan);
+
+  const rung = (
+    label: string,
+    value: string,
+    set: (next: string) => void,
+  ) => (
+    <label className="tg-rungfield">
+      <span>{label}</span>
+      <input value={value} inputMode="decimal"
+        onChange={(event) => set(event.target.value)} />
+    </label>
+  );
+
   return (
-    // .tg carries the graphite token layer. It is a second class rather than a
-    // replacement so the re-skin can move one block at a time: anything still
-    // written in tm-* keeps working while the blocks that have been converted read
-    // their colours from the tokens.
     <div className="tm tg">
-      <header className="tm-head">
+      <div className="tg-titlerow">
         <div>
-          <h1 className="tm-title">Order Terminal</h1>
-          <p className="tm-sub">
-            ตั้ง entry · SL · TP ในทีเดียว — trailing ทั้งกรอบบนและกรอบล่าง
-          </p>
+          <div className="tg-status">
+            <i className="tg-dot-live" />
+            ตั้ง entry · SL · TP ในทีเดียว — engine ตามให้ทั้งกรอบบนและกรอบล่าง
+            <ModeBadge />
+          </div>
+          <h1 className="tg-h1">Order Terminal</h1>
         </div>
-        <ModeBadge />
-      </header>
+        {/* A ratio is a statement about distances, so these set the target from the
+            stop rather than from the price. */}
+        <div className="tg-rr">
+          {([1.5, 2, 3] as const).map((ratio) => (
+            <button key={ratio} type="button" onClick={() => setRatio(ratio)}>
+              {ratio} : 1
+            </button>
+          ))}
+        </div>
+      </div>
 
-      <div className="tm-grid">
-        <section className="tm-card tm-ticket">
-          <h2 className="tm-card-title">ตั้งคำสั่ง</h2>
-
-          <label className="tm-field">
-            <span>Ticker</span>
-            <input
-              className="tm-input tm-input-ticker" value={ticker}
-              onChange={(event) => setTicker(event.target.value.toUpperCase())}
-              placeholder="RCEL" spellCheck={false} autoComplete="off"
-            />
-          </label>
-
-          <label className="tm-field">
-            <span>Entry price</span>
-            <input
-              className="tm-input" value={entry} inputMode="decimal"
-              onChange={(event) => setEntry(event.target.value)} placeholder="7.77"
-            />
-          </label>
-
-          <div className="tm-field">
-            <span>ขนาดไม้</span>
-            <div className="tm-toggle">
-              <button
-                type="button" className={basis === "budget" ? "on" : ""}
-                onClick={() => setBasis("budget")}
-              >
-                ใส่เงิน
-              </button>
-              <button
-                type="button" className={basis === "risk" ? "on" : ""}
-                onClick={() => setBasis("risk")}
-              >
-                ใส่ความเสี่ยง
-              </button>
-            </div>
-            <input
-              className="tm-input" value={amount} inputMode="decimal"
-              onChange={(event) => setAmount(event.target.value)}
-              placeholder={basis === "budget" ? "2000" : "400"}
-            />
-            <small className="tm-hint">
-              {basis === "budget"
-                ? "จำนวนเงินที่จะลง — ระบบจะบอกว่าถ้า SL ทำงานจะเสียเท่าไหร่"
-                : "จำนวนเงินที่ยอมเสียถ้า SL ทำงาน — ขนาดไม้จะคำนวณย้อนกลับให้"}
-            </small>
+      <div className="tg-main">
+        <section className="tg-plane tg-enter">
+          <div className="tg-planehead">
+            <h2>ตั๋วคำสั่ง</h2>
+            <span className="tg-step">ขั้น 1 จาก 2</span>
           </div>
 
-          <div className="tm-field">
-            <span>SL / TP</span>
-            <div className="tm-toggle">
-              <button
-                type="button" className={exitUnit === "pct" ? "on" : ""}
-                onClick={() => switchUnit("pct")}
-              >
-                %
-              </button>
-              <button
-                type="button" className={exitUnit === "price" ? "on" : ""}
-                onClick={() => switchUnit("price")}
-              >
-                ราคา $
-              </button>
-            </div>
-            <div className="tm-row">
-              <label className="tm-subfield">
-                <span>SL {exitUnit === "pct" ? "%" : "$"}</span>
-                <input
-                  className="tm-input" value={stopPct} inputMode="decimal"
-                  onChange={(event) => setStopPct(event.target.value)}
-                  placeholder={exitUnit === "pct" ? "3" : "7.76"}
-                />
-              </label>
-              <label className="tm-subfield">
-                <span>TP {exitUnit === "pct" ? "%" : "$"}</span>
-                <input
-                  className="tm-input" value={targetPct} inputMode="decimal"
-                  onChange={(event) => setTargetPct(event.target.value)}
-                  placeholder={exitUnit === "pct" ? "10" : "8.80"}
-                />
-              </label>
-            </div>
-            {/* The unit not being typed is echoed back, so the level and the rule
-                are both visible without switching back and forth. */}
-            {exits && (
-              <small className="tm-hint tm-mirror">
-                {exitUnit === "pct" ? (
-                  <>
-                    SL <strong>${exits.stopPrice.toFixed(2)}</strong>
-                    {" · "}TP <strong>${exits.targetPrice.toFixed(2)}</strong>
-                  </>
-                ) : (
-                  <>
-                    SL <strong>−{(exits.stop * 100).toFixed(2)}%</strong>
-                    {" · "}TP <strong>+{(exits.target * 100).toFixed(2)}%</strong>
-                  </>
-                )}
-              </small>
-            )}
-            {!exits && Number(entry) > 0 && (
-              <small className="tm-hint tm-error">
-                {exitUnit === "price"
-                  ? "SL ต้องต่ำกว่าราคาเข้า และ TP ต้องสูงกว่า"
-                  : "SL และ TP ต้องมากกว่า 0"}
-              </small>
-            )}
+          <div className="tg-fields">
+            <label className="tg-card">
+              <span>Ticker</span>
+              <input
+                className="tg-in tg-in-ticker" value={ticker} placeholder="RCEL"
+                spellCheck={false} autoComplete="off"
+                onChange={(event) => setTicker(event.target.value.toUpperCase())}
+              />
+            </label>
+            <label className="tg-card">
+              <span>Entry price</span>
+              <input
+                className="tg-in" value={entry} inputMode="decimal" placeholder="7.77"
+                onChange={(event) => setEntry(event.target.value)}
+              />
+            </label>
           </div>
 
-          <label className="tm-field">
-            <span>เงินในพอร์ตทั้งหมด</span>
-            <input
-              className="tm-input" value={equity} inputMode="decimal"
-              onChange={(event) => setEquity(event.target.value)}
-            />
-            <small className="tm-hint">
-              ใช้คำนวณว่าไม้นี้เสี่ยงกี่ % ของพอร์ต — ตัวเลขที่ตัดสินว่าไม้เดียวจะทำพอร์ตพังไหม
-            </small>
-          </label>
-
-          <button
-            type="button" className="tm-disclose"
-            onClick={() => setAdvanced((value) => !value)}
-            aria-expanded={advanced}
-          >
-            {advanced ? "▾" : "▸"} แผนขาออก — บันไดทั้งชุด
-          </button>
-
-          {advanced && (
-            <div className="tm-advanced">
-              {/* The rungs are listed in the order the price meets them, because that
-                * is the only order in which the rules make sense to read. */}
-              <p className="tm-hint">
-                ราคาไต่ขึ้นไปเจอทีละขั้น · แต่ละขั้น<strong>ยกพื้น</strong>ขึ้นเท่านั้น
-                ไม่มีขั้นไหนถอยลง — ขั้นที่ยกสูงสุดคือขั้นที่ใช้จริง
-              </p>
-
-              {/* Presets write all eleven numbers at once. They open every rung too,
-                * because a preset that left one off would be a different ladder from
-                * the one its name describes. */}
-              <div className="tm-presets">
-                <span className="tm-presets-label">เริ่มจากแบบสำเร็จรูป</span>
-                {(Object.keys(LADDER_PRESETS) as PresetName[]).map((name) => (
-                  <button
-                    key={name} type="button"
-                    className={`tm-preset${activePreset === name ? " on" : ""}`}
-                    aria-pressed={activePreset === name}
-                    onClick={() => applyPreset(name)}
-                  >
-                    {LADDER_PRESETS[name].label}
-                    <small>{LADDER_PRESETS[name].note}</small>
-                  </button>
-                ))}
+          <div className="tg-card">
+            <div className="tg-sizehead">
+              <span className="tg-cardlabel" style={{ margin: 0 }}>ขนาดไม้</span>
+              <div className="tg-seg">
+                <button
+                  type="button" className={basis === "budget" ? "on" : ""}
+                  onClick={() => setBasis("budget")}
+                >
+                  ใส่เงิน
+                </button>
+                <button
+                  type="button" className={basis === "risk" ? "on" : ""}
+                  onClick={() => setBasis("risk")}
+                >
+                  ใส่ความเสี่ยง
+                </button>
               </div>
-
-              <LadderRung
-                on={breakEvenOn} onToggle={setBreakEvenOn}
-                name="1 · break-even" tone="flat"
-                what="ไม่ให้ไม้ที่กำไรแล้วกลับมาขาดทุน"
-              >
-                <div className="tm-row">
-                  <label className="tm-field">
-                    <span>arm เมื่อกำไร %</span>
-                    <input className="tm-input" value={breakEvenAfter} inputMode="decimal"
-                      onChange={(event) => setBreakEvenAfter(event.target.value)} />
-                  </label>
-                  <label className="tm-field">
-                    <span>ยก SL ไปที่กำไร %</span>
-                    <input className="tm-input" value={breakEvenFloor} inputMode="decimal"
-                      onChange={(event) => setBreakEvenFloor(event.target.value)} />
-                  </label>
-                </div>
-                <small className="tm-hint">
-                  ถ้าแตะแล้วไม่ไปต่อ มันจะออกที่พื้นนี้ — กำไรน้อยแต่ไม่ติดลบ
-                  นี่คือสิ่งที่ควรจะเกิดขึ้น ไม่ใช่ความผิดพลาด
-                </small>
-              </LadderRung>
-
-              <LadderRung
-                on={profitLockOn} onToggle={setProfitLockOn}
-                name="2 · profit lock" tone="reward"
-                what="เก็บกำไรก้อนจริงไว้ ไม่คืนหมด"
-              >
-                <div className="tm-row">
-                  <label className="tm-field">
-                    <span>arm เมื่อกำไร %</span>
-                    <input className="tm-input" value={profitLockAfter} inputMode="decimal"
-                      onChange={(event) => setProfitLockAfter(event.target.value)} />
-                  </label>
-                  <label className="tm-field">
-                    <span>ยก SL ไปที่กำไร %</span>
-                    <input className="tm-input" value={profitLockFloor} inputMode="decimal"
-                      onChange={(event) => setProfitLockFloor(event.target.value)} />
-                  </label>
-                </div>
-              </LadderRung>
-
-              <div className="tm-rung on">
-                <div className="tm-rung-head">
-                  <strong>3 · trail</strong>
-                  <span className="tm-rung-what">ปล่อยให้ตัววิ่งวิ่ง แล้วตามด้วยระยะห่างคงที่</span>
-                </div>
-                <div className="tm-row">
-                  <label className="tm-field">
-                    <span>SL เริ่ม trail เมื่อกำไร %</span>
-                    <input className="tm-input" value={trailStopAfter} inputMode="decimal"
-                      onChange={(event) => setTrailStopAfter(event.target.value)} />
-                  </label>
-                  <label className="tm-field">
-                    <span>SL ห่างจาก high %</span>
-                    <input className="tm-input" value={trailStopDistance} inputMode="decimal"
-                      onChange={(event) => setTrailStopDistance(event.target.value)} />
-                  </label>
-                </div>
-                <div className="tm-row">
-                  <label className="tm-field">
-                    <span>TP เริ่มขยายเมื่อกำไร %</span>
-                    <input className="tm-input" value={trailTargetAfter} inputMode="decimal"
-                      onChange={(event) => setTrailTargetAfter(event.target.value)} />
-                  </label>
-                  <label className="tm-field">
-                    <span>TP ห่างจาก high %</span>
-                    <input className="tm-input" value={trailTargetDistance} inputMode="decimal"
-                      onChange={(event) => setTrailTargetDistance(event.target.value)} />
-                  </label>
-                </div>
-                <small className="tm-hint">
-                  สองอันบนวัดจาก <strong>entry</strong> (สัญญาว่าผลลัพธ์สุทธิจะไม่แย่กว่านี้) ·
-                  trail วัดจาก <strong>high</strong> (สัญญาว่าจะคืนกำไรไม่เกินนี้)
-                </small>
-              </div>
-
-              <LadderRung
-                on={partialOn} onToggle={setPartialOn}
-                name="4 · partial TP" tone="reward"
-                what="ขายบางส่วนตอนวิ่ง เก็บเงินสดโดยไม่ปิดตัววิ่ง"
-              >
-                <div className="tm-row">
-                  <label className="tm-field">
-                    <span>arm เมื่อกำไร %</span>
-                    <input className="tm-input" value={partialAfter} inputMode="decimal"
-                      onChange={(event) => setPartialAfter(event.target.value)} />
-                  </label>
-                  <label className="tm-field">
-                    <span>ขายกี่ % ของไม้</span>
-                    <input className="tm-input" value={partialFraction} inputMode="decimal"
-                      onChange={(event) => setPartialFraction(event.target.value)} />
-                  </label>
-                  <label className="tm-field">
-                    <span>ขายน้อยกว่ากี่หุ้นให้ข้าม</span>
-                    <input className="tm-input" value={partialMinShares} inputMode="decimal"
-                      onChange={(event) => setPartialMinShares(event.target.value)} />
-                  </label>
-                </div>
-                <small className="tm-hint">
-                  ส่งเป็น <strong>limit</strong> ที่ราคาที่ arm ไม่ใช่ market —
-                  market order ขายหุ้นบางบางไปหนึ่งในสี่คือการเดินลง book ตัวเอง ·
-                  ไม้จะยังนับเต็มจนกว่าโบรกจะยืนยันว่าขายได้จริง
-                </small>
-              </LadderRung>
-
-              <label className="tm-field">
-                <span>
-                  ค่าธรรมเนียมไป-กลับ{" "}
-                  <strong className={fee.auto ? "tm-fee-auto" : "tm-fee-set"}>
-                    {pct(fee.fraction, 2)}
-                  </strong>{" "}
-                  {fee.auto ? "· คิดจากราคาให้อัตโนมัติ" : "· ใช้ค่าที่กรอกเอง"}
-                </span>
-                <input className="tm-input" value={feeOverride} inputMode="decimal"
-                  placeholder={`ว่าง = ${pct(dimeRoundTrip(Number(entry)), 2)} ตามราคา`}
-                  onChange={(event) => setFeeOverride(event.target.value)} />
-                <small className="tm-hint">
-                  Dime คิด <strong>max($0.01/หุ้น, 0.15% ของมูลค่า)</strong> ต่อขา + VAT 7% ·
-                  จุดตัดที่ <strong>$6.67/หุ้น</strong> — ต่ำกว่านั้นพื้น $0.01 จะ bind
-                  แล้ว % จริงพุ่งขึ้นเมื่อราคายิ่งต่ำ
-                  {" "}(${"19.93"} → 0.32% · ${"1.62"} → 1.32% · ${"0.42"} → 5.09%)
-                  {" "}พื้นทั้งสองขั้นบวกตัวนี้เข้าไป ไม่งั้น &quot;break-even&quot;
-                  จะออกมาขาดทุนเท่าค่าคอม · กรอกเองได้ถ้าใช้โบรกอื่น
-                </small>
-              </label>
-
-              {ladderError && <p className="tm-error">{ladderError}</p>}
             </div>
+            <div className="tg-amountrow">
+              <span className="tg-prefix">$</span>
+              <input
+                className="tg-in tg-in-amount" value={amount} inputMode="decimal"
+                placeholder={basis === "budget" ? "2000" : "400"}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+              {plan && <span className="tg-shares">= {plan.shares.toLocaleString()} หุ้น</span>}
+            </div>
+            <div className="tg-quick">
+              {[100, 200, 500, 1000].map((value) => (
+                <button key={value} type="button" onClick={() => setAmount(String(value))}>
+                  ${value.toLocaleString()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* The two levels, as solid blocks. Colour carries which is which before any
+              number is read, and the steppers exist because nudging a level is the
+              commonest edit on this screen. */}
+          <div className="tg-exits">
+            <div className="tg-exit sl">
+              <div className="tg-exithead">
+                <span>STOP LOSS</span>
+                <div className="tg-steppers">
+                  <button type="button" className="tg-stepper" aria-label="ลด SL"
+                    onClick={() => nudge(setStopPct, stopPct, -1)}>−</button>
+                  <button type="button" className="tg-stepper" aria-label="เพิ่ม SL"
+                    onClick={() => nudge(setStopPct, stopPct, 1)}>+</button>
+                </div>
+              </div>
+              <input
+                className="tg-in tg-in-exit" value={stopPct} inputMode="decimal"
+                placeholder={exitUnit === "pct" ? "3" : "7.76"}
+                onChange={(event) => setStopPct(event.target.value)}
+              />
+              <div className="tg-exitfoot">
+                {exits
+                  ? exitUnit === "pct"
+                    ? `$${exits.stopPrice.toFixed(2)}${plan ? ` · −$${money(plan.risk)}` : ""}`
+                    : `−${(exits.stop * 100).toFixed(2)}%`
+                  : exitUnit === "pct" ? "% ใต้ราคาเข้า" : "ราคา $"}
+              </div>
+            </div>
+            <div className="tg-exit tp">
+              <div className="tg-exithead">
+                <span>TAKE PROFIT</span>
+                <div className="tg-steppers">
+                  <button type="button" className="tg-stepper" aria-label="ลด TP"
+                    onClick={() => nudge(setTargetPct, targetPct, -1)}>−</button>
+                  <button type="button" className="tg-stepper" aria-label="เพิ่ม TP"
+                    onClick={() => nudge(setTargetPct, targetPct, 1)}>+</button>
+                </div>
+              </div>
+              <input
+                className="tg-in tg-in-exit" value={targetPct} inputMode="decimal"
+                placeholder={exitUnit === "pct" ? "10" : "8.80"}
+                onChange={(event) => setTargetPct(event.target.value)}
+              />
+              <div className="tg-exitfoot">
+                {exits
+                  ? exitUnit === "pct"
+                    ? `$${exits.targetPrice.toFixed(2)}${plan ? ` · +$${money(plan.reward)}` : ""}`
+                    : `+${(exits.target * 100).toFixed(2)}%`
+                  : exitUnit === "pct" ? "% เหนือราคาเข้า" : "ราคา $"}
+              </div>
+            </div>
+          </div>
+
+          <div className="tg-measure">
+            <div className="tg-seg">
+              <button type="button" className={exitUnit === "pct" ? "on" : ""}
+                onClick={() => switchUnit("pct")}>percent</button>
+              <button type="button" className={exitUnit === "price" ? "on" : ""}
+                onClick={() => switchUnit("price")}>price</button>
+            </div>
+            <label className="tg-pillfield">
+              <span>พอร์ต $</span>
+              <input value={equity} inputMode="decimal"
+                onChange={(event) => setEquity(event.target.value)} />
+            </label>
+            <label className="tg-pillfield">
+              <span>USD/THB</span>
+              <input value={usdThb} inputMode="decimal"
+                onChange={(event) => setUsdThb(event.target.value)} />
+            </label>
+            <label className="tg-pillfield">
+              <span>fee % {fee.auto ? "(auto)" : ""}</span>
+              <input value={feeOverride} inputMode="decimal"
+                placeholder={pct(fee.fraction, 2)}
+                onChange={(event) => setFeeOverride(event.target.value)} />
+            </label>
+          </div>
+          {!exits && Number(entry) > 0 && (
+            <p className="tg-err">
+              {exitUnit === "price"
+                ? "SL ต้องต่ำกว่าราคาเข้า และ TP ต้องสูงกว่า"
+                : "SL และ TP ต้องมากกว่า 0"}
+            </p>
           )}
+          {planError && <p className="tg-err">{planError}</p>}
         </section>
 
-        <section className="tm-card tm-preview">
-          <h2 className="tm-card-title">ก่อนกด — นี่คือสิ่งที่คุณกำลังเสี่ยง</h2>
-          {!plan && !planError && (
-            <p className="tm-empty">ใส่ ticker · ราคา · จำนวนเงิน แล้วตัวเลขจะขึ้นที่นี่</p>
-          )}
-          {planError && <p className="tm-error">{planError}</p>}
-          {plan && (
-            <>
-              <div className="tm-numbers">
-                <Figure label="จำนวนหุ้น" value={plan.shares.toLocaleString()} />
-                <Figure label="ใช้เงิน" value={`$${money(plan.cost)}`} />
-                <Figure
-                  label="เสี่ยงจริง" value={`$${money(plan.risk)}`} tone="risk"
-                  note={
-                    plan.risk_percent_of_account
-                      ? `${pct(plan.risk_percent_of_account)} ของพอร์ต`
-                      : undefined
-                  }
-                />
-                <Figure label="ได้ถ้าถึง TP" value={`$${money(plan.reward)}`} tone="reward" />
-              </div>
-
-              <div className="tm-ladder">
-                <Rung label="TP" price={plan.target_price} tone="reward" />
-                <Rung label="Entry" price={plan.entry_price} tone="flat" />
-                <Rung label="SL" price={plan.stop_price} tone="risk" />
-              </div>
-
-              <div className="tm-ratio">
-                <div>
-                  <span className="tm-ratio-value">{plan.reward_risk.toFixed(2)}:1</span>
-                  <span className="tm-ratio-label">reward : risk</span>
+        <div className="tg-col">
+          {/* The one number the whole screen exists to show, in the currency it is
+              actually felt in. The rate is typed rather than fetched -- inventing an
+              FX feed would be worse than admitting there is not one yet. */}
+          <section className={`tg-risk tg-enter tg-enter-1${plan ? " flash" : ""}`}
+            key={`${riskUsd.toFixed(2)}`}>
+            <h2>สิ่งที่คุณกำลังเสี่ยง</h2>
+            <div className="tg-risktop">
+              <div>
+                <div className="tg-riskbaht">
+                  ฿{riskThb ? Math.round(riskThb).toLocaleString() : "—"}
                 </div>
-                <div>
-                  <span className="tm-ratio-value">{pct(plan.breakeven_win_rate)}</span>
-                  <span className="tm-ratio-label">
-                    win rate ที่ต้องได้เพื่อ<strong>เสมอทุน</strong>
-                  </span>
+                <div className="tg-risksub">
+                  ${money(riskUsd)} · USD/THB {Number(usdThb) || 0}
+                </div>
+              </div>
+              <div className="tg-riskpct">
+                <b>{plan?.risk_percent_of_account ? pct(plan.risk_percent_of_account, 2) : "—"}</b>
+                <span>ของพอร์ต</span>
+              </div>
+            </div>
+            <div className="tg-meter">
+              <i style={{ width: `${budgetUse * 100}%` }} />
+            </div>
+            <div className="tg-metercap">
+              <span>งบความเสี่ยงที่ใช้ · 1% ของพอร์ต</span>
+              <b>{Math.round(budgetUse * 100)}%</b>
+            </div>
+          </section>
+
+          {plan ? (
+            <>
+              <div className="tg-stack tg-enter tg-enter-2">
+                <div className="tg-stackrow tp">
+                  <b>TAKE PROFIT</b>
+                  <span>+{((plan.target_price / plan.entry_price - 1) * 100).toFixed(1)}%</span>
+                  <i>${money(plan.target_price)}</i>
+                </div>
+                <div className="tg-stackrow entry">
+                  <b>ENTRY</b>
+                  <span>{plan.shares.toLocaleString()} หุ้น · ${money(plan.cost)}</span>
+                  <i>${money(plan.entry_price)}</i>
+                </div>
+                <div className="tg-stackrow sl">
+                  <b>STOP LOSS</b>
+                  <span>−{((1 - plan.stop_price / plan.entry_price) * 100).toFixed(1)}%</span>
+                  <i>${money(plan.stop_price)}</i>
+                </div>
+              </div>
+
+              <div className="tg-stats tg-enter tg-enter-3">
+                <div className="tg-stat">
+                  <b>{plan.reward_risk.toFixed(2)}:1</b>
+                  <span>reward : risk</span>
+                </div>
+                <div className="tg-stat">
+                  <b>{pct(plan.breakeven_win_rate)}</b>
+                  <span>win rate ที่ต้องได้เพื่อเสมอทุน</span>
+                </div>
+                <div className="tg-stat">
+                  <b className="good">${money(plan.reward)}</b>
+                  <span>ได้ถ้าถึง TP</span>
                 </div>
               </div>
 
               <ExitLiquidity plan={plan} feeFraction={fee.fraction} />
-
               <AccountRiskWarning share={plan.risk_percent_of_account} />
 
               {plan.risk_flags.map((flag) => {
@@ -862,22 +811,177 @@ export function TerminalView() {
                   </div>
                 );
               })}
-
-              <button
-                type="button" className="tm-submit" onClick={open}
-                disabled={opening || !request || ladderError !== ""}
-              >
-                {opening ? "กำลังบันทึก…" : "บันทึกแผนไม้นี้"}
-              </button>
-              {openError && <p className="tm-error">{openError}</p>}
-              <p className="tm-hint tm-hint-strong">
-                ปุ่มนี้บันทึกแผนเท่านั้น — ไม่ส่งคำสั่งซื้อไปที่โบรกเกอร์
-                การส่งคำสั่งจริงยังต้องผ่าน execution path ที่มี risk gate และ kill switch
-              </p>
             </>
+          ) : (
+            <p className="tg-empty">
+              ใส่ ticker · ราคา · จำนวนเงิน แล้วตัวเลขทั้งหมดจะขึ้นที่นี่
+            </p>
           )}
-        </section>
+        </div>
       </div>
+
+      {/* ---- exit ladder ---- */}
+      <section className="tg-plane" style={{ marginTop: 14 }}>
+        <div className="tg-planehead">
+          <h2>บันไดขาออก</h2>
+          <span className="tg-step">ขั้น 2 จาก 2 · engine เดินตามให้</span>
+        </div>
+        <p className="tg-empty" style={{ marginBottom: 12 }}>
+          ราคาไต่ขึ้นไปเจอทีละขั้น · แต่ละขั้น<strong> ยกพื้น </strong>ขึ้นเท่านั้น
+          ไม่มีขั้นไหนถอยลง — ขั้นที่ยกสูงสุดคือขั้นที่ใช้จริง
+        </p>
+
+        <div className="tm-presets">
+          <span className="tm-presets-label">เริ่มจากแบบสำเร็จรูป</span>
+          {(Object.keys(LADDER_PRESETS) as PresetName[]).map((name) => (
+            <button
+              key={name} type="button"
+              className={`tm-preset${activePreset === name ? " on" : ""}`}
+              aria-pressed={activePreset === name}
+              onClick={() => applyPreset(name)}
+            >
+              {LADDER_PRESETS[name].label}
+              <small>{LADDER_PRESETS[name].note}</small>
+            </button>
+          ))}
+        </div>
+
+        <div className="tg-rungs">
+          <div className={`tg-rung${breakEvenOn ? "" : " off"}`}>
+            <div className="tg-runghead">
+              <button type="button" className="tg-rungno"
+                aria-pressed={breakEvenOn} aria-label="เปิด/ปิดขั้น 1"
+                onClick={() => setBreakEvenOn((value) => !value)}>1</button>
+              <span className="tg-rungname">break-even</span>
+            </div>
+            <p className="tg-rungwhat">ไม่ให้ไม้ที่กำไรแล้วกลับมาขาดทุน</p>
+            {rung("arm เมื่อกำไร %", breakEvenAfter, setBreakEvenAfter)}
+            {rung("ยก SL ไปที่กำไร %", breakEvenFloor, setBreakEvenFloor)}
+            <p className="tg-rungnote">
+              ถ้าแตะแล้วไม่ไปต่อ มันจะออกที่พื้นนี้ — กำไรน้อยแต่ไม่ติดลบ
+            </p>
+          </div>
+
+          <div className={`tg-rung${profitLockOn ? "" : " off"}`}>
+            <div className="tg-runghead">
+              <button type="button" className="tg-rungno"
+                aria-pressed={profitLockOn} aria-label="เปิด/ปิดขั้น 2"
+                onClick={() => setProfitLockOn((value) => !value)}>2</button>
+              <span className="tg-rungname">profit lock</span>
+            </div>
+            <p className="tg-rungwhat">เก็บกำไรก้อนจริงไว้ ไม่คืนหมด</p>
+            {rung("arm เมื่อกำไร %", profitLockAfter, setProfitLockAfter)}
+            {rung("ยก SL ไปที่กำไร %", profitLockFloor, setProfitLockFloor)}
+            <p className="tg-rungnote">
+              ต้อง arm สูงกว่า break-even — บันไดขึ้นทางเดียว
+            </p>
+          </div>
+
+          <div className="tg-rung">
+            <div className="tg-runghead">
+              <button type="button" className="tg-rungno" aria-label="ขั้น 3" disabled>3</button>
+              <span className="tg-rungname">trail</span>
+            </div>
+            <p className="tg-rungwhat">ตามราคาขึ้นไป ทั้งกรอบบนและกรอบล่าง</p>
+            {rung("SL ตามจากกำไร %", trailStopAfter, setTrailStopAfter)}
+            {rung("SL ห่างจาก high %", trailStopDistance, setTrailStopDistance)}
+            {rung("TP ขยายจากกำไร %", trailTargetAfter, setTrailTargetAfter)}
+            {rung("TP เหนือ high %", trailTargetDistance, setTrailTargetDistance)}
+            <p className="tg-rungnote">
+              ขั้นนี้ปิดไม่ได้ — มันคือกลไกหลักที่ทำให้ไม่ต้องเดาว่าจะจบที่เท่าไหร่
+            </p>
+          </div>
+
+          <div className={`tg-rung${partialOn ? "" : " off"}`}>
+            <div className="tg-runghead">
+              <button type="button" className="tg-rungno"
+                aria-pressed={partialOn} aria-label="เปิด/ปิดขั้น 4"
+                onClick={() => setPartialOn((value) => !value)}>4</button>
+              <span className="tg-rungname">partial take-profit</span>
+            </div>
+            <p className="tg-rungwhat">ขายบางส่วน เหลือไว้ให้วิ่งต่อ</p>
+            {rung("arm เมื่อกำไร %", partialAfter, setPartialAfter)}
+            {rung("ขายกี่ % ของไม้", partialFraction, setPartialFraction)}
+            {rung("ต่ำกว่ากี่หุ้นให้ข้าม", partialMinShares, setPartialMinShares)}
+            <p className="tg-rungnote">
+              ส่งเป็น limit ที่ราคาที่ arm ไม่ใช่ market — market order ขายหุ้นบางบาง
+              ไปหนึ่งในสี่คือการเดินลง book ตัวเอง
+            </p>
+          </div>
+        </div>
+        {ladderError && <p className="tg-err">{ladderError}</p>}
+      </section>
+
+      {/* ---- review, then send. Nothing is written until the sheet has been seen. ---- */}
+      {saved && (
+        <div className="tg-sheet done">
+          <div>
+            <h3>บันทึกแผนแล้ว</h3>
+            <div className="headline">
+              {saved.ticker} · แผน #{saved.id || "—"}
+            </div>
+            <div className="detail">
+              ยังไม่มีคำสั่งไปที่โบรก — arm ในหน้า manage เมื่อได้ของจริงแล้ว
+            </div>
+          </div>
+          <div className="tg-sheetactions">
+            <button type="button" className="tg-confirm" onClick={() => setSaved(null)}>
+              ตั้งไม้ต่อ ›
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirming && plan && (
+        <div className="tg-sheet review">
+          <div>
+            <h3>ทวนก่อนบันทึก</h3>
+            <div className="headline">
+              {plan.shares.toLocaleString()} {plan.ticker} @ ${money(plan.entry_price)}
+            </div>
+            <div className="detail">
+              SL ${money(plan.stop_price)} · TP ${money(plan.target_price)} · เสี่ยง
+              {" "}฿{Math.round(riskThb).toLocaleString()} (${money(plan.risk)})
+              {" · "}บันได {[breakEvenOn, profitLockOn, true, partialOn].filter(Boolean).length} จาก 4 ขั้น
+            </div>
+          </div>
+          <div className="tg-sheetactions">
+            <button type="button" className="tg-cancel" onClick={() => setConfirming(false)}>
+              ยกเลิก
+            </button>
+            <button type="button" className="tg-confirm" disabled={opening} onClick={open}>
+              {opening ? "กำลังบันทึก…" : "บันทึกแผน"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="tg-bar">
+        <div className="tg-barstat">
+          <span>ไม้</span>
+          <b>{plan ? `${plan.shares.toLocaleString()} · $${money(plan.cost)}` : "—"}</b>
+        </div>
+        <div className="tg-barstat">
+          <span>เสี่ยง</span>
+          <b className="risk">{plan ? `$${money(plan.risk)}` : "—"}</b>
+        </div>
+        <div className="tg-barstat">
+          <span>reward : risk</span>
+          <b>{plan ? `${plan.reward_risk.toFixed(2)}:1` : "—"}</b>
+        </div>
+        <div className="tg-barstat">
+          <span>บันไดขาออก</span>
+          <b>{[breakEvenOn, profitLockOn, true, partialOn].filter(Boolean).length} จาก 4 ขั้น</b>
+        </div>
+        <span className="tg-barhint">ปุ่มนี้บันทึกแผน — ไม่ส่งคำสั่งไปโบรก</span>
+        <button
+          type="button" className="tg-go" disabled={!canSend || opening}
+          onClick={() => setConfirming(true)}
+        >
+          {plan ? `ตั้งไม้ ${plan.shares.toLocaleString()} ${plan.ticker}` : "ตั้งไม้"}
+        </button>
+      </div>
+      {openError && <p className="tg-err">{openError}</p>}
 
       <BracketList reload={reload} />
     </div>
