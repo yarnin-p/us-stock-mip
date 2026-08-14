@@ -67,7 +67,7 @@ const APPS = [
   },
   {
     key: "risk",
-    href: "/settings",
+    href: "/risk",
     tag: "GUARD",
     name: "Risk & Controls",
     what: "Position limits, the daily risk budget, and the kill switch that overrides both.",
@@ -81,8 +81,21 @@ export function HubView() {
   const [rows, setRows] = useState<BracketRow[]>([]);
   const [loadError, setLoadError] = useState("");
   const [mode, setMode] = useState("");
+  /* The risk card should say what the gate is actually set to. "limits and kill
+   * switch" describes the screen; a ceiling and a switch state describe the system,
+   * and the second is the only one worth a glance from here. */
+  const [risk, setRisk] = useState<{
+    kill_switch: boolean; max_position_value: number; mode: string;
+  } | null>(null);
   // Same control as the terminal, same stored choice.
   const { currency, setCurrency } = useCurrency();
+
+  useEffect(() => {
+    fetch(`${API}/execution/config`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((answer) => { if (answer) setRisk(answer); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch(`${API}/brackets?limit=50`)
@@ -218,7 +231,13 @@ export function HubView() {
         </div>
         <div className="tg-appgrid">
           {APPS.map((app) => (
-            <a key={app.key} className={`tg-app skin-${app.skin}`} href={app.href}>
+            <a
+              key={app.key}
+              className={`tg-app skin-${app.skin}${
+                app.key === "risk" && risk?.kill_switch ? " alarm" : ""
+              }`}
+              href={app.href}
+            >
               <span className={`tg-mark mark-${app.mark}`} />
               <span className="tg-apptag">{app.tag}</span>
               <span className="tg-appname">{app.name}</span>
@@ -230,7 +249,12 @@ export function HubView() {
                     (loadError ? "—" : `${live.length} maintained · ${rows.length} total`)}
                   {app.key === "scanner" && "open the table"}
                   {app.key === "performance" && "review the record"}
-                  {app.key === "risk" && "limits and kill switch"}
+                  {app.key === "risk" &&
+                    (risk
+                      ? risk.kill_switch
+                        ? "KILL SWITCH ON"
+                        : `$${risk.max_position_value.toLocaleString()} cap · gate open`
+                      : "limits and kill switch")}
                 </em>
                 <i>›</i>
               </span>

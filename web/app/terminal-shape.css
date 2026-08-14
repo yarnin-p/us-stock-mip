@@ -1159,3 +1159,11 @@
   min-width: 14rem;
 }
 .tg .tg-said { color: var(--tg-green); font-size: 13.5px; margin: 0; }
+
+/* The kill switch being on is not a detail to read in small type on another screen.
+ * When it is, the card says so at the size the name is usually printed. */
+.tg-app.alarm .tg-appfoot em {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}

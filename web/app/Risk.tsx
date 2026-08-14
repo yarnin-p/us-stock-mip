@@ -1,6 +1,6 @@
 "use client";
 
-/* The settings screen.
+/* Risk and controls.
  *
  * It exists because the ceilings were only ever in the environment, which made them
  * both invisible and immovable: the first sign that MAX_POSITION_VALUE was still at a
@@ -69,7 +69,7 @@ const CEILINGS = [
 
 const SESSIONS = ["PRE_MARKET", "REGULAR", "AFTER_HOURS"];
 
-export function SettingsView() {
+export function RiskView() {
   const [config, setConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [sessions, setSessions] = useState<string[]>([]);
@@ -131,7 +131,7 @@ export function SettingsView() {
       <div className="tg-portalbar">
         <a className="tg-back" href="/hub">‹ All apps</a>
         <span className="tg-crumb">
-          TradeEdge portal <b>Settings</b>
+          TradeEdge portal <b>Risk &amp; Controls</b>
         </span>
         <span className="tg-barspacer" />
         {config && (
@@ -147,7 +147,7 @@ export function SettingsView() {
           <div className="tg-status">
             <i className="tg-dot-live" /> Changes take effect immediately and survive a restart
           </div>
-          <h1 className="tg-h1">Settings</h1>
+          <h1 className="tg-h1">Risk &amp; Controls</h1>
         </div>
       </div>
 
@@ -266,7 +266,7 @@ export function SettingsView() {
             onChange={(event) => setNote(event.target.value)}
           />
           <button type="button" className="tg-go" disabled={busy || !config} onClick={save}>
-            {busy ? "Saving…" : "SAVE SETTINGS"}
+            {busy ? "Saving…" : "SAVE CHANGES"}
           </button>
         </div>
       </div>
