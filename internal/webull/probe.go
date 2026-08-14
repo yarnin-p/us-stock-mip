@@ -88,7 +88,13 @@ type modifyCandidate struct {
 // this repository sends is first, so a report leads with the answer to "is what
 // we ship correct".
 var modifyCandidates = []modifyCandidate{
-	{family: "openapi/trade (in use here)", path: modifyOrderPath, accountInBody: true},
+	{family: "openapi/trade replace (in use here)", path: modifyOrderPath,
+		accountInBody: true},
+	// The path this adapter used to send. Kept as a candidate so a report says out
+	// loud that it is not there, rather than leaving the next person to rediscover it.
+	{family: "openapi/trade modify (never existed)", path: []string{
+		"openapi", "trade", "order", "modify",
+	}, accountInBody: true},
 	{family: "openapi/account (python SDK v2)", path: []string{
 		"openapi", "account", "orders", "replace",
 	}},

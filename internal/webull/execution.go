@@ -29,7 +29,14 @@ var (
 	previewOrderPath = []string{"openapi", "trade", "order", "preview"}
 	placeOrderPath   = []string{"openapi", "trade", "order", "place"}
 	cancelOrderPath  = []string{"openapi", "trade", "order", "cancel"}
-	modifyOrderPath  = []string{"openapi", "trade", "order", "modify"}
+	// "replace", not "modify". The documented endpoint list names this one Replace
+	// Order and sits it beside preview, place and cancel at openapi/trade/order/<verb>
+	// -- the three paths this account was already known to answer on. It was sending
+	// "modify" instead, read off an SDK of another generation, and the venue answered
+	// 404 Route Not Found every time. Every trailing amendment would have failed in
+	// live; probing on 2026-08-14 found /replace answers "Order not present." for an
+	// order that was never placed, which is an endpoint working.
+	modifyOrderPath = []string{"openapi", "trade", "order", "replace"}
 )
 
 func (client *Client) PreviewOrder(

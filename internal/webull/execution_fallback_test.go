@@ -11,14 +11,16 @@ import (
 
 /* A venue with no amend endpoint still has to be able to move a level.
  *
- * The caller asks for the level to move and gets back the handle that is live
- * afterwards. That the venue needed a withdrawal and a fresh order to do it is this
- * adapter's business, and the engine and the terminal never learn of it. */
+ * Webull turned out to have one -- the adapter was simply sending the wrong path --
+ * so this covers a venue that genuinely does not, and the fallback it is named for
+ * should now never fire in production. It stays because the guarantee is worth
+ * keeping either way: the caller asks for the level to move and gets back the handle
+ * that is live afterwards, and how many calls that took is this adapter's business. */
 func TestModifyFallsBackToCancelAndPlaceWhenTheVenueHasNoAmend(t *testing.T) {
 	var seen []string
 	client := probeClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		seen = append(seen, request.URL.Path)
-		if strings.Contains(request.URL.Path, "modify") {
+		if strings.Contains(request.URL.Path, "replace") {
 			writer.WriteHeader(http.StatusNotFound)
 			_, _ = writer.Write([]byte(`{"msg":"wrong path"}`))
 			return

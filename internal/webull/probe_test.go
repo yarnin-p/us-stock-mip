@@ -205,7 +205,7 @@ func TestTheProbeMarksTheEndpointTheAdapterUses(t *testing.T) {
 	for _, probe := range probes {
 		if probe.InUse() {
 			inUse++
-			if probe.Path != "/openapi/trade/order/modify" {
+			if probe.Path != "/openapi/trade/order/replace" {
 				t.Errorf("the adapter's path is reported as %s", probe.Path)
 			}
 		}
