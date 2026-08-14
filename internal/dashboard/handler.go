@@ -44,6 +44,8 @@ type Options struct {
 	// which is where it started.
 	Symbols      SymbolDirectory
 	SymbolQuoter SymbolQuoter
+	// LimitWriter persists ceiling changes across a restart.
+	LimitWriter LimitWriter
 }
 
 type Handler struct {
@@ -53,6 +55,7 @@ type Handler struct {
 	symbols            SymbolDirectory
 	symbolQuoter       SymbolQuoter
 	symbolVerdicts     *symbolVerdicts
+	limitWriter        LimitWriter
 	logger             *slog.Logger
 	mux                *http.ServeMux
 	events             EventSource
@@ -90,6 +93,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		symbols:            options.Symbols,
 		symbolQuoter:       options.SymbolQuoter,
 		symbolVerdicts:     newSymbolVerdicts(30 * time.Minute),
+		limitWriter:        options.LimitWriter,
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
@@ -135,6 +139,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 	handler.mux.HandleFunc("GET /events", handler.eventStream)
 	if handler.execution != nil {
 		handler.mux.HandleFunc("GET /execution/config", handler.executionConfig)
+		handler.mux.HandleFunc("PATCH /execution/config", handler.updateExecutionConfig)
 		handler.mux.HandleFunc("POST /execution/size", handler.executionSize)
 		handler.mux.HandleFunc("GET /execution/orders", handler.executionOrders)
 		handler.mux.HandleFunc("POST /execution/orders", handler.createExecutionOrder)
@@ -173,13 +178,21 @@ func NewHandler(repository Repository, options Options) *Handler {
 func (handler *Handler) executionConfig(
 	response http.ResponseWriter, _ *http.Request,
 ) {
+	limits := handler.execution.Limits()
 	writeJSON(response, http.StatusOK, map[string]any{
 		"mode":                 handler.execution.Mode(),
 		"automatic_trading":    handler.execution.AutomaticTradingEnabled(),
 		"approval_required":    !handler.execution.AutomaticTradingEnabled(),
-		"kill_switch":          handler.execution.KillSwitchActive(),
-		"allowed_sessions":     handler.execution.AllowedSessions(),
+		"kill_switch":          limits.KillSwitch,
+		"allowed_sessions":     limits.AllowedSessions,
 		"live_entries_enabled": handler.liveEntriesEnabled,
+		// The ceilings themselves. They were only ever in the environment, so the
+		// first sign one was still at a test value was an order refused by it.
+		"max_position_value":     limits.MaxPositionValue,
+		"max_gross_exposure":     limits.MaxGrossExposure,
+		"max_capital_allocation": limits.MaxCapitalAllocation,
+		"max_daily_loss":         limits.MaxDailyLoss,
+		"max_risk_per_trade":     limits.MaxRiskPerTrade,
 	})
 }
 
@@ -473,7 +486,12 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		)
 		response.Header().Set(
 			"Access-Control-Allow-Methods",
-			"GET, POST, DELETE, OPTIONS",
+			// PATCH was missing, and the browser refuses a preflight for a method
+			// that is not listed. Every PATCH route -- amending a bracket's levels,
+			// changing the risk ceilings -- was therefore unreachable from the app
+			// while working perfectly from curl, which is why it read as a network
+			// fault rather than a configuration one.
+			"GET, POST, PATCH, PUT, DELETE, OPTIONS",
 		)
 	}
 	if request.Method == http.MethodOptions {
@@ -832,4 +850,120 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 	if err := json.NewEncoder(response).Encode(value); err != nil {
 		slog.Default().Error("encoding dashboard response", "error", err)
 	}
+}
+
+// LimitWriter persists the ceilings so a restart does not quietly put the old ones
+// back. Optional: without it the screen still works and says the change lasts only
+// until the process stops, which is honest and occasionally what you want.
+type LimitWriter interface {
+	SaveRuntimeLimits(context.Context, execution.Limits, LimitOverrides) error
+}
+
+// LimitOverrides is what the settings screen changed. Pointers because a null and a
+// zero are different answers: zero already means "no ceiling" to the risk engine, so
+// an absent field cannot be represented as one.
+type LimitOverrides struct {
+	MaxPositionValue     *float64
+	MaxGrossExposure     *float64
+	MaxCapitalAllocation *float64
+	MaxDailyLoss         *float64
+	MaxRiskPerTrade      *float64
+	AllowedSessions      []string
+	KillSwitch           *bool
+	Note                 string
+}
+
+type updateLimitsRequest struct {
+	MaxPositionValue     *float64 `json:"max_position_value"`
+	MaxGrossExposure     *float64 `json:"max_gross_exposure"`
+	MaxCapitalAllocation *float64 `json:"max_capital_allocation"`
+	MaxDailyLoss         *float64 `json:"max_daily_loss"`
+	MaxRiskPerTrade      *float64 `json:"max_risk_per_trade"`
+	AllowedSessions      []string `json:"allowed_sessions"`
+	KillSwitch           *bool    `json:"kill_switch"`
+	Note                 string   `json:"note"`
+}
+
+/* Changing the ceilings while the service runs.
+ *
+ * Only the ceilings. Paper and live are not here on purpose: the mode decides which
+ * broker adapter was built at boot, so a switch on this endpoint would look like it
+ * worked and change nothing about where the orders go. That is the worst kind of
+ * setting, and the restart it really needs is the right ceremony for it anyway.
+ *
+ * Absent fields are left alone rather than zeroed. Zero means "no ceiling" to the risk
+ * engine, so treating a missing field as zero would remove a limit by omission.
+ */
+func (handler *Handler) updateExecutionConfig(
+	response http.ResponseWriter, request *http.Request,
+) {
+	if handler.execution == nil {
+		writeAPIError(response, http.StatusServiceUnavailable, "execution is not configured")
+		return
+	}
+	var body updateLimitsRequest
+	if err := decodeJSON(response, request, &body); err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	current := handler.execution.Limits()
+	next := current
+	for _, field := range []struct {
+		value  *float64
+		target *float64
+		name   string
+	}{
+		{body.MaxPositionValue, &next.MaxPositionValue, "max_position_value"},
+		{body.MaxGrossExposure, &next.MaxGrossExposure, "max_gross_exposure"},
+		{body.MaxCapitalAllocation, &next.MaxCapitalAllocation, "max_capital_allocation"},
+		{body.MaxDailyLoss, &next.MaxDailyLoss, "max_daily_loss"},
+		{body.MaxRiskPerTrade, &next.MaxRiskPerTrade, "max_risk_per_trade"},
+	} {
+		if field.value == nil {
+			continue
+		}
+		if *field.value < 0 {
+			writeAPIError(response, http.StatusBadRequest, field.name+" cannot be negative")
+			return
+		}
+		*field.target = *field.value
+	}
+	if body.KillSwitch != nil {
+		next.KillSwitch = *body.KillSwitch
+	}
+	if body.AllowedSessions != nil {
+		next.AllowedSessions = body.AllowedSessions
+	}
+
+	handler.execution.SetLimits(next)
+	if handler.limitWriter != nil {
+		stored := LimitOverrides{
+			MaxPositionValue:     &next.MaxPositionValue,
+			MaxGrossExposure:     &next.MaxGrossExposure,
+			MaxCapitalAllocation: &next.MaxCapitalAllocation,
+			MaxDailyLoss:         &next.MaxDailyLoss,
+			MaxRiskPerTrade:      &next.MaxRiskPerTrade,
+			AllowedSessions:      next.AllowedSessions,
+			KillSwitch:           &next.KillSwitch,
+			Note:                 body.Note,
+		}
+		if err := handler.limitWriter.SaveRuntimeLimits(request.Context(), current, stored); err != nil {
+			// The change is already live. Saying it failed would have someone set it
+			// twice; saying nothing would let it vanish on the next restart.
+			handler.logger.Error(
+				"the new ceilings are in force but could not be stored; they will "+
+					"revert to the environment on the next restart",
+				"error", err,
+			)
+		}
+	}
+	handler.logger.Warn(
+		"risk ceilings changed",
+		"max_position_value", next.MaxPositionValue,
+		"max_gross_exposure", next.MaxGrossExposure,
+		"max_daily_loss", next.MaxDailyLoss,
+		"kill_switch", next.KillSwitch,
+		"note", body.Note,
+	)
+	handler.executionConfig(response, request)
 }

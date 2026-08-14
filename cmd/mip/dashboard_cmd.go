@@ -131,7 +131,7 @@ func runServe(args []string, stderr io.Writer) error {
 			)
 		}
 	})
-	executionService, err := buildExecutionService(appConfig, store)
+	executionService, err := buildExecutionService(ctx, appConfig, store, logger)
 	if err != nil {
 		return err
 	}
@@ -148,8 +148,10 @@ func runServe(args []string, stderr io.Writer) error {
 		shadowConfig.AutomaticTrading = true
 		shadowConfig.AutoMaxCandidates = appConfig.ShadowMaxCandidates
 		shadowExecutionService, shadowErr := buildExecutionService(
+			ctx,
 			shadowConfig,
 			store,
+			logger,
 		)
 		if shadowErr != nil {
 			return fmt.Errorf("creating shadow execution service: %w", shadowErr)
@@ -335,6 +337,7 @@ func runServe(args []string, stderr io.Writer) error {
 		// whether an order can be sent at all.
 		Symbols:       store,
 		SymbolQuoter:  symbolQuoterFor(bracketBroker),
+		LimitWriter:   store,
 		RuntimeHealth: runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.
@@ -728,7 +731,8 @@ func buildOrderModifier(
 }
 
 func buildExecutionService(
-	appConfig config.Config, store *postgres.Store,
+	ctx context.Context, appConfig config.Config, store *postgres.Store,
+	logger *slog.Logger,
 ) (*execution.Service, error) {
 	mode := execution.Mode(appConfig.TradingMode)
 	paperAdapter, err := execution.NewPaperAdapterWithFees(
@@ -778,6 +782,58 @@ func buildExecutionService(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating execution service: %w", err)
+	}
+
+	/* Anything the settings screen changed outranks the environment.
+	 *
+	 * Without this the screen would be a lie by the next restart: widen a ceiling on a
+	 * Tuesday, restart for any reason, and the old value is quietly back with nothing
+	 * saying so. A limit that reverts in silence is worse than one that never moved.
+	 *
+	 * A failed read leaves the environment in force and says so. Refusing to start
+	 * because a settings table could not be read would take the whole system down over
+	 * an override nobody may have set. */
+	if stored, err := store.RuntimeLimits(ctx); err != nil {
+		logger.Warn(
+			"stored risk ceilings could not be read; the environment values are in force",
+			"error", err,
+		)
+	} else {
+		limits := service.Limits()
+		applied := false
+		for _, field := range []struct {
+			value  *float64
+			target *float64
+		}{
+			{stored.MaxPositionValue, &limits.MaxPositionValue},
+			{stored.MaxGrossExposure, &limits.MaxGrossExposure},
+			{stored.MaxCapitalAllocation, &limits.MaxCapitalAllocation},
+			{stored.MaxDailyLoss, &limits.MaxDailyLoss},
+			{stored.MaxRiskPerTrade, &limits.MaxRiskPerTrade},
+		} {
+			if field.value == nil {
+				continue
+			}
+			*field.target = *field.value
+			applied = true
+		}
+		if stored.KillSwitch != nil {
+			limits.KillSwitch = *stored.KillSwitch
+			applied = true
+		}
+		if len(stored.AllowedSessions) > 0 {
+			limits.AllowedSessions = stored.AllowedSessions
+			applied = true
+		}
+		if applied {
+			service.SetLimits(limits)
+			logger.Info(
+				"risk ceilings loaded from the settings screen rather than the environment",
+				"max_position_value", limits.MaxPositionValue,
+				"max_gross_exposure", limits.MaxGrossExposure,
+				"kill_switch", limits.KillSwitch,
+			)
+		}
 	}
 	return service, nil
 }

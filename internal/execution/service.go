@@ -25,10 +25,14 @@ var (
 )
 
 type Service struct {
-	repository    Repository
-	adapters      map[Mode]BrokerAdapter
-	mode          Mode
-	risk          RiskEngine
+	repository Repository
+	adapters   map[Mode]BrokerAdapter
+	mode       Mode
+	risk       RiskEngine
+	// Guarded because the settings screen changes these while orders are being
+	// validated against them. A ceiling read halfway through a write is how a limit
+	// gets applied that nobody ever set.
+	limitsMutex   sync.RWMutex
 	limits        Limits
 	clock         func() time.Time
 	random        func([]byte) error
@@ -154,11 +158,11 @@ func (service *Service) Create(
 		return Order{}, fmt.Errorf("loading risk snapshot: %w", err)
 	}
 	if service.mode != ModeLive {
-		if snapshot.BuyingPower <= 0 && service.limits.DefaultBuyingPower > 0 {
-			snapshot.BuyingPower = service.limits.DefaultBuyingPower
+		if snapshot.BuyingPower <= 0 && service.Limits().DefaultBuyingPower > 0 {
+			snapshot.BuyingPower = service.Limits().DefaultBuyingPower
 		}
-		if snapshot.PortfolioEquity <= 0 && service.limits.DefaultBuyingPower > 0 {
-			snapshot.PortfolioEquity = service.limits.DefaultBuyingPower
+		if snapshot.PortfolioEquity <= 0 && service.Limits().DefaultBuyingPower > 0 {
+			snapshot.PortfolioEquity = service.Limits().DefaultBuyingPower
 		}
 	}
 	risk := service.risk.ValidateAt(input, snapshot, service.clock().UTC())
@@ -245,7 +249,7 @@ func (service *Service) Approve(ctx context.Context, id int64) (Approval, error)
 	token := hex.EncodeToString(tokenBytes)
 	hash := sha256.Sum256([]byte(token))
 	now := service.clock().UTC()
-	expiresAt := now.Add(service.limits.ApprovalTTL)
+	expiresAt := now.Add(service.Limits().ApprovalTTL)
 	order.State = StateApproved
 	order.ApprovalHash = hash[:]
 	order.ApprovalExpiresAt = &expiresAt
@@ -572,10 +576,10 @@ func (service *Service) Size(
 		return SizingResult{}, fmt.Errorf("loading sizing risk snapshot: %w", err)
 	}
 	if service.mode != ModeLive && snapshot.BuyingPower <= 0 {
-		snapshot.BuyingPower = service.limits.DefaultBuyingPower
+		snapshot.BuyingPower = service.Limits().DefaultBuyingPower
 	}
 	if service.mode != ModeLive && snapshot.PortfolioEquity <= 0 {
-		snapshot.PortfolioEquity = service.limits.DefaultBuyingPower
+		snapshot.PortfolioEquity = service.Limits().DefaultBuyingPower
 	}
 	if service.mode == ModeLive &&
 		(snapshot.BuyingPower <= 0 || snapshot.PortfolioEquity <= 0) {
@@ -587,11 +591,11 @@ func (service *Service) Size(
 }
 
 func (service *Service) KillSwitchActive() bool {
-	return service.limits.KillSwitch
+	return service.Limits().KillSwitch
 }
 
 func (service *Service) AllowedSessions() []string {
-	return append([]string(nil), service.limits.AllowedSessions...)
+	return append([]string(nil), service.Limits().AllowedSessions...)
 }
 
 func (service *Service) revalidate(
@@ -605,10 +609,10 @@ func (service *Service) revalidate(
 	}
 	if order.Mode != ModeLive {
 		if snapshot.BuyingPower <= 0 {
-			snapshot.BuyingPower = service.limits.DefaultBuyingPower
+			snapshot.BuyingPower = service.Limits().DefaultBuyingPower
 		}
 		if snapshot.PortfolioEquity <= 0 {
-			snapshot.PortfolioEquity = service.limits.DefaultBuyingPower
+			snapshot.PortfolioEquity = service.Limits().DefaultBuyingPower
 		}
 	}
 	risk := service.risk.ValidateAt(CreateOrderInput{
@@ -722,4 +726,28 @@ func confirmationText(order Order) string {
 
 func statePointer(state State) *State {
 	return &state
+}
+
+// Limits returns the ceilings in force right now.
+func (service *Service) Limits() Limits {
+	service.limitsMutex.RLock()
+	defer service.limitsMutex.RUnlock()
+	return service.limits
+}
+
+/* SetLimits replaces the ceilings without a restart.
+ *
+ * The risk engine is rebuilt rather than mutated, because it holds its own copy and a
+ * half-updated engine is worse than either version of it. Rebuilding is cheap: the
+ * engine is a struct of numbers.
+ *
+ * There is deliberately no way to reach TradingMode from here. Paper and live are not
+ * a setting -- they decide which broker adapter was constructed at boot, and pretending
+ * otherwise would give a switch that looks like it worked and did not.
+ */
+func (service *Service) SetLimits(limits Limits) {
+	service.limitsMutex.Lock()
+	defer service.limitsMutex.Unlock()
+	service.limits = limits
+	service.risk = NewRiskEngine(limits)
 }
