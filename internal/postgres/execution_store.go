@@ -203,10 +203,10 @@ func (store *Store) CreateExecutionOrder(
 				order_type,time_in_force,quantity,limit_price,stop_price,state,
 				estimated_cost,estimated_fee,risk_result,reason,ai_score,
 				catalyst_score,approval_token_hash,approval_expires_at,
-				approved_at,submitted_at,created_at,updated_at
+				approved_at,submitted_at,created_at,updated_at,allow_scale_in
 			) VALUES (
 				$1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,
-				$13,$14,$15,NULLIF($16,''),$17,$18,$19,$20,$21,$22,$23,$24
+				$13,$14,$15,NULLIF($16,''),$17,$18,$19,$20,$21,$22,$23,$24,$25
 			)
 			RETURNING id`,
 			order.ClientOrderID, order.Mode, order.AccountID, order.BrokerOrderID,
@@ -216,6 +216,7 @@ func (store *Store) CreateExecutionOrder(
 			order.EstimatedFee, riskJSON, order.Reason, order.AIScore,
 			order.CatalystScore, order.ApprovalHash, order.ApprovalExpiresAt,
 			order.ApprovedAt, order.SubmittedAt, order.CreatedAt, order.UpdatedAt,
+			order.AllowScaleIn,
 		).Scan(&order.ID); err != nil {
 			return err
 		}
@@ -733,7 +734,7 @@ const executionOrderSelect = `
 	SELECT
 		id,client_order_id,mode,COALESCE(account_id,''),
 		COALESCE(broker_order_id,''),ticker,side,order_type,time_in_force,
-		quantity,limit_price,stop_price,state,estimated_cost,estimated_fee,risk_result,
+		quantity,limit_price,stop_price,state,estimated_cost,estimated_fee,allow_scale_in,risk_result,
 		COALESCE((
 			SELECT SUM(f.quantity) FROM execution_fills f
 			WHERE f.order_id=execution_orders.id
@@ -759,7 +760,7 @@ func scanExecutionOrder(scanner executionOrderScanner) (execution.Order, error) 
 		&order.BrokerOrderID, &order.Ticker, &order.Side, &order.OrderType,
 		&order.TimeInForce, &order.Quantity, &order.LimitPrice, &order.StopPrice,
 		&order.State,
-		&order.EstimatedCost, &order.EstimatedFee, &riskJSON,
+		&order.EstimatedCost, &order.EstimatedFee, &order.AllowScaleIn, &riskJSON,
 		&order.FilledQuantity, &order.AverageFillPrice,
 		&order.AnalysisExcluded, &order.ExclusionReason, &order.Reason,
 		&order.AIScore, &order.CatalystScore, &order.ApprovalHash,

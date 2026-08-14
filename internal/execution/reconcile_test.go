@@ -206,3 +206,66 @@ func submitForTest(t *testing.T, service *Service, order Order) Order {
 	}
 	return submitted
 }
+
+/* A permission granted at creation has to survive to the step that re-checks it.
+ *
+ * Risk is measured again at preview and at approval, against the account as it stands
+ * rather than as it stood when the order was written -- that is the point of measuring
+ * it more than once. revalidate rebuilt its input from the stored order, and
+ * AllowScaleIn had nowhere to be stored, so it came back false every time: every order
+ * that needed it passed creation and was refused a step later for a position it had
+ * just been told it could add to.
+ *
+ * Nothing noticed because nothing sent one. The autonomous runner does not scale in,
+ * and the terminal could not buy at all.
+ */
+func TestScaleInSurvivesTheSecondRiskCheck(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 15, 14, 30, 0, 0, time.UTC)
+	venue, err := NewPaperAdapterWithFees(0, 0)
+	if err != nil {
+		t.Fatalf("venue: %v", err)
+	}
+	// A position is already held, which is what makes the permission load-bearing.
+	repository := &memoryRepository{snapshot: RiskSnapshot{
+		SymbolExists: true, Session: "REGULAR",
+		BuyingPower: 100_000, PortfolioEquity: 100_000,
+		ExistingQuantity: 10, AverageCost: 100,
+	}}
+	service, err := NewService(repository, ServiceOptions{
+		Mode: ModePaper, PaperAdapter: venue,
+		Limits: Limits{
+			MaxPositionValue: 50_000, MaxCapitalAllocation: 0.9,
+			MaxDailyLoss: 5_000, MaxRiskPerTrade: 5_000, ApprovalTTL: time.Minute,
+		},
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	order, err := service.Create(ctx, CreateOrderInput{
+		Ticker: "NVDA", Side: "BUY", Quantity: 4, LimitPrice: 228,
+		OrderType: "LIMIT", TimeInForce: "DAY", AllowScaleIn: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if order.State == StateRejected {
+		t.Fatalf(
+			"creation refused a permitted scale-in: %+v", order.Risk.Violations,
+		)
+	}
+
+	previewed, err := service.Preview(ctx, order.ID)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if previewed.State == StateRejected {
+		t.Fatalf(
+			"the second risk check refused what the first allowed: %+v -- the "+
+				"permission did not survive being stored",
+			previewed.Risk.Violations,
+		)
+	}
+}

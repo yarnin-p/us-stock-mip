@@ -183,7 +183,8 @@ func (service *Service) Create(
 		LimitPrice: input.LimitPrice, StopPrice: input.StopPrice, State: state,
 		EstimatedCost: risk.EstimatedCost, Risk: risk, Reason: input.Reason,
 		AIScore: input.AIScore, CatalystScore: input.CatalystScore,
-		CreatedAt: now, UpdatedAt: now,
+		AllowScaleIn: input.AllowScaleIn,
+		CreatedAt:    now, UpdatedAt: now,
 	}
 	transition := Transition{
 		ToState: state, Actor: "USER", CreatedAt: now,
@@ -692,6 +693,9 @@ func (service *Service) revalidate(
 		Ticker: order.Ticker, Side: order.Side, Quantity: order.Quantity,
 		OrderType: order.OrderType, LimitPrice: order.LimitPrice,
 		StopPrice: order.StopPrice, TimeInForce: order.TimeInForce,
+		// Carried, not dropped. Rebuilding the input without it is how a permission
+		// granted at creation stopped existing by preview.
+		AllowScaleIn: order.AllowScaleIn,
 	}, snapshot, service.clock().UTC())
 	order.Risk = risk
 	order.EstimatedCost = risk.EstimatedCost

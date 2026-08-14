@@ -28,21 +28,25 @@ const (
 )
 
 type Order struct {
-	ID                int64      `json:"id"`
-	ClientOrderID     string     `json:"client_order_id"`
-	Mode              Mode       `json:"mode"`
-	AccountID         string     `json:"account_id,omitempty"`
-	BrokerOrderID     string     `json:"broker_order_id,omitempty"`
-	Ticker            string     `json:"ticker"`
-	Side              string     `json:"side"`
-	OrderType         string     `json:"order_type"`
-	TimeInForce       string     `json:"time_in_force"`
-	Quantity          float64    `json:"quantity"`
-	LimitPrice        float64    `json:"limit_price"`
-	StopPrice         float64    `json:"stop_price,omitempty"`
-	State             State      `json:"state"`
-	EstimatedCost     float64    `json:"estimated_cost"`
-	EstimatedFee      float64    `json:"estimated_fee"`
+	ID            int64   `json:"id"`
+	ClientOrderID string  `json:"client_order_id"`
+	Mode          Mode    `json:"mode"`
+	AccountID     string  `json:"account_id,omitempty"`
+	BrokerOrderID string  `json:"broker_order_id,omitempty"`
+	Ticker        string  `json:"ticker"`
+	Side          string  `json:"side"`
+	OrderType     string  `json:"order_type"`
+	TimeInForce   string  `json:"time_in_force"`
+	Quantity      float64 `json:"quantity"`
+	LimitPrice    float64 `json:"limit_price"`
+	StopPrice     float64 `json:"stop_price,omitempty"`
+	State         State   `json:"state"`
+	EstimatedCost float64 `json:"estimated_cost"`
+	EstimatedFee  float64 `json:"estimated_fee"`
+	// AllowScaleIn is remembered because risk is measured again at preview and at
+	// approval, and an input rebuilt from the order without it turns every scale-in
+	// into a duplicate-position refusal one step after it was allowed.
+	AllowScaleIn      bool       `json:"allow_scale_in,omitempty"`
 	FilledQuantity    float64    `json:"filled_quantity"`
 	AverageFillPrice  float64    `json:"average_fill_price"`
 	AnalysisExcluded  bool       `json:"analysis_excluded"`

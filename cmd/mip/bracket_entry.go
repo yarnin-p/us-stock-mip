@@ -48,20 +48,32 @@ func (entries bracketEntryOrders) Buy(
 		return bracket.EntryTicket{Refusals: refusalsOf(order)}, nil
 	}
 
-	// Preview, approve, submit. The approval token is minted and spent in the same
-	// breath here, which is the part a human doing this by hand would pause on -- and
-	// the pause is real, it happened on the review sheet before this was ever called.
-	// Splitting it again at this level would only mean holding a token across an HTTP
-	// round trip for a decision the operator has already made.
-	if _, err := entries.execution.Preview(ctx, order.ID); err != nil {
+	/* Preview, approve, submit. The approval token is minted and spent in the same
+	 * breath here, which is the part a human doing this by hand would pause on -- and
+	 * the pause is real, it happened on the review sheet before this was ever called.
+	 *
+	 * The gate runs at every step, against the account as it stands rather than as it
+	 * stood a moment ago, so every step's answer has to be read. The previewed order
+	 * was being discarded here -- `if _, err := Preview(...)` -- and a rejection at
+	 * preview then walked into Approve and came back as "invalid order transition
+	 * REJECTED -> APPROVED", which tells an operator nothing about the ceiling they
+	 * actually hit.
+	 */
+	previewed, err := entries.execution.Preview(ctx, order.ID)
+	if err != nil {
 		return bracket.EntryTicket{}, fmt.Errorf("previewing the entry: %w", err)
+	}
+	if previewed.State == execution.StateRejected {
+		return bracket.EntryTicket{Refusals: refusalsOf(previewed)}, nil
 	}
 	approval, err := entries.execution.Approve(ctx, order.ID)
 	if err != nil {
-		// The gate can also refuse here: risk is measured again at approval, against
-		// the account as it stands rather than as it stood when the plan was written.
-		if approval.Order.State == execution.StateRejected {
-			return bracket.EntryTicket{Refusals: refusalsOf(approval.Order)}, nil
+		// And again here. approval.Order is empty on some failures, so the order is
+		// re-read rather than trusted: a refusal that arrives as a transition error is
+		// still a refusal, and saying so beats reporting a state machine's complaint.
+		if current, readErr := entries.execution.Order(ctx, order.ID); readErr == nil &&
+			current.State == execution.StateRejected {
+			return bracket.EntryTicket{Refusals: refusalsOf(current)}, nil
 		}
 		return bracket.EntryTicket{}, fmt.Errorf("approving the entry: %w", err)
 	}
