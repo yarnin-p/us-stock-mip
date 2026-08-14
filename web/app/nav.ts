@@ -4,7 +4,6 @@
 // a reference — which is exactly how the dynamic route first broke.
 
 export const NAV = [
-  { key: "dashboard", label: "Dashboard", icon: "M3 12h5l2 6 4-14 2 8h5" },
   { key: "market", label: "Market Overview", icon: "M3 3v18h18|M7 14l3-4 3 3 5-7" },
   { key: "scanner", label: "Daily Scanner", icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z|M20 20l-4-4" },
   { key: "gainers", label: "Gainers", icon: "M3 17l6-6 4 4 8-8|M15 7h6v6" },

@@ -35,6 +35,10 @@ type Record struct {
 	// much that is.
 	PartialTakenQuantity float64 `json:"partial_taken_quantity,omitempty"`
 	PartialOrderID       string  `json:"partial_order_id,omitempty"`
+	// PartialFillPrice is what that sale got. Without it the money banked by the
+	// rung cannot be worked out, which is the only number that says whether arming
+	// it was worth anything.
+	PartialFillPrice float64 `json:"partial_fill_price,omitempty"`
 	// StopGeneration counts how many times a stop order has been rested at the broker
 	// for this bracket. A stop that changes hands with the session is placed and
 	// withdrawn once a day at least, and a broker that keys on client_order_id would

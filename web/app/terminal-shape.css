@@ -1167,3 +1167,141 @@
   font-weight: 800;
   letter-spacing: 0.04em;
 }
+
+/* ---- bracket detail --------------------------------------------------------- */
+
+.tg-brmain {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) { .tg-brmain { grid-template-columns: minmax(0, 1fr); } }
+
+.tg-brstatus { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tg-statepill {
+  background: var(--tg-green);
+  color: var(--tg-ink);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+.tg-statepill.s-PENDING { background: var(--tg-amber); }
+.tg-statepill.s-STOPPED { background: var(--tg-red); }
+.tg-statepill.s-CANCELLED,
+.tg-statepill.s-TARGETED { background: var(--tg-disabled); color: var(--tg-text); }
+.tg-brsub { margin: 8px 0 0; font-size: 15px; color: var(--tg-label); }
+
+.tg .tg-enginepill { background: var(--tg-raised); color: var(--tg-text); font-size: 12.5px; font-weight: 800; letter-spacing: 0.04em; }
+.tg .tg-enginepill.on { background: var(--tg-green); color: var(--tg-ink); }
+
+.tg-brstats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 22px;
+}
+.tg-brstat {
+  background: var(--tg-raised);
+  border-radius: var(--tg-r-field);
+  padding: 16px 18px;
+}
+.tg-brstat span { display: block; font-size: 11.5px; color: var(--tg-small); }
+.tg-brstat b {
+  display: block;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--tg-paper);
+  margin: 4px 0 2px;
+}
+.tg-brstat b.good { color: var(--tg-green); }
+.tg-brstat b.bad { color: var(--tg-red); }
+.tg-brstat b.warn { color: var(--tg-amber); }
+.tg-brstat em { font-style: normal; font-size: 11.5px; color: var(--tg-small); }
+
+/* The floor plane. Green once the ladder has lifted the stop above the fill, amber
+ * while it has not -- the colour is the answer to "is this still a loss". */
+.tg-floor {
+  background: var(--tg-green);
+  color: var(--tg-ink);
+  border-radius: 30px;
+  padding: 26px 30px;
+}
+.tg-floor.atrisk { background: var(--tg-amber); }
+.tg-floorhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tg-floorhead h2 { margin: 0; font-size: 14px; font-weight: 800; letter-spacing: 0.04em; }
+.tg-floorpill {
+  background: rgba(23, 24, 26, 0.14);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.tg-floorrow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.tg-floorprice { font-size: 64px; font-weight: 700; letter-spacing: -0.055em; line-height: 0.95; }
+.tg-floorsub { font-size: 14px; font-weight: 600; opacity: 0.72; margin-top: 6px; }
+.tg-floorpl { text-align: right; }
+.tg-floorpl b { display: block; font-size: 30px; font-weight: 700; letter-spacing: -0.04em; }
+.tg-floorpl span { font-size: 12.5px; opacity: 0.72; }
+
+.tg-adjust .tg-planehead { align-items: center; }
+.tg-adjustform { display: flex; flex-direction: column; gap: 12px; }
+.tg-notefield.dark {
+  background: var(--tg-raised);
+  color: var(--tg-paper);
+}
+
+.tg-forceexit { gap: 14px; }
+.tg-fetitle { margin: 0; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; color: var(--tg-red); }
+.tg-fewhat { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--tg-text); }
+.tg-festats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.tg-ferow { display: flex; gap: 10px; flex-wrap: wrap; }
+.tg .tg-febtn {
+  border: 1px solid var(--tg-field);
+  background: transparent;
+  color: var(--tg-paper);
+  border-radius: 999px;
+  padding: 14px 24px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--tg-lift), border-color var(--tg-lift);
+}
+.tg .tg-febtn:hover { border-color: var(--tg-field-hover); background: var(--tg-hover); }
+.tg .tg-febtn.danger { border-color: var(--tg-red); color: var(--tg-red); }
+.tg .tg-febtn.danger:hover { background: var(--tg-red); color: var(--tg-ink); }
+.tg-fenote { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--tg-small); }
+.tg-fenote strong { color: var(--tg-paper); }
+
+.tg-timeline { display: flex; flex-direction: column; gap: 6px; }
+.tg-tlrow {
+  display: grid;
+  grid-template-columns: 64px 12px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  background: var(--tg-raised);
+  border-radius: var(--tg-r-line);
+  padding: 14px 18px;
+  font-size: 14px;
+}
+.tg-tlrow.failed { box-shadow: inset 0 0 0 1px var(--tg-red); }
+.tg-tltime { font-size: 12.5px; color: var(--tg-small); }
+.tg-tldot { width: 10px; height: 10px; border-radius: 50%; background: var(--tg-green); }
+.tg-tldot.t-INITIAL { background: var(--tg-amber); }
+.tg-tldot.t-ENTRY_FILLED { background: var(--tg-paper); }
+.tg-tldot.t-FILLED { background: var(--tg-paper); }
+.tg-tldot.t-STOP_FIRED { background: var(--tg-red); }
+.tg-tlwhat { color: var(--tg-paper); }
+.tg-tlwhat em { font-style: normal; color: var(--tg-red); }
+.tg-tlvalue { text-align: right; font-weight: 700; color: var(--tg-paper); }

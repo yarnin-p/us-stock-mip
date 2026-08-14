@@ -37,7 +37,8 @@ const (
 type Trigger string
 
 const (
-	TriggerInitial     Trigger = "INITIAL"      // first placement after entry fills
+	TriggerInitial     Trigger = "INITIAL"      // protective orders placed at the broker
+	TriggerEntryFilled Trigger = "ENTRY_FILLED" // the entry itself was filled
 	TriggerBreakEven   Trigger = "BREAK_EVEN"   // stop lifted to cover the round trip
 	TriggerProfitLock  Trigger = "PROFIT_LOCK"  // stop lifted to keep a real gain
 	TriggerPartialTP   Trigger = "PARTIAL_TP"   // a slice sold into strength

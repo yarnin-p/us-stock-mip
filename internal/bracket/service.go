@@ -532,7 +532,10 @@ func (service *Service) Activate(
 	record.StopOrderID = stopOrderID
 	record.TargetOrderID = targetOrderID
 	if _, err := service.repository.SaveLevels(ctx, record, AdjustmentRecord{
-		BracketID: id, Trigger: TriggerInitial,
+		// The fill, not the placement. Arm records the placement just before calling
+		// this, and both said INITIAL until now -- which put the same sentence in
+		// every bracket's history twice.
+		BracketID: id, Trigger: TriggerEntryFilled,
 		NewStop: stop, NewTarget: target,
 		LastPrice: fillPrice, HighWater: fillPrice, Applied: true,
 		Reason: fmt.Sprintf("entry filled at %.4f", fillPrice),

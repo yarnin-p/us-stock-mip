@@ -634,6 +634,7 @@ func (engine *Engine) settleSlice(
 
 	sold := min(outcome.FilledQuantity, record.Quantity)
 	record.PartialTakenQuantity += sold
+	record.PartialFillPrice = outcome.FilledPrice
 	record.Quantity -= sold
 	engine.logger.Info(
 		"partial sale confirmed",

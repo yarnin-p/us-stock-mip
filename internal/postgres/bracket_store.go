@@ -24,7 +24,8 @@ const bracketColumns = `id, mode, coalesce(account_id, ''), ticker, state,
 	coalesce(entry_order_id, ''), coalesce(stop_order_id, ''),
 	coalesce(target_order_id, ''), risk_flags, manual_hold,
 	partial_tp_after, partial_tp_fraction, partial_tp_min_shares,
-	partial_taken_quantity, coalesce(partial_order_id, ''), stop_generation,
+	partial_taken_quantity, coalesce(partial_order_id, ''),
+	coalesce(partial_fill_price, 0), stop_generation,
 	stop_fired, coalesce(note, ''),
 	opened_at, closed_at, updated_at`
 
@@ -233,6 +234,9 @@ func (store *Store) SaveLevels(
 			quantity = $7,
 			partial_taken_quantity = $8,
 			partial_order_id = coalesce(nullif($9, ''), partial_order_id),
+			-- Coalesced like the order id: a later write that does not know the fill
+			-- price must not erase the one the slice was actually sold at.
+			partial_fill_price = coalesce(nullif($14, 0::numeric), partial_fill_price),
 			-- Written here because activation is the only moment they are known, and
 			-- coalesced because every later write goes through this same statement.
 			entry_price = coalesce(nullif($10, 0::numeric), entry_price),
@@ -248,6 +252,7 @@ func (store *Store) SaveLevels(
 		record.StopOrderID, record.TargetOrderID,
 		record.Quantity, record.PartialTakenQuantity, record.PartialOrderID,
 		record.EntryPrice, record.AccountID, record.StopGeneration, record.StopFired,
+		record.PartialFillPrice,
 	)
 	updated, err := scanBracket(row)
 	if err != nil {
@@ -413,6 +418,7 @@ func scanBracket(row bracketRow) (bracket.Record, error) {
 		&record.Config.PartialTPAfter, &record.Config.PartialTPFraction,
 		&record.Config.PartialTPMinShares,
 		&record.PartialTakenQuantity, &record.PartialOrderID,
+		&record.PartialFillPrice,
 		&record.StopGeneration, &record.StopFired, &record.Note,
 		&record.OpenedAt, &closedAt, &record.UpdatedAt,
 	); err != nil {

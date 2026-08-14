@@ -1192,13 +1192,7 @@ function PlansInPlay({ reload }: { reload: number }) {
           const trailing = (row.high_water ?? 0) > (row.entry_price ?? 0);
           const open = row.state === "PENDING" || row.state === "ACTIVE";
           return (
-            <button
-              type="button"
-              className={`tg-plansrow${openId === row.id ? " open" : ""}`}
-              key={row.id}
-              aria-expanded={openId === row.id}
-              onClick={() => setOpenId((current) => (current === row.id ? null : row.id))}
-            >
+            <a className="tg-plansrow" key={row.id} href={`/bracket/${row.id}`}>
               <span className="t">{row.ticker}</span>
               <span
                 className={`st ${open ? (trailing ? "trailing" : "armed") : "done"}`}
@@ -1212,23 +1206,14 @@ function PlansInPlay({ reload }: { reload: number }) {
               <span className="n sl">${money(row.stop_price ?? 0)}</span>
               <span className="n tp">${money(row.target_price ?? 0)}</span>
               <span className="n">${money(row.high_water ?? 0)}</span>
-              <span className="n log">{openId === row.id ? "Close" : "Open"}</span>
-            </button>
+              <span className="n log">Open</span>
+            </a>
           );
         })}
         {shown.length === 0 && !error && (
           <p className="tg-empty">Nothing here yet.</p>
         )}
       </div>
-      {openId !== null && (
-        <div className="tg-planspanel">
-          <Manage
-            bracket={rows.find((row) => row.id === openId)}
-            onChanged={() => setTick((value) => value + 1)}
-          />
-        </div>
-      )}
-
       <div className="tg-plansfoot">
         <span>{live.length} live now · {rows.length} plans in total history</span>
         <a href="/positions">See the full history ›</a>

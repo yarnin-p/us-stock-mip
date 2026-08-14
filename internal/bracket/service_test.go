@@ -161,7 +161,7 @@ func TestActivateRederivesLevelsFromTheActualFill(t *testing.T) {
 	}
 }
 
-func TestActivateRecordsTheInitialPlacement(t *testing.T) {
+func TestActivateRecordsTheEntryFill(t *testing.T) {
 	service, repository := newTestService(t)
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
@@ -170,11 +170,14 @@ func TestActivateRecordsTheInitialPlacement(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(repository.adjustments) != 1 {
-		t.Fatalf("adjustments = %d, want the initial placement recorded",
+		t.Fatalf("adjustments = %d, want the entry fill recorded",
 			len(repository.adjustments))
 	}
-	if repository.adjustments[0].Trigger != TriggerInitial {
-		t.Fatalf("trigger = %s, want INITIAL", repository.adjustments[0].Trigger)
+	// Activate records the fill; Arm records the placement just before calling it.
+	// They shared the INITIAL trigger until the detail screen needed to tell the two
+	// apart -- and put the same sentence twice in every bracket's history.
+	if repository.adjustments[0].Trigger != TriggerEntryFilled {
+		t.Fatalf("trigger = %s, want ENTRY_FILLED", repository.adjustments[0].Trigger)
 	}
 }
 

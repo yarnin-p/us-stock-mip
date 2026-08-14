@@ -128,9 +128,25 @@ func (handler *Handler) bracketDetail(
 		writeAPIError(response, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{
-		"bracket": record, "adjustments": adjustments,
-	})
+	/* The book, alongside the plan.
+	 *
+	 * The detail screen decides two things that need it: what an exit at market would
+	 * actually get, and whether the last print is anywhere near the levels being
+	 * managed. Sending them together means the screen reads one endpoint rather than
+	 * three, and cannot show a stop from one moment against a price from another.
+	 *
+	 * Depth is best-effort. A missing quote reports as zero rather than failing the
+	 * request -- the plan is still worth looking at when the book is not. */
+	payload := map[string]any{"bracket": record, "adjustments": adjustments}
+	if handler.bookDepth != nil {
+		if shares, price, err := handler.bookDepth.ExitDepth(
+			request.Context(), record.Ticker,
+		); err == nil {
+			payload["bid_shares"] = shares
+			payload["bid_price"] = price
+		}
+	}
+	writeJSON(response, http.StatusOK, payload)
 }
 
 // openBracket records the intent in PENDING. It places nothing: the entry order
