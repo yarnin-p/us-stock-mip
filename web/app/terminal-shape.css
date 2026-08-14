@@ -1316,3 +1316,17 @@
 .tg-riskrefusal strong { color: var(--tg-red); font-size: 13.5px; }
 .tg-riskrefusal p { margin: 6px 0 0; font-size: 13px; color: var(--tg-text); }
 .tg-riskrefusal em { display: block; font-style: normal; margin-top: 6px; font-size: 12.5px; color: var(--tg-small); }
+
+/* The rung warning sits in the bar beside the count it qualifies. Narrower than the
+   stats around it and allowed to wrap, because the useful version of this names a
+   share count and a minimum rather than saying "check the ladder". */
+.tg .tg-barwarn {
+  max-width: 340px;
+}
+.tg .tg-barwarn b {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--tg-amber);
+  white-space: normal;
+}

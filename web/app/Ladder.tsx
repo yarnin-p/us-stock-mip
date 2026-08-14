@@ -371,3 +371,52 @@ export function LadderPlane({
     </section>
   );
 }
+
+/* Which rungs can actually fire on a position of this size.
+ *
+ * The bar used to count the rungs that were switched on and print them over a
+ * hard-coded four. That is not the same question. Rung four refuses a slice smaller
+ * than its minimum -- the rule exists so a sale of three shares is not eaten by its
+ * own commission -- so on twelve shares at a quarter it is skipped every time, and
+ * the screen still read "4 of 4 rungs" right up to the moment it silently did three.
+ *
+ * The gate below is the server's, in the same order and with the same arithmetic
+ * (see Config.PartialTPFraction in internal/bracket/bracket.go). Restating it here is
+ * a duplication worth having: the alternative is a screen that can only find out by
+ * sending the plan and reading the log afterwards.
+ */
+export type RungCount = {
+  armed: number;
+  total: number;
+  // note explains a rung that is switched on and still cannot fire, in the operator's
+  // terms rather than the rule's. Empty when every armed rung can run.
+  note: string;
+};
+
+export function countRungs(ladder: LadderValues, shares: number): RungCount {
+  const total = 4;
+  // The trail has no size gate and no switch: it is always part of the ladder.
+  let armed = [ladder.breakEvenOn, ladder.profitLockOn, true].filter(Boolean).length;
+  let note = "";
+  if (ladder.partialOn) {
+    const fraction = Number(ladder.partialFraction) / 100;
+    const minimum = Number(ladder.partialMinShares);
+    const slice = Math.floor(shares * fraction);
+    if (!(shares > 0) || !Number.isFinite(slice)) {
+      armed += 1;
+    } else if (slice < minimum) {
+      // What it would take, rather than what went wrong. The number that has to
+      // change is a position size, and saying so is more use than quoting the rule.
+      const needed = minimum > 0 && fraction > 0 ? Math.ceil(minimum / fraction) : 0;
+      note = `partial take-profit will not fire: ${slice} of ${shares} shares is `
+        + `under its ${minimum}-share minimum`
+        + (needed ? `, which needs ${needed} shares or more` : "");
+    } else if (slice >= shares) {
+      note = `partial take-profit will not fire: ${slice} of ${shares} shares would `
+        + "close the position, which is an exit rather than a slice";
+    } else {
+      armed += 1;
+    }
+  }
+  return { armed, total, note };
+}

@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  LadderPlane, LadderValues, ladderErrorOf, presetLadder,
+  LadderPlane, LadderValues, countRungs, ladderErrorOf, presetLadder,
 } from "./Ladder";
 import { useCurrency } from "./currency";
 import { sanitizeDecimal, sanitizeInteger, sanitizeTicker } from "./inputs";
@@ -462,7 +462,10 @@ export function TerminalView() {
   const budgetUse = plan?.risk_percent_of_account
     ? Math.min(1, plan.risk_percent_of_account / 0.01)
     : 0;
-  const armed = [ladder.breakEvenOn, ladder.profitLockOn, true, ladder.partialOn].filter(Boolean).length;
+  // Counted against the size actually being sent, not against a hard-coded four:
+  // a rung that is switched on can still be unable to fire on a position this small,
+  // and the bar used to report it as armed right up to the moment it did nothing.
+  const rungs = countRungs(ladder, plan?.shares ?? 0);
   const canSend =
     Boolean(request) && ladderError === "" && Boolean(plan) && !symbolBad;
 
@@ -781,7 +784,8 @@ export function TerminalView() {
             </div>
             <div className="detail">
               SL ${money(plan.stop_price)} · TP ${money(plan.target_price)} · risk{" "}
-              {riskMoney} · {armed} of 4 rungs armed
+              {riskMoney} · {rungs.armed} of {rungs.total} rungs armed
+              {rungs.note ? ` · ${rungs.note}` : ""}
             </div>
           </div>
           <div className="tg-sheetactions">
@@ -810,8 +814,14 @@ export function TerminalView() {
         </div>
         <div className="tg-barstat">
           <span>Exit ladder</span>
-          <b>{armed} of 4 rungs</b>
+          <b>{rungs.armed} of {rungs.total} rungs</b>
         </div>
+        {rungs.note && (
+          <div className="tg-barstat tg-barwarn">
+            <span>Heads up</span>
+            <b title={rungs.note}>{rungs.note}</b>
+          </div>
+        )}
         <div className="tg-barright">
           <span className="tg-barhint">Enter review · Enter send · Esc cancel</span>
           <button
