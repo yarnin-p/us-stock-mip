@@ -593,3 +593,101 @@
   white-space: normal;
   line-height: 1.25;
 }
+
+/* The fee reads back the number actually in force, and says which of the two it is.
+ * A computed value that looks identical to a typed one leaves you wondering whether
+ * it followed the price down -- so the automatic one is amber, the overridden one is
+ * plain, and the label says so in words as well. Colour is never the only carrier. */
+.tm-fee-auto {
+  color: var(--tg-amber, #f0a52e);
+  font-variant-numeric: tabular-nums;
+}
+.tm-fee-set {
+  color: var(--te-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ladder presets. Amber marks the one in force, and aria-pressed carries the same
+ * fact for anyone not reading colour. */
+.tm-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+.tm-presets-label {
+  font-size: 0.78rem;
+  color: var(--te-muted, #94a3b8);
+  margin-right: 0.2rem;
+}
+.tm-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--tg-r-pill, 999px);
+  border: 1px solid var(--tg-field, #3a4045);
+  background: transparent;
+  color: var(--te-text);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--tg-lift, 180ms), background var(--tg-lift, 180ms),
+    transform var(--tg-press, 115ms);
+}
+.tm-preset small {
+  font-size: 0.7rem;
+  font-weight: 400;
+  opacity: 0.68;
+}
+.tm-preset:hover {
+  border-color: var(--tg-field-hover, #6f757a);
+}
+.tm-preset:active {
+  transform: scale(0.97);
+}
+.tm-preset.on {
+  background: var(--tg-amber, #f0a52e);
+  border-color: var(--tg-amber, #f0a52e);
+  color: var(--tg-ink, #17181a);
+}
+.tm-preset.on small {
+  opacity: 0.82;
+}
+
+/* The exit-liquidity plane. It sits under the risk figures because it answers the
+ * question that comes after "how much am I risking" -- and it only turns red when the
+ * book cannot take the position, so a red plane means something rather than being the
+ * colour it always is. */
+.tm-liquidity {
+  margin-top: 0.9rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--tg-r-row, 22px);
+  border: 1px solid var(--tg-field, #3a4045);
+}
+.tm-liquidity.warn {
+  border-color: var(--tg-red, #f2705c);
+  background: rgba(242, 112, 92, 0.08);
+}
+.tm-liquidity-head {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--te-muted, #94a3b8);
+  margin-bottom: 0.6rem;
+}
+.tm-liquidity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.6rem 1rem;
+}
+.tm-liquidity-note {
+  margin: 0.7rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--te-text);
+}

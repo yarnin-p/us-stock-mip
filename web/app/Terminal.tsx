@@ -31,6 +31,12 @@ type EntryPlan = {
   breakeven_win_rate: number;
   risk_percent_of_account?: number;
   sizing_rule: string;
+  // What the money asked for, and what the book allowed. They differ exactly when the
+  // position was cut to what can actually be sold.
+  requested_shares?: number;
+  depth_limited_shares?: number;
+  bid_shares?: number;
+  bid_value?: number;
   risk_flags: string[];
 };
 
@@ -117,6 +123,61 @@ const money = (value: number) =>
   value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (value: number, digits = 1) => `${(value * 100).toFixed(digits)}%`;
 
+/* Dime charges max($0.01 per share, 0.15% of value) each way, then 7% VAT on the
+ * commission. Expressed as a fraction of notional the share count cancels out of both
+ * terms, so the rate depends on price alone.
+ *
+ * That matters more than it sounds. Above $6.67 the percentage term wins and the round
+ * trip is a flat 0.32%. Below it the per-share floor binds and the rate climbs as the
+ * price falls: 1.3% at $1.62, 5.1% at $0.42. A single typed percentage is right for one
+ * price and wrong by an order of magnitude for the rest of this book -- and it is wrong
+ * in the direction that makes a break-even rung lose money, because the floor is stated
+ * net of this number. */
+const DIME_PER_SHARE = 0.01;
+const DIME_RATE = 0.0015;
+const DIME_VAT = 1.07;
+const dimeRoundTrip = (price: number) =>
+  2 * DIME_VAT * (price > 0 ? Math.max(DIME_PER_SHARE / price, DIME_RATE) : DIME_RATE);
+
+/* Three shapes of the same ladder, from the handoff. They are a starting point, not a
+ * recommendation: what separates them is how much of an open gain the trail is allowed
+ * to give back before the floors take over.
+ *
+ * Every one of them satisfies the ordering the engine enforces -- floors below their
+ * own activation, break-even before profit lock, profit lock before the trail, partial
+ * above the trail -- so picking one can never produce the 400 that ladderError exists
+ * to explain. That was checked by hand against all five rules when these were written;
+ * there is no test framework in web/ yet to hold it, so editing a number here means
+ * re-checking it against ladderError below. */
+const LADDER_PRESETS = {
+  conservative: {
+    label: "conservative",
+    note: "เก็บทุนเร็ว ปล่อยให้วิ่งน้อย",
+    breakEven: { after: "2", floor: "1" },
+    profitLock: { after: "4", floor: "2.5" },
+    trail: { stopAfter: "8", targetAfter: "16", stopDistance: "7", targetDistance: "12" },
+    partial: { after: "20", fraction: "40", minShares: "10" },
+  },
+  balanced: {
+    label: "balanced",
+    note: "กลางๆ",
+    breakEven: { after: "3", floor: "1.5" },
+    profitLock: { after: "6", floor: "3" },
+    trail: { stopAfter: "10", targetAfter: "20", stopDistance: "10", targetDistance: "15" },
+    partial: { after: "30", fraction: "25", minShares: "10" },
+  },
+  runner: {
+    label: "runner",
+    note: "ยอมย่อลึกเพื่อจับตัววิ่งยาว",
+    breakEven: { after: "4", floor: "1" },
+    profitLock: { after: "10", floor: "4" },
+    trail: { stopAfter: "14", targetAfter: "28", stopDistance: "16", targetDistance: "22" },
+    partial: { after: "45", fraction: "20", minShares: "10" },
+  },
+} as const;
+
+type PresetName = keyof typeof LADDER_PRESETS;
+
 /* Structural warnings are written out in full rather than shown as badges. A
  * three-letter tag is easy to scroll past; a sentence explaining that a stop may
  * not fill is not. */
@@ -132,6 +193,18 @@ const FLAG_COPY: Record<string, { title: string; body: string }> = {
   OVEREXTENDED: {
     title: "วิ่งมาไกลแล้ว",
     body: "จากที่วัด 1,930 ตัว-วัน ตัวที่วิ่งเกิน +100% ปิดบวกเพียง 29% และย่อลึกกว่าที่ขึ้นต่อ",
+  },
+  DEPTH_CAPPED: {
+    title: "ไม้ถูกตัดตามความลึกของ book",
+    body: "เงินขอมากกว่าที่ตลาดรับได้ ขนาดจึงถูกลดลงมาให้เท่าที่ขายออกได้จริง — ไม้ที่ใหญ่กว่า book ไม่ได้เสี่ยงมากขึ้น แต่คือไม้ที่ไม่มีทางออกที่ราคาที่แผนคิดไว้",
+  },
+  DEPTH_THIN: {
+    title: "book บางเทียบกับขนาดไม้",
+    body: "ราคาเสนอซื้อที่ดีที่สุดรับได้น้อยกว่าที่ถืออยู่มาก ตอนขายจะต้องไล่ลงไปกินไม้ล่างๆ ซึ่งคือการทำราคาลงเอง — stop ที่คำนวณไว้จะไม่ได้ราคานั้น",
+  },
+  DEPTH_UNKNOWN: {
+    title: "ยังไม่รู้ความลึกของ book",
+    body: "ไม่มีราคาเสนอซื้อในระบบสำหรับตัวนี้ ขนาดไม้จึงยังไม่ผ่านการตรวจกับ book เลย ต้องดูความลึกบนจอโบรกเองก่อนส่ง",
   },
 };
 
@@ -160,10 +233,12 @@ export function TerminalView() {
   const [profitLockOn, setProfitLockOn] = useState(true);
   const [profitLockAfter, setProfitLockAfter] = useState("6");
   const [profitLockFloor, setProfitLockFloor] = useState("3");
-  // Dime charges 0.15% each way plus 7% VAT, so a round trip is about 0.32% before
-  // the SEC and TAF cents on the sell. Both floors are stated net of this, which is
-  // the difference between a break-even rung that breaks even and one that loses.
-  const [feeRoundTrip, setFeeRoundTrip] = useState("0.35");
+  // Empty means "work it out from the entry price", which is right for Dime and right
+  // for almost every edit. It is an override rather than a fixed default because
+  // another broker, or a promotion, is a number this screen cannot know -- but a blank
+  // field that quietly uses 0.35% at $0.40 is how a break-even rung ends up losing
+  // 4.7% of the position.
+  const [feeOverride, setFeeOverride] = useState("");
   const [partialOn, setPartialOn] = useState(false);
   const [partialAfter, setPartialAfter] = useState("30");
   const [partialFraction, setPartialFraction] = useState("25");
@@ -174,6 +249,80 @@ export function TerminalView() {
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState("");
   const [reload, setReload] = useState(0);
+
+  const applyPreset = useCallback((name: PresetName) => {
+    const shape = LADDER_PRESETS[name];
+    setBreakEvenOn(true);
+    setBreakEvenAfter(shape.breakEven.after);
+    setBreakEvenFloor(shape.breakEven.floor);
+    setProfitLockOn(true);
+    setProfitLockAfter(shape.profitLock.after);
+    setProfitLockFloor(shape.profitLock.floor);
+    setTrailStopAfter(shape.trail.stopAfter);
+    setTrailTargetAfter(shape.trail.targetAfter);
+    setTrailStopDistance(shape.trail.stopDistance);
+    setTrailTargetDistance(shape.trail.targetDistance);
+    setPartialOn(true);
+    setPartialAfter(shape.partial.after);
+    setPartialFraction(shape.partial.fraction);
+    setPartialMinShares(shape.partial.minShares);
+  }, []);
+
+  /* Which pill is lit is read back from the fields rather than remembered from the
+   * click. Remembering it means a highlighted "balanced" can sit over numbers that
+   * were edited afterwards -- a label making a claim about the ladder that the ladder
+   * no longer supports. Derived, it cannot drift: change one number and no pill is
+   * lit, change it back and the pill returns. */
+  const activePreset = useMemo(() => {
+    const current = {
+      breakEven: { after: breakEvenAfter, floor: breakEvenFloor },
+      profitLock: { after: profitLockAfter, floor: profitLockFloor },
+      trail: {
+        stopAfter: trailStopAfter, targetAfter: trailTargetAfter,
+        stopDistance: trailStopDistance, targetDistance: trailTargetDistance,
+      },
+      partial: {
+        after: partialAfter, fraction: partialFraction, minShares: partialMinShares,
+      },
+    };
+    if (!breakEvenOn || !profitLockOn || !partialOn) return null;
+    const same = (a: string, b: string) => Number(a) === Number(b);
+    for (const [name, shape] of Object.entries(LADDER_PRESETS)) {
+      if (
+        same(current.breakEven.after, shape.breakEven.after) &&
+        same(current.breakEven.floor, shape.breakEven.floor) &&
+        same(current.profitLock.after, shape.profitLock.after) &&
+        same(current.profitLock.floor, shape.profitLock.floor) &&
+        same(current.trail.stopAfter, shape.trail.stopAfter) &&
+        same(current.trail.targetAfter, shape.trail.targetAfter) &&
+        same(current.trail.stopDistance, shape.trail.stopDistance) &&
+        same(current.trail.targetDistance, shape.trail.targetDistance) &&
+        same(current.partial.after, shape.partial.after) &&
+        same(current.partial.fraction, shape.partial.fraction) &&
+        same(current.partial.minShares, shape.partial.minShares)
+      ) {
+        return name as PresetName;
+      }
+    }
+    return null;
+  }, [
+    breakEvenOn, breakEvenAfter, breakEvenFloor,
+    profitLockOn, profitLockAfter, profitLockFloor,
+    trailStopAfter, trailTargetAfter, trailStopDistance, trailTargetDistance,
+    partialOn, partialAfter, partialFraction, partialMinShares,
+  ]);
+
+  /* The fee the rest of the screen spends. An override wins when one is typed;
+   * otherwise it follows the entry price down, which is the whole point. `auto` is
+   * kept so the field can say which of the two is in force -- a computed number that
+   * cannot be told apart from a typed one invites the question of whether it updated. */
+  const fee = useMemo(() => {
+    const typed = Number(feeOverride);
+    if (feeOverride.trim() !== "" && typed >= 0) {
+      return { fraction: typed / 100, auto: false };
+    }
+    return { fraction: dimeRoundTrip(Number(entry)), auto: true };
+  }, [feeOverride, entry]);
 
   // Whichever unit is typed, the request carries percentages -- the server sizes
   // and stores in fractions of entry, so a bracket read back later shows the rule
@@ -219,7 +368,7 @@ export function TerminalView() {
             trail_stop_distance: Number(trailStopDistance) / 100,
             trail_target_after: Number(trailTargetAfter) / 100,
             trail_target_distance: Number(trailTargetDistance) / 100,
-            fee_round_trip_percent: Number(feeRoundTrip) / 100,
+            fee_round_trip_percent: fee.fraction,
             // Omitted rather than zeroed when off: the server refuses a floor with
             // no activation, and sending halves of a disabled rung would trip that.
             ...(breakEvenOn
@@ -248,7 +397,7 @@ export function TerminalView() {
     ticker, entry, basis, amount, equity, exits, advanced,
     trailStopAfter, trailStopDistance, trailTargetAfter, trailTargetDistance,
     breakEvenOn, breakEvenAfter, breakEvenFloor,
-    profitLockOn, profitLockAfter, profitLockFloor, feeRoundTrip,
+    profitLockOn, profitLockAfter, profitLockFloor, fee,
     partialOn, partialAfter, partialFraction, partialMinShares,
   ]);
 
@@ -356,7 +505,11 @@ export function TerminalView() {
   }, [request]);
 
   return (
-    <div className="tm">
+    // .tg carries the graphite token layer. It is a second class rather than a
+    // replacement so the re-skin can move one block at a time: anything still
+    // written in tm-* keeps working while the blocks that have been converted read
+    // their colours from the tokens.
+    <div className="tm tg">
       <header className="tm-head">
         <div>
           <h1 className="tm-title">Order Terminal</h1>
@@ -504,6 +657,24 @@ export function TerminalView() {
                 ไม่มีขั้นไหนถอยลง — ขั้นที่ยกสูงสุดคือขั้นที่ใช้จริง
               </p>
 
+              {/* Presets write all eleven numbers at once. They open every rung too,
+                * because a preset that left one off would be a different ladder from
+                * the one its name describes. */}
+              <div className="tm-presets">
+                <span className="tm-presets-label">เริ่มจากแบบสำเร็จรูป</span>
+                {(Object.keys(LADDER_PRESETS) as PresetName[]).map((name) => (
+                  <button
+                    key={name} type="button"
+                    className={`tm-preset${activePreset === name ? " on" : ""}`}
+                    aria-pressed={activePreset === name}
+                    onClick={() => applyPreset(name)}
+                  >
+                    {LADDER_PRESETS[name].label}
+                    <small>{LADDER_PRESETS[name].note}</small>
+                  </button>
+                ))}
+              </div>
+
               <LadderRung
                 on={breakEvenOn} onToggle={setBreakEvenOn}
                 name="1 · break-even" tone="flat"
@@ -611,12 +782,23 @@ export function TerminalView() {
               </LadderRung>
 
               <label className="tm-field">
-                <span>ค่าธรรมเนียมไป-กลับ %</span>
-                <input className="tm-input" value={feeRoundTrip} inputMode="decimal"
-                  onChange={(event) => setFeeRoundTrip(event.target.value)} />
+                <span>
+                  ค่าธรรมเนียมไป-กลับ{" "}
+                  <strong className={fee.auto ? "tm-fee-auto" : "tm-fee-set"}>
+                    {pct(fee.fraction, 2)}
+                  </strong>{" "}
+                  {fee.auto ? "· คิดจากราคาให้อัตโนมัติ" : "· ใช้ค่าที่กรอกเอง"}
+                </span>
+                <input className="tm-input" value={feeOverride} inputMode="decimal"
+                  placeholder={`ว่าง = ${pct(dimeRoundTrip(Number(entry)), 2)} ตามราคา`}
+                  onChange={(event) => setFeeOverride(event.target.value)} />
                 <small className="tm-hint">
-                  Dime คิด 0.15% ต่อขา + VAT 7% ≈ 0.32% ไป-กลับ · พื้นทั้งสองขั้นบวกตัวนี้เข้าไป
-                  ไม่งั้น &quot;break-even&quot; จะออกมาขาดทุนเท่าค่าคอม
+                  Dime คิด <strong>max($0.01/หุ้น, 0.15% ของมูลค่า)</strong> ต่อขา + VAT 7% ·
+                  จุดตัดที่ <strong>$6.67/หุ้น</strong> — ต่ำกว่านั้นพื้น $0.01 จะ bind
+                  แล้ว % จริงพุ่งขึ้นเมื่อราคายิ่งต่ำ
+                  {" "}(${"19.93"} → 0.32% · ${"1.62"} → 1.32% · ${"0.42"} → 5.09%)
+                  {" "}พื้นทั้งสองขั้นบวกตัวนี้เข้าไป ไม่งั้น &quot;break-even&quot;
+                  จะออกมาขาดทุนเท่าค่าคอม · กรอกเองได้ถ้าใช้โบรกอื่น
                 </small>
               </label>
 
@@ -665,6 +847,8 @@ export function TerminalView() {
                   </span>
                 </div>
               </div>
+
+              <ExitLiquidity plan={plan} feeFraction={fee.fraction} />
 
               <AccountRiskWarning share={plan.risk_percent_of_account} />
 
@@ -724,6 +908,70 @@ function Figure({
       <span className="tm-figure-label">{label}</span>
       <span className="tm-figure-value">{value}</span>
       {note && <span className="tm-figure-note">{note}</span>}
+    </div>
+  );
+}
+
+/* Everything else on this screen answers how much is at risk. This answers whether the
+ * position can be got out of, which is a different question and the one that has gone
+ * unasked. Two positions on 2026-08-13 made the case: one name showed five shares on
+ * the best bid, and the size that looked reasonable against the money was three hundred
+ * times what the market would take.
+ *
+ * The cost line is deliberately labelled as incomplete. The preview carries the bid but
+ * not the ask, so the spread -- which on an illiquid name is the larger half of the
+ * bill -- is not in this number yet. A total that silently omits its biggest term is
+ * worse than no total, so it says what it is missing. */
+function ExitLiquidity({
+  plan, feeFraction,
+}: {
+  plan: EntryPlan;
+  feeFraction: number;
+}) {
+  const bidShares = plan.bid_shares ?? 0;
+  const bidValue = plan.bid_value ?? 0;
+  const requested = plan.requested_shares ?? plan.shares;
+  const capped = requested > plan.shares;
+  const unknown = bidShares <= 0;
+  // How many times over the best bid the position is. One means the whole thing could
+  // leave into the bid showing; ten means nine tenths of it is looking for a buyer that
+  // has not appeared yet.
+  const cover = bidShares > 0 ? plan.shares / bidShares : 0;
+  const thin = !unknown && cover > 3;
+
+  return (
+    <div className={`tm-liquidity${unknown || thin ? " warn" : ""}`}>
+      <span className="tm-liquidity-head">ออกได้แค่ไหน</span>
+      <div className="tm-liquidity-grid">
+        <Figure
+          label="bid ที่รับได้"
+          value={unknown ? "ไม่รู้" : `${bidShares.toLocaleString()} หุ้น`}
+          note={unknown ? "ยังไม่เห็นราคาเสนอซื้อ" : `$${money(bidValue)}`}
+        />
+        <Figure
+          label="ไม้เทียบ bid"
+          value={unknown ? "—" : `${cover.toFixed(1)}×`}
+          note={unknown ? "ประเมินไม่ได้" : cover <= 1 ? "ออกได้ในไม้เดียว" : "ต้องกินลึกกว่า bid แรก"}
+          tone={thin ? "risk" : undefined}
+        />
+        <Figure
+          label="ค่าธรรมเนียมไป-กลับ"
+          value={pct(feeFraction, 2)}
+          note="ยังไม่รวม spread"
+        />
+      </div>
+      {capped && (
+        <p className="tm-liquidity-note">
+          เงินขอ <strong>{requested.toLocaleString()}</strong> หุ้น แต่ book รับได้{" "}
+          <strong>{plan.shares.toLocaleString()}</strong> — ตัดให้แล้วตามความลึกจริง
+        </p>
+      )}
+      {unknown && (
+        <p className="tm-liquidity-note">
+          ไม่มีราคาเสนอซื้อในระบบสำหรับตัวนี้ — ขนาดไม้ยังไม่ผ่านการตรวจกับ book
+          เช็คความลึกบนจอโบรกก่อนส่ง
+        </p>
+      )}
     </div>
   );
 }
