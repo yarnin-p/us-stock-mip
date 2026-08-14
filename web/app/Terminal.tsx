@@ -566,8 +566,8 @@ export function TerminalView() {
     <div className="tg tg-page">
       {/* portal bar — the way back is a pill, not a rail */}
       <div className="tg-portalbar">
-        <a className="tg-pill tg-back" href="/hub">‹ All apps</a>
-        <span className="tg-pill tg-crumb">
+        <a className="tg-back" href="/hub">‹ All apps</a>
+        <span className="tg-crumb">
           TradeEdge portal <b>Order Terminal</b>
         </span>
         <span className="tg-barspacer" />
@@ -624,7 +624,7 @@ export function TerminalView() {
             </label>
           </div>
 
-          <div className="tg-card">
+          <div className="tg-sizecard">
             <div className="tg-sizehead">
               <span className="tg-cardlabel" style={{ margin: 0 }}>Position size</span>
               <div className="tg-seg">
@@ -723,7 +723,7 @@ export function TerminalView() {
               <button type="button" className={exitUnit === "price" ? "on" : ""}
                 onClick={() => switchUnit("price")}>price</button>
             </div>
-            <label className="tg-pillfield">
+            <label className="tg-pillfield pushed">
               <span>Equity</span>
               <input value={equity} inputMode="decimal"
                 onChange={(event) => setEquity(event.target.value)} />
@@ -733,7 +733,7 @@ export function TerminalView() {
               <input value={usdThb} inputMode="decimal"
                 onChange={(event) => setUsdThb(event.target.value)} />
             </label>
-            <label className="tg-pillfield">
+            <label className="tg-pillfield narrow">
               <span>Fee %{fee.auto ? " auto" : ""}</span>
               <input value={feeOverride} inputMode="decimal"
                 placeholder={(fee.fraction * 100).toFixed(2)}
@@ -777,24 +777,24 @@ export function TerminalView() {
           <div className="tg-stack tg-enter tg-enter-2">
             <div className="tg-stackrow tp">
               <b>TAKE PROFIT</b>
-              <span>
-                {plan ? `+${((plan.target_price / plan.entry_price - 1) * 100).toFixed(1)}%` : ""}
+              <span className="tg-stackright">
+                <span>{plan ? `+${((plan.target_price / plan.entry_price - 1) * 100).toFixed(1)}%` : ""}</span>
+                <i>{plan ? `$${money(plan.target_price)}` : "—"}</i>
               </span>
-              <i>{plan ? `$${money(plan.target_price)}` : "—"}</i>
             </div>
             <div className="tg-stackrow entry">
               <b>ENTRY</b>
-              <span>
-                {plan ? `${plan.shares.toLocaleString()} sh · $${money(plan.cost)}` : ""}
+              <span className="tg-stackright">
+                <span>{plan ? `${plan.shares.toLocaleString()} sh · $${money(plan.cost)}` : ""}</span>
+                <i>{plan ? `$${money(plan.entry_price)}` : "—"}</i>
               </span>
-              <i>{plan ? `$${money(plan.entry_price)}` : "—"}</i>
             </div>
             <div className="tg-stackrow sl">
               <b>STOP LOSS</b>
-              <span>
-                {plan ? `−${((1 - plan.stop_price / plan.entry_price) * 100).toFixed(1)}%` : ""}
+              <span className="tg-stackright">
+                <span>{plan ? `−${((1 - plan.stop_price / plan.entry_price) * 100).toFixed(1)}%` : ""}</span>
+                <i>{plan ? `$${money(plan.stop_price)}` : "—"}</i>
               </span>
-              <i>{plan ? `$${money(plan.stop_price)}` : "—"}</i>
             </div>
           </div>
 
@@ -859,8 +859,10 @@ export function TerminalView() {
               <span className="tg-rungname">Break-even</span>
             </div>
             <p className="tg-rungwhat">Stops a winner from turning into a loss.</p>
-            {field("Arm at gain %", breakEvenAfter, setBreakEvenAfter)}
-            {field("Lift SL to gain %", breakEvenFloor, setBreakEvenFloor)}
+            <div className="tg-rungfields">
+              {field("Arm at gain %", breakEvenAfter, setBreakEvenAfter)}
+              {field("Lift SL to gain %", breakEvenFloor, setBreakEvenFloor)}
+            </div>
             <p className="tg-rungnote">
               If it stalls here it exits at this floor — a small gain, never red.
             </p>
@@ -874,8 +876,10 @@ export function TerminalView() {
               <span className="tg-rungname">Profit lock</span>
             </div>
             <p className="tg-rungwhat">Banks a real slice instead of giving it all back.</p>
-            {field("Arm at gain %", profitLockAfter, setProfitLockAfter)}
-            {field("Lift SL to gain %", profitLockFloor, setProfitLockFloor)}
+            <div className="tg-rungfields">
+              {field("Arm at gain %", profitLockAfter, setProfitLockAfter)}
+              {field("Lift SL to gain %", profitLockFloor, setProfitLockFloor)}
+            </div>
             <p className="tg-rungnote">
               This floor sits above rung one; however far price retraces, it holds.
             </p>
@@ -887,10 +891,12 @@ export function TerminalView() {
               <span className="tg-rungname">Trail</span>
             </div>
             <p className="tg-rungwhat">Lets a runner run, following at a fixed distance.</p>
-            {field("SL trails from gain %", trailStopAfter, setTrailStopAfter)}
-            {field("TP widens from gain %", trailTargetAfter, setTrailTargetAfter)}
-            {field("SL below high %", trailStopDistance, setTrailStopDistance)}
-            {field("TP above high %", trailTargetDistance, setTrailTargetDistance)}
+            <div className="tg-rungfields">
+              {field("SL trails from gain %", trailStopAfter, setTrailStopAfter)}
+              {field("TP widens from gain %", trailTargetAfter, setTrailTargetAfter)}
+              {field("SL below high %", trailStopDistance, setTrailStopDistance)}
+              {field("TP above high %", trailTargetDistance, setTrailTargetDistance)}
+            </div>
             <p className="tg-rungnote">
               Rungs one and two measure from entry; the trail measures from the high.
             </p>
@@ -904,9 +910,11 @@ export function TerminalView() {
               <span className="tg-rungname">Partial take-profit</span>
             </div>
             <p className="tg-rungwhat">Takes cash off the table without closing the runner.</p>
-            {field("Arm at gain %", partialAfter, setPartialAfter)}
-            {field("Sell % of position", partialFraction, setPartialFraction)}
-            {field("Skip under N shares", partialMinShares, setPartialMinShares)}
+            <div className="tg-rungfields">
+              {field("Arm at gain %", partialAfter, setPartialAfter)}
+              {field("Sell % of position", partialFraction, setPartialFraction)}
+              {field("Skip under N shares", partialMinShares, setPartialMinShares)}
+            </div>
             <p className="tg-rungnote">
               Sent as a limit at the arm price, never market — it will not walk down its
               own book.
@@ -1054,7 +1062,7 @@ function PlansInPlay({ reload }: { reload: number }) {
           </div>
           <span className="tg-step">only plans the engine is still watching live</span>
         </div>
-        <a className="tg-pill tg-back" href="/orders">Open Orders app ›</a>
+        <a className="tg-back" href="/orders">Open Orders app ›</a>
       </div>
 
       {error && <p className="tg-err">{error}</p>}
