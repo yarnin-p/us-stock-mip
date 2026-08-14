@@ -458,6 +458,79 @@ func (service *Service) Order(
 	return service.repository.ExecutionOrder(ctx, id)
 }
 
+/* Reconcile brings one order into line with what its venue says became of it.
+ *
+ * Live orders come back untouched. Two pollers already own those rows -- the broker
+ * sync and the order-state sweep -- and a third writer would race them over the same
+ * fill.
+ *
+ * Every other mode has no poller at all. SyncExecutionBrokerOrders returns early on
+ * anything that is not live, and the paper venue fills a resting order inside
+ * Observe and tells nobody: an order that did not fill on arrival stayed SUBMITTED
+ * for the life of the process, however long ago its price was reached. Nothing built
+ * on fills could work in paper, which is the mode this is rehearsed in.
+ *
+ * The fill it writes carries the same BrokerFillID shape the live reconciler writes,
+ * so the unique index on that column and the conflict clause behind it do the
+ * deduplication. Calling this twice for one fill is a no-op rather than a double
+ * count, which matters because the caller is a sweep that runs every second and
+ * cannot know what it has already seen.
+ */
+func (service *Service) Reconcile(ctx context.Context, id int64) (Order, error) {
+	order, err := service.repository.ExecutionOrder(ctx, id)
+	if err != nil {
+		return Order{}, err
+	}
+	if order.Mode == ModeLive || order.State.Terminal() {
+		return order, nil
+	}
+	inspector, ok := service.adapter(order.Mode).(OrderInspector)
+	if !ok {
+		// Not an error. A venue that cannot be asked what became of an order is a
+		// weaker venue rather than a broken one, and the caller's own deadline is the
+		// answer for an order it can never hear about.
+		return order, nil
+	}
+	outcome, err := inspector.OrderOutcome(ctx, order.AccountID, order.ClientOrderID)
+	if err != nil {
+		return Order{}, fmt.Errorf(
+			"asking the %s venue about order %s: %w",
+			order.Mode, order.ClientOrderID, err,
+		)
+	}
+	if outcome.FilledQuantity <= order.FilledQuantity {
+		return order, nil
+	}
+	target := StatePartiallyFilled
+	if order.Quantity > 0 && outcome.FilledQuantity >= order.Quantity {
+		target = StateFilled
+	}
+	fill := Fill{
+		// Keyed on the running total rather than on a count of prints: the venue
+		// reports where the order has got to, not a list, so the same total seen
+		// twice has to collide.
+		BrokerFillID: fmt.Sprintf(
+			"%s:%.8f", order.ClientOrderID, outcome.FilledQuantity,
+		),
+		Quantity: outcome.FilledQuantity - order.FilledQuantity,
+		Price:    outcome.FilledPrice,
+		FilledAt: outcome.FilledAt,
+	}
+	if fill.FilledAt.IsZero() {
+		fill.FilledAt = service.clock().UTC()
+	}
+	expected := order.State
+	order.State = target
+	order.UpdatedAt = service.clock().UTC()
+	return service.repository.TransitionExecutionOrder(
+		ctx, order, expected, Transition{
+			FromState: statePointer(expected), ToState: target,
+			Actor: "BROKER", Reason: "fill read back from the venue",
+			CreatedAt: order.UpdatedAt,
+		}, &fill,
+	)
+}
+
 func (service *Service) Cancel(ctx context.Context, id int64) (Order, error) {
 	return service.cancel(ctx, id, "USER")
 }

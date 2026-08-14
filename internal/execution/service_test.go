@@ -113,13 +113,23 @@ func (repo *memoryRepository) TransitionExecutionOrder(
 	repo.order = order
 	repo.transitions = append(repo.transitions, transition)
 	if fill != nil {
+		// The real store derives these by summing execution_fills; a stub that leaves
+		// them at zero lets a test pass against an order the production code would
+		// have reported as filled, which is the difference this stub exists to hide
+		// least of all.
+		notional := repo.order.AverageFillPrice*repo.order.FilledQuantity +
+			fill.Price*fill.Quantity
+		repo.order.FilledQuantity += fill.Quantity
+		if repo.order.FilledQuantity > 0 {
+			repo.order.AverageFillPrice = notional / repo.order.FilledQuantity
+		}
 		repo.positions = []Position{{
 			Mode: order.Mode, Ticker: order.Ticker, Quantity: fill.Quantity,
 			AverageCost: fill.Price, CurrentPrice: fill.Price,
 			UpdatedAt: fill.FilledAt,
 		}}
 	}
-	return order, nil
+	return repo.order, nil
 }
 func (repo *memoryRepository) ExecutionPositions(context.Context) ([]Position, error) {
 	return repo.positions, nil
