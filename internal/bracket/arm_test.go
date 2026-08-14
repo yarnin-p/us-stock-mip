@@ -12,8 +12,8 @@ import (
 
 // stubProtector is the broker the protective orders go to.
 type stubProtector struct {
-	mutex  sync.Mutex
-	placed []execution.BrokerOrderRequest
+	mutex     sync.Mutex
+	placed    []execution.BrokerOrderRequest
 	cancelled []string
 	moved     []execution.ModifyOrderRequest
 	// failStop and failTarget make the two halves fail independently, because the
