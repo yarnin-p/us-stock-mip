@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #151618; }
+  body { font-family: "Plus Jakarta Sans", system-ui, sans-serif; color: #eceded; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+  * { box-sizing: border-box; }
+  a { color: #f0a52e; text-decoration: none; }
+  a:hover { color: #f7c477; text-decoration: underline; }
+  input { font-family: inherit; color: inherit; border: none; background: transparent; font-variant-numeric: tabular-nums; }
+  input:focus { outline: none; }
+  @keyframes popIn { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+  @keyframes flash { 0% { filter: brightness(1) } 35% { filter: brightness(1.16) } 100% { filter: brightness(1) } }
+  @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.5); opacity: 0.45 } }
+  @keyframes slideNum { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #151618; padding: 14px; display: flex; flex-direction: column; gap: 14px">
+
+  <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+    <a href="Portal Hub.dc.html" style="display: flex; align-items: center; gap: 10px; background: #1e2023; border-radius: 999px; padding: 12px 20px 12px 16px; color: #eceded; font-size: 13px; font-weight: 600" style-hover="background: #262a2e">
+      <span style="font-size: 15px; line-height: 1">&#8249;</span><span>All apps</span>
+    </a>
+    <div style="display: flex; align-items: center; gap: 12px; background: #1e2023; border-radius: 999px; padding: 10px 20px">
+      <span style="width: 24px; height: 24px; border-radius: 8px; background: #f0a52e; color: #17181a; display: grid; place-items: center; font-size: 12px; font-weight: 800">T</span>
+      <span style="font-size: 12.5px; color: #8f959a">TradeEdge portal</span>
+      <span style="font-size: 13px; font-weight: 700">Order Terminal</span>
+    </div>
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 12px">
+      <div style="background: #1e2023; border-radius: 999px; padding: 11px 20px; display: flex; align-items: center; gap: 12px">
+        <span style="font-size: 15px; font-weight: 700">{{ tickerUpper }}</span>
+        <span style="font-size: 13px; color: #8f959a">{{ entryPrice }}</span>
+      </div>
+      <div style="background: #f0a52e; color: #17181a; border-radius: 999px; padding: 12px 22px; font-size: 12px; font-weight: 800; letter-spacing: 0.1em">PAPER</div>
+      <div style="width: 40px; height: 40px; border-radius: 50%; background: #1e2023; display: grid; place-items: center; font-size: 14px; font-weight: 700">Y</div>
+    </div>
+  </div>
+
+  <div style="display: flex; align-items: flex-end; gap: 20px; padding: 8px 6px 2px; flex-wrap: wrap">
+    <div>
+      <div style="display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: #8f959a">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #f0a52e; animation: pulse 2.4s ease-in-out infinite"></span>Market closed &middot; opens in 12:49:29
+      </div>
+      <h1 style="margin: 6px 0 0; font-size: 56px; font-weight: 700; letter-spacing: -0.055em; line-height: 0.95">Order Terminal</h1>
+    </div>
+    <div style="margin-left: auto; display: flex; gap: 8px">
+      <sc-for list="{{ rrPresets }}" as="p" hint-placeholder-count="3">
+        <div onClick="{{ p.apply }}" style="background: #1e2023; border-radius: 999px; padding: 12px 20px; font-size: 13px; font-weight: 600; cursor: pointer" style-hover="background: #f0a52e; color: #17181a">{{ p.label }}</div>
+      </sc-for>
+    </div>
+  </div>
+
+  <section style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; animation: popIn 460ms cubic-bezier(0.22,1,0.36,1) both">
+
+    <div style="display: flex; flex-direction: column; gap: 14px">
+
+      <div style="background: #1c1e21; border-radius: 30px; padding: 26px; display: flex; flex-direction: column; gap: 22px">
+        <div style="display: flex; align-items: baseline; justify-content: space-between">
+          <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.03em">The ticket</h2>
+          <span style="font-size: 12.5px; color: #8f959a">step 1 of 2</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+          <div onClick="{{ setBuy }}" style="background: {{ buyBg }}; color: {{ buyInk }}; border-radius: 20px; padding: 18px; text-align: center; font-size: 19px; font-weight: 800; letter-spacing: 0.02em; cursor: pointer; transition: background 160ms ease, transform 120ms ease" style-active="transform: scale(0.98)">BUY</div>
+          <div onClick="{{ setSell }}" style="background: {{ sellBg }}; color: {{ sellInk }}; border-radius: 20px; padding: 18px; text-align: center; font-size: 19px; font-weight: 800; letter-spacing: 0.02em; cursor: pointer; transition: background 160ms ease, transform 120ms ease" style-active="transform: scale(0.98)">SELL</div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px">
+          <label style="display: flex; flex-direction: column; gap: 8px; background: #232629; border-radius: 20px; padding: 16px 20px">
+            <span style="font-size: 12px; color: #8f959a">Ticker</span>
+            <input value="{{ ticker }}" onChange="{{ onTicker }}" style="width: 100%; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; text-transform: uppercase; caret-color: #f0a52e; border-bottom: 2px dashed #3a4045; padding-bottom: 3px" style-hover="border-bottom-color: #6f757a" style-focus="border-bottom: 2px solid #f0a52e" />
+          </label>
+          <label style="display: flex; flex-direction: column; gap: 8px; background: #232629; border-radius: 20px; padding: 16px 20px">
+            <span style="font-size: 12px; color: #8f959a">Entry price</span>
+            <div style="display: flex; align-items: baseline; gap: 4px">
+              <span style="font-size: 18px; color: #6f757a">$</span>
+              <input value="{{ entry }}" onChange="{{ onEntry }}" style="width: 100%; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; caret-color: #f0a52e; border-bottom: 2px dashed #3a4045; padding-bottom: 3px" style-hover="border-bottom-color: #6f757a" style-focus="border-bottom: 2px solid #f0a52e" />
+            </div>
+          </label>
+        </div>
+
+        <div style="background: #232629; border-radius: 20px; padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 12px">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+            <span style="font-size: 12px; color: #8f959a">Position size</span>
+            <div style="display: flex; gap: 4px; background: #191b1e; border-radius: 999px; padding: 4px">
+              <div onClick="{{ setSizeMoney }}" style="padding: 6px 15px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: {{ sizeMoneyBg }}; color: {{ sizeMoneyColor }}">By cash</div>
+              <div onClick="{{ setSizeRisk }}" style="padding: 6px 15px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: {{ sizeRiskBg }}; color: {{ sizeRiskColor }}">By risk</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: baseline; gap: 4px">
+            <span style="font-size: 18px; color: #6f757a">$</span>
+            <input value="{{ amount }}" onChange="{{ onAmount }}" style="width: 100%; font-size: 30px; font-weight: 700; letter-spacing: -0.03em; caret-color: #f0a52e; border-bottom: 2px dashed #3a4045; padding-bottom: 3px" style-hover="border-bottom-color: #6f757a" style-focus="border-bottom: 2px solid #f0a52e" />
+            <span style="font-size: 13px; color: #8f959a; white-space: nowrap">= {{ shares }} shares</span>
+          </div>
+          <div style="display: flex; gap: 7px">
+            <sc-for list="{{ quickAmounts }}" as="q" hint-placeholder-count="4">
+              <div onClick="{{ q.apply }}" style="background: #191b1e; border-radius: 999px; padding: 7px 15px; font-size: 12.5px; font-weight: 600; color: #a9aeb2; cursor: pointer" style-hover="background: #f0a52e; color: #17181a">{{ q.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+          <div style="background: #f2705c; color: #17181a; border-radius: 26px; padding: 22px 24px 24px; display: flex; flex-direction: column; gap: 4px; min-height: 208px; transition: transform 180ms cubic-bezier(0.22,1,0.36,1), box-shadow 180ms ease" style-hover="transform: translateY(-3px); box-shadow: 0 18px 40px -24px rgba(242,112,92,0.9)">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+              <span style="font-size: 15px; font-weight: 800; letter-spacing: -0.01em">STOP LOSS</span>
+              <div style="display: flex; gap: 6px">
+                <div onClick="{{ slDown }}" style="width: 30px; height: 30px; border-radius: 50%; background: rgba(23,24,26,0.14); display: grid; place-items: center; font-size: 17px; font-weight: 700; cursor: pointer; user-select: none; transition: transform 110ms ease, background 140ms ease" style-hover="background: #17181a; color: #f2705c" style-active="transform: scale(0.88)">&minus;</div>
+                <div onClick="{{ slUp }}" style="width: 30px; height: 30px; border-radius: 50%; background: rgba(23,24,26,0.14); display: grid; place-items: center; font-size: 17px; font-weight: 700; cursor: pointer; user-select: none; transition: transform 110ms ease, background 140ms ease" style-hover="background: #17181a; color: #f2705c" style-active="transform: scale(0.88)">+</div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 6px; margin-top: auto">
+              <input value="{{ slInput }}" onChange="{{ onSl }}" style="width: 100%; font-size: 64px; font-weight: 700; letter-spacing: -0.055em; color: #17181a; line-height: 1; caret-color: #17181a; border-bottom: 3px dashed rgba(23,24,26,0.32); padding-bottom: 4px" style-hover="border-bottom-color: rgba(23,24,26,0.7)" style-focus="border-bottom: 3px solid #17181a; background: rgba(255,255,255,0.24); border-radius: 6px" />
+              <span style="font-size: 26px; font-weight: 700; opacity: 0.62">{{ unitSuffix }}</span>
+            </div>
+            <div style="font-size: 15px; font-weight: 600">{{ slPrice }} &middot; −{{ riskThb }}</div>
+          </div>
+          <div style="background: #4fc38a; color: #17181a; border-radius: 26px; padding: 22px 24px 24px; display: flex; flex-direction: column; gap: 4px; min-height: 208px; transition: transform 180ms cubic-bezier(0.22,1,0.36,1), box-shadow 180ms ease" style-hover="transform: translateY(-3px); box-shadow: 0 18px 40px -24px rgba(79,195,138,0.9)">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px">
+              <span style="font-size: 15px; font-weight: 800; letter-spacing: -0.01em">TAKE PROFIT</span>
+              <div style="display: flex; gap: 6px">
+                <div onClick="{{ tpDown }}" style="width: 30px; height: 30px; border-radius: 50%; background: rgba(23,24,26,0.14); display: grid; place-items: center; font-size: 17px; font-weight: 700; cursor: pointer; user-select: none; transition: transform 110ms ease, background 140ms ease" style-hover="background: #17181a; color: #4fc38a" style-active="transform: scale(0.88)">&minus;</div>
+                <div onClick="{{ tpUp }}" style="width: 30px; height: 30px; border-radius: 50%; background: rgba(23,24,26,0.14); display: grid; place-items: center; font-size: 17px; font-weight: 700; cursor: pointer; user-select: none; transition: transform 110ms ease, background 140ms ease" style-hover="background: #17181a; color: #4fc38a" style-active="transform: scale(0.88)">+</div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 6px; margin-top: auto">
+              <input value="{{ tpInput }}" onChange="{{ onTp }}" style="width: 100%; font-size: 64px; font-weight: 700; letter-spacing: -0.055em; color: #17181a; line-height: 1; caret-color: #17181a; border-bottom: 3px dashed rgba(23,24,26,0.32); padding-bottom: 4px" style-hover="border-bottom-color: rgba(23,24,26,0.7)" style-focus="border-bottom: 3px solid #17181a; background: rgba(255,255,255,0.24); border-radius: 6px" />
+              <span style="font-size: 26px; font-weight: 700; opacity: 0.62">{{ unitSuffix }}</span>
+            </div>
+            <div style="font-size: 15px; font-weight: 600">{{ tpPrice }} &middot; +{{ reward }}</div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px">
+          <span style="font-size: 12.5px; color: #8f959a">measure in</span>
+          <div style="display: flex; gap: 4px; background: #232629; border-radius: 999px; padding: 4px">
+            <div onClick="{{ setUnitPct }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: {{ unitPctBg }}; color: {{ unitPctColor }}">percent</div>
+            <div onClick="{{ setUnitPrice }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: {{ unitPriceBg }}; color: {{ unitPriceColor }}">price</div>
+          </div>
+          <label style="margin-left: auto; display: flex; align-items: center; gap: 10px; background: #232629; border-radius: 999px; padding: 8px 8px 8px 16px">
+            <span style="font-size: 12px; color: #8f959a; white-space: nowrap">Equity</span>
+            <input value="{{ portfolio }}" onChange="{{ onPortfolio }}" style="width: 82px; font-size: 14px; font-weight: 600; text-align: right" />
+          </label>
+          <label style="display: flex; align-items: center; gap: 10px; background: #232629; border-radius: 999px; padding: 8px 8px 8px 16px">
+            <span style="font-size: 12px; color: #8f959a; white-space: nowrap">Fee %</span>
+            <input value="{{ fee }}" onChange="{{ onFee }}" style="width: 54px; font-size: 14px; font-weight: 600; text-align: right" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div style="position: sticky; top: 14px; display: flex; flex-direction: column; gap: 14px">
+      <div ref="{{ riskRef }}" style="background: #f0a52e; color: #17181a; border-radius: 30px; padding: 28px 30px; display: flex; flex-direction: column; gap: 18px">
+        <div style="font-size: 15px; font-weight: 800; letter-spacing: -0.01em">WHAT YOU ARE RISKING</div>
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 20px">
+          <div>
+            <div style="font-size: 76px; font-weight: 700; letter-spacing: -0.06em; line-height: 0.92">{{ riskThb }}</div>
+            <div style="font-size: 17px; font-weight: 700; opacity: 0.72; margin-top: 4px">{{ risk }} &middot; USD/THB {{ rate }}</div>
+          </div>
+          <div style="text-align: right">
+            <div style="font-size: 34px; font-weight: 700; letter-spacing: -0.045em; line-height: 1">{{ riskPct }}</div>
+            <div style="font-size: 12.5px; font-weight: 600; opacity: 0.72">of equity</div>
+          </div>
+        </div>
+        <div>
+          <div style="height: 12px; border-radius: 999px; background: rgba(23,24,26,0.18); overflow: hidden">
+            <div ref="{{ meterRef }}" style="height: 100%; width: 0%; border-radius: 999px; background: #17181a; transition: width 160ms ease"></div>
+          </div>
+          <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 9px; font-size: 12.5px; font-weight: 600">
+            <span style="opacity: 0.72">risk budget used &middot; 1% of equity</span>
+            <span style="font-weight: 800">{{ budgetUse }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr; gap: 8px">
+        <div style="background: #4fc38a; color: #17181a; border-radius: 22px; padding: 18px 22px; display: flex; align-items: center; justify-content: space-between">
+          <span style="font-size: 14px; font-weight: 800">TAKE PROFIT</span>
+          <div style="display: flex; align-items: baseline; gap: 12px">
+            <span style="font-size: 13px; font-weight: 600; opacity: 0.72">+{{ tpPctLabel }}</span>
+            <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.04em">{{ tpPrice }}</span>
+          </div>
+        </div>
+        <div style="background: #eceded; color: #17181a; border-radius: 22px; padding: 18px 22px; display: flex; align-items: center; justify-content: space-between">
+          <span style="font-size: 14px; font-weight: 800">ENTRY</span>
+          <div style="display: flex; align-items: baseline; gap: 12px">
+            <span style="font-size: 13px; font-weight: 600; opacity: 0.62">{{ shares }} sh &middot; {{ cost }}</span>
+            <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.04em">{{ entryPrice }}</span>
+          </div>
+        </div>
+        <div style="background: #f2705c; color: #17181a; border-radius: 22px; padding: 18px 22px; display: flex; align-items: center; justify-content: space-between">
+          <span style="font-size: 14px; font-weight: 800">STOP LOSS</span>
+          <div style="display: flex; align-items: baseline; gap: 12px">
+            <span style="font-size: 13px; font-weight: 600; opacity: 0.72">−{{ slPctLabel }}</span>
+            <span style="font-size: 28px; font-weight: 700; letter-spacing: -0.04em">{{ slPrice }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="background: #1c1e21; border-radius: 26px; padding: 22px 24px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px">
+        <sc-for list="{{ stats }}" as="s" hint-placeholder-count="3">
+          <div>
+            <div style="font-size: 30px; font-weight: 700; letter-spacing: -0.045em; color: {{ s.color }}">{{ s.value }}</div>
+            <div style="font-size: 11.5px; color: #8f959a; line-height: 1.4; margin-top: 5px">{{ s.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <section style="background: #1c1e21; border-radius: 30px; padding: 26px; display: flex; flex-direction: column; gap: 18px; animation: popIn 460ms cubic-bezier(0.22,1,0.36,1) 90ms both">
+    <div style="display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap">
+      <div>
+        <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.03em">The exit ladder <span style="font-size: 12.5px; font-weight: 500; color: #8f959a">step 2 of 2</span></h2>
+        <p style="margin: 5px 0 0; font-size: 13.5px; color: #a9aeb2">Every rung only raises the floor — none of them lowers it.</p>
+      </div>
+      <div style="margin-left: auto; display: flex; gap: 4px; background: #232629; border-radius: 999px; padding: 4px">
+        <sc-for list="{{ presets }}" as="p" hint-placeholder-count="3">
+          <div onClick="{{ p.apply }}" style="padding: 9px 20px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: {{ p.bg }}; color: {{ p.color }}">{{ p.label }}</div>
+        </sc-for>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 10px">
+      <sc-for list="{{ stages }}" as="s" hint-placeholder-count="4">
+        <div style="background: {{ s.cardBg }}; border-radius: 24px; padding: 20px; display: flex; flex-direction: column; gap: 14px; transition: background 200ms ease, transform 180ms cubic-bezier(0.22,1,0.36,1)" style-hover="transform: translateY(-2px)">
+          <div style="display: flex; align-items: center; gap: 12px">
+            <div onClick="{{ s.toggle }}" style="width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; font-size: 15px; font-weight: 800; background: {{ s.dotBg }}; color: {{ s.dotColor }}; transition: background 180ms ease, color 180ms ease, transform 120ms ease" style-active="transform: scale(0.9)">{{ s.num }}</div>
+            <div style="font-size: 16.5px; font-weight: 700; letter-spacing: -0.03em; color: {{ s.nameColor }}">{{ s.name }}</div>
+          </div>
+          <div style="font-size: 12.5px; color: #8f959a; line-height: 1.5">{{ s.desc }}</div>
+          <div style="display: flex; flex-direction: column; gap: 7px">
+            <sc-for list="{{ s.fields }}" as="f" hint-placeholder-count="2">
+              <label style="display: flex; align-items: center; gap: 10px; justify-content: space-between; background: {{ s.fieldBg }}; border-radius: 14px; padding: 9px 8px 9px 14px">
+                <span style="font-size: 11.5px; color: #a9aeb2; line-height: 1.3">{{ f.label }}</span>
+                <input value="{{ f.value }}" onChange="{{ f.onChange }}" style="width: 62px; flex: 0 0 62px; font-size: 15px; font-weight: 700; text-align: right; caret-color: #f0a52e; background: #2c3034; border-radius: 10px; padding: 6px 9px" style-hover="background: #363b40" style-focus="background: #363b40; box-shadow: inset 0 0 0 2px #f0a52e" />
+              </label>
+            </sc-for>
+          </div>
+          <div style="margin-top: auto; font-size: 11.5px; color: #9aa0a6; line-height: 1.55">{{ s.note }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <section style="background: #1c1e21; border-radius: 30px; padding: 26px 26px 20px; animation: popIn 460ms cubic-bezier(0.22,1,0.36,1) 170ms both">
+    <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.03em">{{ plansTitle }}</h2>
+      <div style="display: flex; gap: 4px; background: #232629; border-radius: 999px; padding: 4px">
+        <sc-for list="{{ planTabs }}" as="tab" hint-placeholder-count="2">
+          <div onClick="{{ tab.pick }}" style="padding: 8px 18px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: {{ tab.bg }}; color: {{ tab.color }}">{{ tab.label }}</div>
+        </sc-for>
+      </div>
+      <span style="font-size: 12.5px; color: #8f959a">{{ plansHint }}</span>
+      <a href="#" style="margin-left: auto; background: #232629; border-radius: 999px; padding: 10px 18px; font-size: 12.5px; font-weight: 600; color: #eceded" style-hover="background: #f0a52e; color: #17181a">Open Orders app &#8250;</a>
+    </div>
+    <div style="display: grid; grid-template-columns: 96px 122px 58px repeat(4, minmax(0, 1fr)) 84px; padding: 0 14px 8px; font-size: 11.5px; color: #9aa0a6">
+      <span>Ticker</span><span>Status</span><span style="text-align: right">Sh</span><span style="text-align: right">Entry</span><span style="text-align: right">SL</span><span style="text-align: right">TP</span><span style="text-align: right">High</span><span style="text-align: right">Log</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 4px; max-height: 264px; overflow-y: auto">
+      <sc-for list="{{ plans }}" as="p" hint-placeholder-count="4">
+        <div style="display: grid; grid-template-columns: 96px 122px 58px repeat(4, minmax(0, 1fr)) 84px; padding: 13px 14px; align-items: center; background: #232629; border-radius: 16px; font-size: 14px; animation: popIn 320ms ease both; transition: background 160ms ease" style-hover="background: #2b2f33">
+          <span style="font-weight: 700">{{ p.ticker }}</span>
+          <span style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: {{ p.statusColor }}">
+            <span style="width: 7px; height: 7px; border-radius: 50%; background: {{ p.statusColor }}"></span>{{ p.status }}
+          </span>
+          <span style="text-align: right; color: #a9aeb2">{{ p.shares }}</span>
+          <span style="text-align: right; font-weight: 600">{{ p.entry }}</span>
+          <span style="text-align: right; color: #f2705c; font-weight: 600">{{ p.sl }}</span>
+          <span style="text-align: right; color: #4fc38a; font-weight: 600">{{ p.tp }}</span>
+          <span style="text-align: right; color: #a9aeb2">{{ p.high }}</span>
+          <span style="text-align: right; font-size: 12.5px; color: #f0a52e; cursor: pointer">History</span>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px; padding-top: 14px">
+      <span style="font-size: 12px; color: #9aa0a6">{{ plansFooter }}</span>
+      <a href="#" style="margin-left: auto; font-size: 12.5px; font-weight: 600">See the full history &#8250;</a>
+    </div>
+  </section>
+
+  <sc-if value="{{ confirming }}" hint-placeholder-val="{{ false }}">
+    <div style="position: sticky; bottom: 88px; z-index: 31; animation: popIn 220ms cubic-bezier(0.22,1,0.36,1) both">
+      <div style="background: {{ confirmBg }}; color: #17181a; border-radius: 30px; padding: 24px 28px; display: flex; align-items: center; gap: 26px; flex-wrap: wrap">
+        <div>
+          <div style="font-size: 12.5px; font-weight: 800; letter-spacing: 0.08em; opacity: 0.72">REVIEW &mdash; {{ modeLabel }}</div>
+          <div style="font-size: 34px; font-weight: 700; letter-spacing: -0.045em; line-height: 1.05; margin-top: 4px">{{ sideLabel }} {{ shares }} {{ tickerUpper }} @ {{ entryPrice }}</div>
+          <div style="font-size: 15px; font-weight: 600; margin-top: 6px">SL {{ slPrice }} &middot; TP {{ tpPrice }} &middot; risk {{ riskThb }} ({{ risk }}) &middot; {{ rungsOnLabel }}</div>
+        </div>
+        <div style="margin-left: auto; display: flex; align-items: center; gap: 10px">
+          <div onClick="{{ cancel }}" style="background: rgba(23,24,26,0.14); border-radius: 999px; padding: 16px 26px; font-size: 14.5px; font-weight: 700; cursor: pointer; transition: background 160ms ease" style-hover="background: rgba(23,24,26,0.24)">Cancel</div>
+          <div onClick="{{ send }}" style="background: #17181a; color: {{ confirmBg }}; border-radius: 999px; padding: 16px 40px; font-size: 15px; font-weight: 800; letter-spacing: 0.04em; cursor: pointer; transition: transform 120ms ease" style-hover="background: #000" style-active="transform: scale(0.96)">{{ sendLabel }}</div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ sent }}" hint-placeholder-val="{{ false }}">
+    <div style="position: sticky; bottom: 88px; z-index: 31; animation: popIn 220ms cubic-bezier(0.22,1,0.36,1) both">
+      <div style="background: #4fc38a; color: #17181a; border-radius: 30px; padding: 20px 28px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap">
+        <div style="font-size: 20px; font-weight: 800">Bracket accepted &middot; order #10428</div>
+        <div style="font-size: 14.5px; font-weight: 600">the engine now maintains SL {{ slPrice }} and the {{ rungsOnLabel }}</div>
+        <a href="#" style="margin-left: auto; background: #17181a; color: #4fc38a; border-radius: 999px; padding: 13px 24px; font-size: 14px; font-weight: 700">Open in Positions &#8250;</a>
+      </div>
+    </div>
+  </sc-if>
+
+  <div style="position: sticky; bottom: 14px; z-index: 30; animation: popIn 500ms cubic-bezier(0.22,1,0.36,1) 240ms both">
+    <div style="background: #eceded; color: #17181a; border-radius: 999px; padding: 12px 12px 12px 28px; display: flex; align-items: center; gap: 28px">
+      <sc-for list="{{ barStats }}" as="b" hint-placeholder-count="4">
+        <div style="display: flex; flex-direction: column">
+          <span style="font-size: 11px; font-weight: 600; opacity: 0.6">{{ b.label }}</span>
+          <span style="font-size: 17px; font-weight: 700; letter-spacing: -0.03em; color: {{ b.color }}">{{ b.value }}</span>
+        </div>
+      </sc-for>
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 12px">
+        <span style="font-size: 11.5px; font-weight: 600; opacity: 0.62">Enter review &middot; Enter send &middot; Esc cancel</span>
+        <div onClick="{{ review }}" style="background: #17181a; color: #f0a52e; border-radius: 999px; padding: 16px 38px; font-size: 15px; font-weight: 700; cursor: pointer; transition: transform 120ms ease, background 160ms ease" style-hover="background: #000" style-active="transform: scale(0.96)">{{ sideLabel }} {{ shares }} {{ tickerUpper }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1500,&quot;height&quot;:1250}}">
+const PLANS = [
+  { ticker: "KWM", status: "Armed", shares: "86", entry: "$2.30", sl: "$2.07", tp: "$2.88", high: "$2.41" },
+  { ticker: "NVDA", status: "Trailing", shares: "12", entry: "$202.00", sl: "$208.04", tp: "$281.00", high: "$234.17" },
+  { ticker: "SOFI", status: "Armed", shares: "310", entry: "$8.05", sl: "$7.48", tp: "$9.66", high: "$8.19" },
+  { ticker: "AMD", status: "Trailing", shares: "40", entry: "$121.40", sl: "$126.60", tp: "$148.10", high: "$131.02" },
+  { ticker: "PLTR", status: "Filled", shares: "95", entry: "$26.10", sl: "$24.20", tp: "$32.60", high: "$33.05" },
+  { ticker: "NVDA", status: "Cancelled", shares: "1", entry: "$200.00", sl: "$196.00", tp: "$260.00", high: "$223.90" },
+  { ticker: "TSLA", status: "Stopped", shares: "18", entry: "$188.20", sl: "$179.00", tp: "$226.00", high: "$191.40" },
+  { ticker: "COIN", status: "Filled", shares: "22", entry: "$142.60", sl: "$132.00", tp: "$178.00", high: "$180.15" },
+  { ticker: "RIVN", status: "Stopped", shares: "140", entry: "$14.90", sl: "$13.85", tp: "$18.60", high: "$15.10" }
+];
+
+class Component extends DCLogic {
+  state = {
+    side: "BUY", confirming: false, sent: false, rate: 33.6,
+    planTab: "live",
+    ticker: (new URLSearchParams(location.search).get("ticker") || "KWM").toUpperCase(), entry: "2.30", amount: "200", sizeMode: "money", unit: "pct",
+    slPct: "10", tpPct: "25.22", slAbs: "2.07", tpAbs: "2.88",
+    portfolio: "20000", fee: "0.35", preset: "balanced",
+    stages: [
+      { on: true, name: "Break-even", desc: "Stops a winner from turning into a loss.", note: "If it stalls here it exits at this floor — a small gain, never red.", v: ["3", "1.5"], labels: ["Arm at gain %", "Lift SL to gain %"] },
+      { on: true, name: "Profit lock", desc: "Banks a real slice instead of giving it all back.", note: "This floor sits above rung one; however far price retraces, it holds.", v: ["6", "3"], labels: ["Arm at gain %", "Lift SL to gain %"] },
+      { on: true, name: "Trail", desc: "Lets a runner run, following at a fixed distance.", note: "Rungs one and two measure from entry; the trail measures from the high.", v: ["10", "20", "10", "15"], labels: ["SL trails from gain %", "TP widens from gain %", "SL below high %", "TP above high %"] },
+      { on: true, name: "Partial take-profit", desc: "Takes cash off the table without closing the runner.", note: "Sent as a limit at the arm price, never market — it will not walk down its own book.", v: ["30", "25", "10"], labels: ["Arm at gain %", "Sell % of position", "Skip under N shares"] }
+    ]
+  };
+
+  meterRef = React.createRef();
+  riskRef = React.createRef();
+  lastRisk = null;
+  componentDidMount() {
+    this.paintMeter();
+    this.onKey = (e) => {
+      const tag = (document.activeElement || {}).tagName;
+      if (e.key === "Escape" && this.state.confirming) { this.setState({ confirming: false }); return; }
+      if (e.key !== "Enter") return;
+      if (this.state.confirming) { this.setState({ confirming: false, sent: true }); return; }
+      if (tag === "INPUT") { e.preventDefault(); this.setState({ confirming: true, sent: false }); }
+    };
+    document.addEventListener("keydown", this.onKey);
+  }
+  componentWillUnmount() { document.removeEventListener("keydown", this.onKey); }
+  componentDidUpdate() { this.paintMeter(); this.flashRisk(); }
+
+  flashRisk() {
+    const el = this.riskRef.current; if (!el) return;
+    const risk = this.derived().risk.toFixed(2);
+    if (this.lastRisk === risk) return;
+    this.lastRisk = risk;
+    el.style.animation = "none";
+    void el.offsetWidth;
+    el.style.animation = "flash 420ms ease";
+  }
+  paintMeter() {
+    const el = this.meterRef.current; if (!el) return;
+    const d = this.derived(), budget = d.pf * 0.01;
+    const share = budget > 0 ? Math.max(0, Math.min(1, d.risk / budget)) : 0;
+    el.style.width = (share * 100).toFixed(1) + "%";
+  }
+
+  step(side, dir) {
+    const pct = this.state.unit === "pct";
+    const key = side === "sl" ? (pct ? "slPct" : "slAbs") : (pct ? "tpPct" : "tpAbs");
+    const inc = pct ? 0.5 : 0.01;
+    this.setState(s => {
+      const next = Math.max(0, this.n(s[key]) + dir * inc);
+      return { [key]: next.toFixed(2) };
+    });
+  }
+
+  n(v) { const x = parseFloat(v); return isFinite(x) ? x : 0; }
+  money(v) { return "$" + v.toFixed(2); }
+  set(k) { return e => this.setState({ [k]: e.target.value }); }
+
+  derived() {
+    const entry = this.n(this.state.entry), pf = this.n(this.state.portfolio), fee = this.n(this.state.fee);
+    const pct = this.state.unit === "pct";
+    const slPct = pct ? this.n(this.state.slPct) : (entry ? (1 - this.n(this.state.slAbs) / entry) * 100 : 0);
+    const tpPct = pct ? this.n(this.state.tpPct) : (entry ? (this.n(this.state.tpAbs) / entry - 1) * 100 : 0);
+    const sl = entry * (1 - slPct / 100), tp = entry * (1 + tpPct / 100);
+    const shares = entry > 0 ? Math.floor(this.n(this.state.amount) / entry) : 0;
+    const cost = shares * entry, feeCost = cost * fee / 100;
+    return { entry, sl, tp, slPct, tpPct, shares, cost, pf, risk: shares * (entry - sl) + feeCost, reward: shares * (tp - entry) - feeCost };
+  }
+
+  applyPreset(name) {
+    const map = {
+      conservative: [["2", "1"], ["4", "2.5"], ["8", "16", "7", "12"], ["20", "40", "10"]],
+      balanced: [["3", "1.5"], ["6", "3"], ["10", "20", "10", "15"], ["30", "25", "10"]],
+      runner: [["4", "1"], ["10", "4"], ["14", "28", "16", "22"], ["45", "20", "10"]]
+    };
+    this.setState(s => ({ preset: name, stages: s.stages.map((st, i) => ({ ...st, v: map[name][i].slice() })) }));
+  }
+
+  renderVals() {
+    const d = this.derived();
+    const pct = this.state.unit === "pct";
+    const AMBER = "#f0a52e", INK = "#17181a", GREEN = "#4fc38a", RED = "#f2705c";
+    const onBg = AMBER, onText = INK, off = "transparent", offText = "#a9aeb2";
+    const rr = d.risk > 0 ? (d.reward / d.risk).toFixed(2) + ":1" : "—";
+    const liveCount = PLANS.filter(p => p.status === "Armed" || p.status === "Trailing").length;
+    const live = this.state.planTab === "live";
+
+    return {
+      ticker: this.state.ticker, tickerUpper: this.state.ticker.toUpperCase(),
+      entry: this.state.entry, amount: this.state.amount, portfolio: this.state.portfolio, fee: this.state.fee,
+      onTicker: this.set("ticker"), onEntry: this.set("entry"), onAmount: this.set("amount"),
+      onPortfolio: this.set("portfolio"), onFee: this.set("fee"),
+      onSl: this.set(pct ? "slPct" : "slAbs"), onTp: this.set(pct ? "tpPct" : "tpAbs"),
+      slInput: pct ? this.state.slPct : this.state.slAbs,
+      tpInput: pct ? this.state.tpPct : this.state.tpAbs,
+      unitSuffix: pct ? "%" : "$",
+      meterRef: this.meterRef, riskRef: this.riskRef,
+      slUp: () => this.step("sl", 1), slDown: () => this.step("sl", -1),
+      tpUp: () => this.step("tp", 1), tpDown: () => this.step("tp", -1),
+
+      setSizeMoney: () => this.setState({ sizeMode: "money" }),
+      setSizeRisk: () => this.setState({ sizeMode: "risk" }),
+      sizeMoneyBg: this.state.sizeMode === "money" ? onBg : off,
+      sizeRiskBg: this.state.sizeMode === "risk" ? onBg : off,
+      sizeMoneyColor: this.state.sizeMode === "money" ? onText : offText,
+      sizeRiskColor: this.state.sizeMode === "risk" ? onText : offText,
+      setUnitPct: () => this.setState({ unit: "pct" }),
+      setUnitPrice: () => this.setState({ unit: "price", slAbs: d.sl.toFixed(2), tpAbs: d.tp.toFixed(2) }),
+      unitPctBg: pct ? onBg : off, unitPriceBg: pct ? off : onBg,
+      unitPctColor: pct ? onText : offText, unitPriceColor: pct ? offText : onText,
+
+      quickAmounts: ["100", "200", "500", "1000"].map(a => ({ label: "$" + a, apply: () => this.setState({ amount: a }) })),
+      rrPresets: [1.5, 2, 3].map(r => ({ label: r + " : 1", apply: () => this.setState(s => ({ unit: "pct", tpPct: (this.n(s.slPct) * r).toFixed(2) })) })),
+
+      entryPrice: this.money(d.entry), slPrice: this.money(d.sl), tpPrice: this.money(d.tp),
+      slPctLabel: d.slPct.toFixed(1) + "%", tpPctLabel: d.tpPct.toFixed(1) + "%",
+      shares: String(d.shares), cost: this.money(d.cost),
+      risk: this.money(d.risk), reward: this.money(d.reward),
+      riskPct: d.pf > 0 ? (d.risk / d.pf * 100).toFixed(2) + "%" : "—",
+      budgetUse: d.pf > 0 ? Math.round(d.risk / (d.pf * 0.01) * 100) + "%" : "—",
+      riskThb: "฿" + (d.risk * this.state.rate).toLocaleString(undefined, { maximumFractionDigits: 0 }),
+      rate: this.state.rate.toFixed(2),
+      side: this.state.side, sideLabel: this.state.side,
+      setBuy: () => this.setState({ side: "BUY", confirming: false }),
+      setSell: () => this.setState({ side: "SELL", confirming: false }),
+      buyBg: this.state.side === "BUY" ? GREEN : "#232629",
+      buyInk: this.state.side === "BUY" ? INK : "#9aa0a6",
+      sellBg: this.state.side === "SELL" ? RED : "#232629",
+      sellInk: this.state.side === "SELL" ? INK : "#9aa0a6",
+
+      confirming: this.state.confirming, sent: this.state.sent,
+      confirmBg: this.state.side === "BUY" ? GREEN : RED,
+      modeLabel: "PAPER, simulated",
+      sendLabel: "SEND " + this.state.side,
+      rungsOnLabel: this.state.stages.filter(s => s.on).length + " of 4 rungs armed",
+      review: () => this.setState({ confirming: true, sent: false }),
+      cancel: () => this.setState({ confirming: false }),
+      send: () => this.setState({ confirming: false, sent: true }),
+      savePlan: () => {},
+
+      stats: [
+        { value: rr, label: "reward for every unit of risk", color: "#eceded" },
+        { value: d.risk + d.reward > 0 ? (d.risk / (d.risk + d.reward) * 100).toFixed(1) + "%" : "—", label: "win rate needed to break even", color: "#eceded" },
+        { value: this.money(d.reward), label: "gain at target, net of fees", color: GREEN }
+      ],
+
+      barStats: [
+        { label: "Position", value: d.shares + " sh · " + this.money(d.cost), color: INK },
+        { label: "Risk", value: this.money(d.risk), color: "#b7381f" },
+        { label: "Reward : risk", value: rr, color: INK },
+        { label: "Exit ladder", value: this.state.stages.filter(s => s.on).length + " of 4 rungs", color: INK }
+      ],
+
+      presets: ["conservative", "balanced", "runner"].map(k => ({
+        label: k, apply: () => this.applyPreset(k),
+        bg: this.state.preset === k ? onBg : off,
+        color: this.state.preset === k ? onText : offText
+      })),
+
+      stages: this.state.stages.map((s, i) => ({
+        num: String(i + 1), name: s.name, desc: s.desc, note: s.note,
+        cardBg: s.on ? "#232629" : "#1e2023",
+        fieldBg: s.on ? "#191b1e" : "#1a1c1f",
+        nameColor: s.on ? "#eceded" : "#7d838a",
+        dotBg: s.on ? AMBER : "#2c3034",
+        dotColor: s.on ? INK : "#7d838a",
+        toggle: () => this.setState(st => ({ stages: st.stages.map((x, j) => j === i ? { ...x, on: !x.on } : x) })),
+        fields: s.labels.map((label, k) => ({
+          label, value: s.v[k],
+          onChange: (e) => { const val = e.target.value; this.setState(st => ({ stages: st.stages.map((x, j) => j === i ? { ...x, v: x.v.map((vv, m) => m === k ? val : vv) } : x) })); }
+        }))
+      })),
+
+      plansTitle: live ? "Plans in play" : "Recently closed",
+      plansHint: live ? "only plans the engine is still watching live" : "last five closed — older ones live in the Orders app",
+      plansFooter: live ? liveCount + " live now · 214 plans in total history" : "showing 5 of 214 · filter, search and paging live in the Orders app",
+      planTabs: [{ key: "live", label: "In play " + liveCount }, { key: "closed", label: "Closed" }].map(x => ({
+        label: x.label, pick: () => this.setState({ planTab: x.key }),
+        bg: this.state.planTab === x.key ? onBg : off,
+        color: this.state.planTab === x.key ? onText : offText
+      })),
+      plans: (live ? PLANS.filter(p => p.status === "Armed" || p.status === "Trailing") : PLANS.filter(p => p.status !== "Armed" && p.status !== "Trailing").slice(0, 5))
+        .map(p => ({ ...p, statusColor: p.status === "Trailing" ? GREEN : p.status === "Armed" ? AMBER : "#9aa0a6" }))
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #151618; }
+  body { font-family: "Plus Jakarta Sans", system-ui, sans-serif; color: #eceded; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+  * { box-sizing: border-box; }
+  a { color: #f0a52e; text-decoration: none; }
+  a:hover { color: #f7c477; }
+  input::placeholder { color: rgba(23,24,26,0.62); font-weight: 700 }
+  @keyframes popIn { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: none } }
+  @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.5); opacity: 0.45 } }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #151618; padding: 14px; display: flex; flex-direction: column; gap: 14px">
+
+  <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+    <div style="display: flex; align-items: center; gap: 12px; background: #1e2023; border-radius: 999px; padding: 10px 22px 10px 12px">
+      <span style="width: 28px; height: 28px; border-radius: 9px; background: #f0a52e; color: #17181a; display: grid; place-items: center; font-size: 13px; font-weight: 800">T</span>
+      <span style="font-size: 14px; font-weight: 700">TradeEdge portal</span>
+    </div>
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 12px">
+      <div style="display: flex; align-items: center; gap: 9px; background: #1e2023; border-radius: 999px; padding: 12px 20px; font-size: 13px; color: #b6bbbf">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #f0a52e; animation: pulse 2.4s ease-in-out infinite"></span>
+        Market closed &middot; opens in 12:49:29
+      </div>
+      <div style="background: #f0a52e; color: #17181a; border-radius: 999px; padding: 12px 22px; font-size: 12px; font-weight: 800; letter-spacing: 0.1em">PAPER</div>
+      <div style="width: 40px; height: 40px; border-radius: 50%; background: #1e2023; display: grid; place-items: center; font-size: 14px; font-weight: 700">Y</div>
+    </div>
+  </div>
+
+  <section style="display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; align-items: stretch; animation: popIn 460ms cubic-bezier(0.22,1,0.36,1) both">
+    <div style="background: #1c1e21; border-radius: 30px; padding: 30px 32px; display: flex; flex-direction: column; gap: 22px">
+      <div>
+        <div style="font-size: 13px; color: #9aa0a6">Good morning, Yarnin</div>
+        <h1 style="margin: 6px 0 0; font-size: 52px; font-weight: 700; letter-spacing: -0.055em; line-height: 0.95">Where to today?</h1>
+      </div>
+      <div style="margin-top: auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 10px">
+        <sc-for list="{{ todayStats }}" as="s" hint-placeholder-count="4">
+          <div style="background: #232629; border-radius: 20px; padding: 16px 18px; min-width: 0">
+            <div style="font-size: 11.5px; color: #9aa0a6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ s.label }}</div>
+            <div style="font-size: clamp(19px, 2.1vw, 26px); font-weight: 700; letter-spacing: -0.04em; margin-top: 4px; color: {{ s.color }}; white-space: nowrap">{{ s.value }}</div>
+            <div style="font-size: 11.5px; color: #9aa0a6; line-height: 1.4">{{ s.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="background: #f0a52e; color: #17181a; border-radius: 30px; padding: 30px 32px; display: flex; flex-direction: column; gap: 18px">
+      <div style="font-size: 14px; font-weight: 800; letter-spacing: -0.01em">START A NEW BRACKET</div>
+      <div>
+        <div style="font-size: 15px; font-weight: 600; opacity: 0.8">Ticker</div>
+        <div style="display: flex; align-items: baseline; gap: 10px; margin-top: 4px">
+          <input ref="{{ tickerRef }}" value="{{ quickTicker }}" onChange="{{ onQuickTicker }}" placeholder="KWM" style="width: 100%; font-family: inherit; font-size: 46px; font-weight: 700; letter-spacing: -0.05em; text-transform: uppercase; color: #17181a; background: transparent; border: none; border-bottom: 3px dashed rgba(23,24,26,0.34); padding-bottom: 4px; caret-color: #17181a" style-hover="border-bottom-color: rgba(23,24,26,0.7)" style-focus="border-bottom: 3px solid #17181a; outline: none" />
+        </div>
+      </div>
+      <div style="background: rgba(23,24,26,0.14); border-radius: 16px; padding: 12px 16px; font-size: 12.5px; font-weight: 600; line-height: 1.5">
+        Nothing is stored before you submit &mdash; the terminal opens empty every time, and a bracket only exists once the engine accepts it.
+      </div>
+      <div style="margin-top: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+        <a href="{{ terminalHref }}" style="background: #17181a; color: #f0a52e; border-radius: 999px; padding: 15px 30px; font-size: 14.5px; font-weight: 700; transition: transform 120ms ease" style-hover="background: #000" style-active="transform: scale(0.96)">Open the terminal &#8250;</a>
+        <span style="font-size: 12.5px; font-weight: 700; opacity: 0.78">or press T to jump to this field</span>
+      </div>
+    </div>
+  </section>
+
+  <section style="display: flex; flex-direction: column; gap: 12px; animation: popIn 460ms cubic-bezier(0.22,1,0.36,1) 90ms both">
+    <div style="display: flex; align-items: baseline; gap: 14px; padding: 6px 6px 0">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.03em">All apps</h2>
+      <span style="font-size: 13px; color: #9aa0a6">five tools, one login &mdash; each opens full-screen</span>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(292px, 1fr)); gap: 12px">
+      <sc-for list="{{ apps }}" as="a" hint-placeholder-count="5">
+        <a href="{{ a.href }}" style="background: {{ a.cardBg }}; color: {{ a.ink }}; border-radius: 28px; padding: 24px 26px 22px; display: flex; flex-direction: column; gap: 16px; min-height: 232px; transition: transform 180ms cubic-bezier(0.22,1,0.36,1), box-shadow 180ms ease; text-decoration: none" style-hover="transform: translateY(-4px); box-shadow: 0 22px 50px -30px rgba(0,0,0,0.9)">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+            <span style="width: 42px; height: 42px; border-radius: 14px; background: {{ a.markBg }}; display: grid; place-items: center">
+              <span style="width: {{ a.markW }}; height: {{ a.markH }}; border-radius: {{ a.markRadius }}; background: {{ a.markColor }}; transform: {{ a.markRotate }}"></span>
+            </span>
+            <span style="font-size: 12px; font-weight: 700; letter-spacing: 0.08em; opacity: {{ a.tagOpacity }}">{{ a.tag }}</span>
+          </div>
+          <div>
+            <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.035em">{{ a.name }}</div>
+            <div style="font-size: 13px; line-height: 1.5; margin-top: 6px; opacity: {{ a.descOpacity }}">{{ a.desc }}</div>
+          </div>
+          <div style="margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px">
+            <span style="font-size: 13px; font-weight: 700">{{ a.state }}</span>
+            <span style="width: 32px; height: 32px; border-radius: 50%; background: {{ a.arrowBg }}; color: {{ a.arrowInk }}; display: grid; place-items: center; font-size: 15px; font-weight: 700">&#8250;</span>
+          </div>
+        </a>
+      </sc-for>
+    </div>
+  </section>
+
+  <section style="background: #1c1e21; border-radius: 30px; padding: 26px 28px 22px; display: flex; flex-direction: column; gap: 16px; animation: popIn 460ms cubic-bezier(0.22,1,0.36,1) 170ms both">
+    <div style="display: flex; align-items: baseline; gap: 14px">
+      <h2 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.03em">Today in the portal</h2>
+      <span style="font-size: 13px; color: #9aa0a6">whatever happened while you were away</span>
+      <a href="#" style="margin-left: auto; font-size: 12.5px; font-weight: 600">Notification settings &#8250;</a>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <sc-for list="{{ feed }}" as="e" hint-placeholder-count="4">
+        <div style="display: grid; grid-template-columns: 72px 150px minmax(0, 1fr) 128px; gap: 16px; align-items: center; background: #232629; border-radius: 18px; padding: 14px 18px; transition: background 160ms ease" style-hover="background: #2b2f33">
+          <span style="font-size: 12.5px; color: #9aa0a6">{{ e.time }}</span>
+          <span style="display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 700; color: {{ e.appColor }}">
+            <span style="width: 7px; height: 7px; border-radius: 50%; background: {{ e.appColor }}"></span>{{ e.app }}
+          </span>
+          <span style="font-size: 14px">{{ e.text }}</span>
+          <span style="font-size: 13px; font-weight: 700; text-align: right; color: {{ e.valueColor }}">{{ e.value }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1500,&quot;height&quot;:1080}}">
+const AMBER = "#f0a52e", INK = "#17181a", GREEN = "#4fc38a", RED = "#f2705c", PAPER = "#eceded";
+
+const APPS = [
+  { name: "Order Terminal", tag: "PLAN", desc: "Size a trade and write the bracket spec — entry, stop, target and the rung rules — then submit it.",
+    state: "opens empty", href: "Terminal-H-PopBlocks.dc.html", theme: "amber", shape: "dot" },
+  { name: "Scanner", tag: "FIND", desc: "Daily scan, gainers and your watchlist in one table — send a candidate straight to the terminal.",
+    state: "34 hits today", href: "#", theme: "dark", shape: "ring" },
+  { name: "Positions & Orders", tag: "MANAGE", desc: "Brackets the engine is maintaining right now, every order it sent, and the full history.",
+    state: "4 maintained · 214 total", href: "#", theme: "green", shape: "bar" },
+  { name: "Performance", tag: "REVIEW", desc: "Win rate by setup, expectancy, and the backtest that says whether the rung math holds.",
+    state: "updated 06:10", href: "#", theme: "dark", shape: "tall" },
+  { name: "Risk & Controls", tag: "GUARD", desc: "Risk gate, kill switch, per-trade budget and fee assumptions. Changes here affect every app.",
+    state: "gate armed", href: "#", theme: "red", shape: "diamond" }
+];
+
+class Component extends DCLogic {
+  state = { quickTicker: "" };
+  tickerRef = React.createRef();
+
+  componentDidMount() {
+    this.onKey = (e) => {
+      if (e.key !== "t" && e.key !== "T") return;
+      const el = this.tickerRef.current;
+      if (!el || document.activeElement === el) return;
+      const tag = (document.activeElement || {}).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      el.focus();
+    };
+    document.addEventListener("keydown", this.onKey);
+  }
+  componentWillUnmount() { document.removeEventListener("keydown", this.onKey); }
+
+  renderVals() {
+    const skin = {
+      amber: { cardBg: AMBER, ink: INK, markBg: "rgba(23,24,26,0.16)", markColor: INK, arrowBg: INK, arrowInk: AMBER, tagOpacity: 0.85, descOpacity: 0.92 },
+      green: { cardBg: GREEN, ink: INK, markBg: "rgba(23,24,26,0.16)", markColor: INK, arrowBg: INK, arrowInk: GREEN, tagOpacity: 0.85, descOpacity: 0.92 },
+      red: { cardBg: RED, ink: INK, markBg: "rgba(23,24,26,0.16)", markColor: INK, arrowBg: INK, arrowInk: RED, tagOpacity: 0.88, descOpacity: 0.94 },
+      dark: { cardBg: "#1c1e21", ink: PAPER, markBg: "#2c3034", markColor: AMBER, arrowBg: "#2c3034", arrowInk: PAPER, tagOpacity: 0.68, descOpacity: 0.74 }
+    };
+    const mark = {
+      dot: { markW: "16px", markH: "16px", markRadius: "50%", markRotate: "none" },
+      ring: { markW: "16px", markH: "16px", markRadius: "50%", markRotate: "none" },
+      bar: { markW: "20px", markH: "7px", markRadius: "3px", markRotate: "none" },
+      tall: { markW: "7px", markH: "20px", markRadius: "3px", markRotate: "none" },
+      diamond: { markW: "15px", markH: "15px", markRadius: "3px", markRotate: "rotate(45deg)" }
+    };
+
+    return {
+      quickTicker: this.state.quickTicker,
+      onQuickTicker: e => this.setState({ quickTicker: e.target.value }),
+      tickerRef: this.tickerRef,
+      terminalHref: this.state.quickTicker.trim()
+        ? "Terminal-H-PopBlocks.dc.html?ticker=" + encodeURIComponent(this.state.quickTicker.trim().toUpperCase())
+        : "Terminal-H-PopBlocks.dc.html",
+      todayStats: [
+        { label: "Portfolio equity", value: "$20,000", sub: "paper account", color: PAPER },
+        { label: "Risk used today", value: "$20.47", sub: "10% of budget", color: AMBER },
+        { label: "Brackets live", value: "4", sub: "engine maintained", color: PAPER },
+        { label: "Open P/L", value: "+$412.60", sub: "across live plans", color: GREEN }
+      ],
+
+      apps: APPS.map(a => ({ ...a, ...skin[a.theme], ...mark[a.shape] })),
+
+      feed: [
+        { time: "06:41", app: "Positions", appColor: GREEN, text: "AMD bracket lifted its stop to the profit-lock floor ($126.60)", value: "rung 2", valueColor: PAPER },
+        { time: "06:12", app: "Performance", appColor: AMBER, text: "Overnight backtest finished — 214 plans, 41.2% win rate", value: "2.1 expectancy", valueColor: GREEN },
+        { time: "05:58", app: "Scanner", appColor: PAPER, text: "34 new candidates matched your momentum preset", value: "34 hits", valueColor: PAPER },
+        { time: "yesterday", app: "Risk", appColor: RED, text: "Kill switch tested by the nightly job — passed", value: "ok", valueColor: GREEN }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

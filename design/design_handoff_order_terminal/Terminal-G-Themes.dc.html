@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #07060d; }
+  body { font-family: "Plus Jakarta Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums; }
+  * { box-sizing: border-box; }
+  a { color: inherit; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  input { font-family: inherit; color: inherit; font-variant-numeric: tabular-nums; background: transparent; }
+  input:focus { outline: none; }
+</style>
+</helmet>
+<div style="min-height: 100vh; background: {{ t.pageBg }}; color: {{ t.text }}; padding: 16px; display: flex; gap: 16px">
+
+
+
+  <main style="flex: 1; min-width: 0; max-width: 1720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px">
+
+    <div style="display: flex; align-items: center; gap: 12px; padding: 2px 4px 0; flex-wrap: wrap">
+      <a href="#" style="display: flex; align-items: center; gap: 10px; padding: 10px 18px 10px 14px; border-radius: 999px; border: 1px solid {{ t.fieldBorder }}; background: {{ t.panel }}; color: {{ t.text }}; font-size: 13px; font-weight: 500; text-decoration: none" style-hover="background: {{ t.hover }}">
+        <span style="font-size: 15px; line-height: 1">&#8249;</span>
+        <span>All apps</span>
+      </a>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-radius: 999px; background: {{ t.inset }}; border: 1px solid {{ t.border }}">
+        <span style="width: 22px; height: 22px; border-radius: 7px; background: {{ t.accent }}; color: {{ t.accentText }}; display: grid; place-items: center; font-size: 11px; font-weight: 600">T</span>
+        <span style="font-size: 12.5px; color: {{ t.dim }}">TradeEdge portal</span>
+        <span style="font-size: 12.5px; color: {{ t.dim }}">/</span>
+        <span style="font-size: 13px; font-weight: 600">Order Terminal</span>
+      </div>
+      <span style="margin-left: auto; font-size: 11.5px; color: {{ t.dim }}; letter-spacing: 0.08em">THEME</span>
+      <sc-for list="{{ themeOptions }}" as="o" hint-placeholder-count="5">
+        <div onClick="{{ o.pick }}" style="display: flex; align-items: center; gap: 9px; padding: 8px 15px; border-radius: 999px; cursor: pointer; font-size: 12.5px; font-weight: 500; border: 1px solid {{ o.border }}; background: {{ o.bg }}; color: {{ o.color }}">
+          <span style="width: 11px; height: 11px; border-radius: 50%; background: {{ o.swatch }}"></span>{{ o.label }}
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; align-items: flex-end; gap: 24px; padding: 8px 14px 2px; flex-wrap: wrap">
+      <div>
+        <div style="display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: {{ t.dim }}">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: {{ t.accent }}"></span>Market closed &middot; opens in 12:49:29
+        </div>
+        <h1 style="margin: 4px 0 0; font-size: 46px; font-weight: 500; letter-spacing: -0.045em; line-height: 1">Order Terminal</h1>
+      </div>
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 10px">
+        <div style="background: {{ t.panel }}; border: 1px solid {{ t.border }}; border-radius: 999px; padding: 10px 18px; display: flex; align-items: center; gap: 10px">
+          <span style="font-size: 15px; font-weight: 600">{{ tickerUpper }}</span>
+          <span style="font-size: 13px; color: {{ t.dim }}">{{ entryPrice }}</span>
+        </div>
+        <div style="background: {{ t.accentSoft }}; border: 1px solid {{ t.accentSoftBorder }}; color: {{ t.accentSoftText }}; border-radius: 999px; padding: 11px 20px; font-size: 12px; font-weight: 600; letter-spacing: 0.12em">PAPER</div>
+        <div title="Yarnin · Trader" style="width: 38px; height: 38px; border-radius: 50%; background: {{ t.inset }}; border: 1px solid {{ t.border }}; display: grid; place-items: center; font-size: 13.5px; font-weight: 600; cursor: pointer">Y</div>
+      </div>
+    </div>
+
+    <section style="display: grid; grid-template-columns: minmax(0, 1.04fr) minmax(0, 1fr); gap: 16px; align-items: start">
+
+      <div style="background: {{ t.panel }}; border: 1px solid {{ t.border }}; border-radius: 30px; padding: 28px 30px; display: flex; flex-direction: column; gap: 26px; backdrop-filter: blur(22px)">
+        <div style="display: flex; align-items: baseline; justify-content: space-between">
+          <h2 style="margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.03em">The ticket</h2>
+          <span style="font-size: 12.5px; color: {{ t.dim }}">step 1 of 2</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1.25fr 1fr; gap: 14px">
+          <label style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">Ticker</span>
+            <input value="{{ ticker }}" onChange="{{ onTicker }}" style="border: 1px solid {{ t.fieldBorder }}; background: {{ t.field }}; border-radius: 18px; padding: 14px 18px; font-size: 20px; font-weight: 600; text-transform: uppercase" />
+          </label>
+          <label style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">Entry price</span>
+            <div style="position: relative; display: flex; align-items: center">
+              <span style="position: absolute; left: 18px; font-size: 15px; color: {{ t.dim }}">$</span>
+              <input value="{{ entry }}" onChange="{{ onEntry }}" style="width: 100%; border: 1px solid {{ t.fieldBorder }}; background: {{ t.field }}; border-radius: 18px; padding: 14px 18px 14px 32px; font-size: 20px; font-weight: 600" />
+            </div>
+          </label>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 11px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">Position size</span>
+            <div style="display: flex; gap: 4px; padding: 4px; background: {{ t.inset }}; border-radius: 999px">
+              <div onClick="{{ setSizeMoney }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; background: {{ sizeMoneyBg }}; color: {{ sizeMoneyColor }}">By cash</div>
+              <div onClick="{{ setSizeRisk }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; background: {{ sizeRiskBg }}; color: {{ sizeRiskColor }}">By risk</div>
+            </div>
+          </div>
+          <div style="position: relative; display: flex; align-items: center">
+            <span style="position: absolute; left: 18px; font-size: 15px; color: {{ t.dim }}">$</span>
+            <input value="{{ amount }}" onChange="{{ onAmount }}" style="width: 100%; border: 1px solid {{ t.fieldBorder }}; background: {{ t.field }}; border-radius: 18px; padding: 14px 18px 14px 32px; font-size: 20px; font-weight: 600" />
+          </div>
+          <div style="display: flex; gap: 7px; align-items: center">
+            <sc-for list="{{ quickAmounts }}" as="q" hint-placeholder-count="4">
+              <div onClick="{{ q.apply }}" style="padding: 7px 15px; border: 1px solid {{ t.fieldBorder }}; border-radius: 999px; font-size: 12.5px; color: {{ t.dim }}; cursor: pointer" style-hover="background: {{ t.hover }}">{{ q.label }}</div>
+            </sc-for>
+            <span style="margin-left: auto; font-size: 13px; color: {{ t.dim }}">buys {{ shares }} shares</span>
+          </div>
+        </div>
+
+        <div style="height: 1px; background: {{ t.border }}"></div>
+
+        <div style="display: flex; flex-direction: column; gap: 13px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">Stop loss &amp; take profit</span>
+            <div style="display: flex; gap: 4px; padding: 4px; background: {{ t.inset }}; border-radius: 999px">
+              <div onClick="{{ setUnitPct }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; background: {{ unitPctBg }}; color: {{ unitPctColor }}">percent</div>
+              <div onClick="{{ setUnitPrice }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; background: {{ unitPriceBg }}; color: {{ unitPriceColor }}">price</div>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+            <div style="background: {{ t.solidDown }}; border: 1px solid {{ t.solidDown }}; border-radius: 22px; padding: 18px 20px">
+              <div style="display: flex; align-items: baseline; justify-content: space-between">
+                <span style="font-size: 13px; font-weight: 600; color: {{ t.onSolid }}">Stop loss</span>
+                <span style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.72">{{ slPrice }}</span>
+              </div>
+              <div style="display: flex; align-items: baseline; gap: 5px; margin-top: 10px">
+                <input value="{{ slInput }}" onChange="{{ onSl }}" style="border: none; padding: 0; width: 100%; font-size: 38px; font-weight: 500; letter-spacing: -0.04em; color: {{ t.onSolid }}" />
+                <span style="font-size: 18px; color: {{ t.onSolid }}; opacity: 0.72">{{ unitSuffix }}</span>
+              </div>
+              <div style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.78; margin-top: 7px">−{{ risk }} if it fires</div>
+            </div>
+            <div style="background: {{ t.solidUp }}; border: 1px solid {{ t.solidUp }}; border-radius: 22px; padding: 18px 20px">
+              <div style="display: flex; align-items: baseline; justify-content: space-between">
+                <span style="font-size: 13px; font-weight: 600; color: {{ t.onSolid }}">Take profit</span>
+                <span style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.72">{{ tpPrice }}</span>
+              </div>
+              <div style="display: flex; align-items: baseline; gap: 5px; margin-top: 10px">
+                <input value="{{ tpInput }}" onChange="{{ onTp }}" style="border: none; padding: 0; width: 100%; font-size: 38px; font-weight: 500; letter-spacing: -0.04em; color: {{ t.onSolid }}" />
+                <span style="font-size: 18px; color: {{ t.onSolid }}; opacity: 0.72">{{ unitSuffix }}</span>
+              </div>
+              <div style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.78; margin-top: 7px">+{{ reward }} at target</div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">or set the target from a ratio</span>
+            <sc-for list="{{ rrPresets }}" as="p" hint-placeholder-count="3">
+              <div onClick="{{ p.apply }}" style="padding: 7px 15px; border: 1px solid {{ t.fieldBorder }}; border-radius: 999px; font-size: 12.5px; color: {{ t.dim }}; cursor: pointer" style-hover="background: {{ t.hover }}">{{ p.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="height: 1px; background: {{ t.border }}"></div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px">
+          <label style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">Portfolio equity</span>
+            <input value="{{ portfolio }}" onChange="{{ onPortfolio }}" style="border: 1px solid {{ t.fieldBorder }}; background: {{ t.field }}; border-radius: 16px; padding: 12px 16px; font-size: 15px; font-weight: 500" />
+          </label>
+          <label style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12.5px; color: {{ t.dim }}">Round-trip fee %</span>
+            <input value="{{ fee }}" onChange="{{ onFee }}" style="border: 1px solid {{ t.fieldBorder }}; background: {{ t.field }}; border-radius: 16px; padding: 12px 16px; font-size: 15px; font-weight: 500" />
+          </label>
+        </div>
+        <div style="font-size: 12.5px; color: {{ t.dim }}; line-height: 1.55; margin-top: -16px">0.15% per leg plus 7% VAT lands near 0.32% round trip — every floor below already carries it.</div>
+      </div>
+
+      <div style="position: sticky; top: 16px; background: {{ t.hero }}; border: 1px solid {{ t.heroBorder }}; color: {{ t.heroText }}; border-radius: 30px; padding: 28px 30px; display: flex; flex-direction: column; gap: 24px; backdrop-filter: blur(26px)">
+        <div style="display: flex; align-items: center; justify-content: space-between">
+          <span style="font-size: 12.5px; color: {{ t.heroDim }}">What you are risking</span>
+          <span style="display: flex; align-items: center; gap: 7px; font-size: 12px; color: {{ t.heroDim }}">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: {{ t.heroAccent }}"></span>live
+          </span>
+        </div>
+
+        <div style="background: {{ t.solidNeutral }}; border-radius: 24px; padding: 22px 24px; color: {{ t.onSolid }}; display: flex; flex-direction: column; gap: 16px">
+          <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 20px">
+            <div>
+              <div style="font-size: 12.5px; opacity: 0.75">Risk if the stop fires</div>
+              <div style="font-size: 62px; font-weight: 600; letter-spacing: -0.05em; line-height: 1; margin-top: 4px">{{ risk }}</div>
+            </div>
+            <div style="text-align: right">
+              <div style="font-size: 28px; font-weight: 600; letter-spacing: -0.04em">{{ riskPct }}</div>
+              <div style="font-size: 11.5px; opacity: 0.75">of portfolio equity</div>
+            </div>
+          </div>
+          <div>
+            <div style="height: 9px; border-radius: 999px; background: rgba(0,0,0,0.16); overflow: hidden">
+              <div ref="{{ ringRef }}" style="height: 100%; width: 0%; border-radius: 999px; background: {{ t.onSolid }}; transition: width 160ms ease"></div>
+            </div>
+            <div style="display: flex; align-items: baseline; justify-content: space-between; margin-top: 8px">
+              <span style="font-size: 11.5px; opacity: 0.75">risk budget used &middot; 1% of equity</span>
+              <span style="font-size: 12.5px; font-weight: 700">{{ budgetUse }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 7px">
+          <div style="display: flex; align-items: center; justify-content: space-between; background: {{ t.solidUp }}; border: 1px solid {{ t.solidUp }}; border-radius: 18px; padding: 15px 18px">
+            <span style="font-size: 13.5px; font-weight: 600; color: {{ t.onSolid }}">Take profit</span>
+            <div style="display: flex; align-items: baseline; gap: 12px">
+              <span style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.72">+{{ tpPctLabel }}</span>
+              <span style="font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: {{ t.onSolid }}">{{ tpPrice }}</span>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; background: {{ t.solidNeutral }}; border: 1px solid {{ t.solidNeutral }}; border-radius: 18px; padding: 15px 18px">
+            <span style="font-size: 13.5px; font-weight: 600; color: {{ t.onSolid }}">Entry</span>
+            <div style="display: flex; align-items: baseline; gap: 12px">
+              <span style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.72">{{ shares }} shares · {{ cost }}</span>
+              <span style="font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: {{ t.onSolid }}">{{ entryPrice }}</span>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; background: {{ t.solidDown }}; border: 1px solid {{ t.solidDown }}; border-radius: 18px; padding: 15px 18px">
+            <span style="font-size: 13.5px; font-weight: 600; color: {{ t.onSolid }}">Stop loss</span>
+            <div style="display: flex; align-items: baseline; gap: 12px">
+              <span style="font-size: 12.5px; color: {{ t.onSolid }}; opacity: 0.72">−{{ slPctLabel }}</span>
+              <span style="font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: {{ t.onSolid }}">{{ slPrice }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; background: {{ t.sunken }}; border: 1px solid {{ t.heroBorder }}; border-radius: 20px; padding: 18px 20px">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="3">
+            <div>
+              <div style="font-size: 26px; font-weight: 500; letter-spacing: -0.04em; color: {{ s.color }}">{{ s.value }}</div>
+              <div style="font-size: 11.5px; color: {{ t.heroDim }}; line-height: 1.45; margin-top: 4px">{{ s.label }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </section>
+
+    <section style="background: {{ t.panel }}; border: 1px solid {{ t.border }}; border-radius: 30px; padding: 28px 30px; display: flex; flex-direction: column; gap: 20px; backdrop-filter: blur(22px)">
+      <div style="display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap">
+        <div>
+          <h2 style="margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.03em">The exit ladder <span style="font-size: 12.5px; font-weight: 400; color: {{ t.dim }}">step 2 of 2</span></h2>
+          <p style="margin: 5px 0 0; font-size: 13.5px; color: {{ t.dim }}">Price climbs rung by rung. Every rung only raises the floor — none of them lowers it.</p>
+        </div>
+        <div style="margin-left: auto; display: flex; align-items: center; gap: 10px">
+          <span style="font-size: 12.5px; color: {{ t.dim }}">preset</span>
+          <div style="display: flex; gap: 4px; padding: 4px; background: {{ t.inset }}; border-radius: 999px">
+            <sc-for list="{{ presets }}" as="p" hint-placeholder-count="3">
+              <div onClick="{{ p.apply }}" style="padding: 8px 18px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; background: {{ p.bg }}; color: {{ p.color }}">{{ p.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 12px">
+        <sc-for list="{{ stages }}" as="s" hint-placeholder-count="4">
+          <div style="background: {{ s.cardBg }}; border: 1px solid {{ s.cardBorder }}; border-radius: 24px; padding: 20px; display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; align-items: center; gap: 12px">
+              <div onClick="{{ s.toggle }}" style="width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; font-size: 13.5px; font-weight: 600; background: {{ s.dotBg }}; color: {{ s.dotColor }}; border: 1px solid {{ s.dotBorder }}">{{ s.num }}</div>
+              <div style="font-size: 16px; font-weight: 600; letter-spacing: -0.025em; color: {{ s.nameColor }}">{{ s.name }}</div>
+            </div>
+            <div style="font-size: 12.5px; color: {{ t.dim }}; line-height: 1.5">{{ s.desc }}</div>
+            <div style="display: flex; flex-direction: column; gap: 9px">
+              <sc-for list="{{ s.fields }}" as="f" hint-placeholder-count="2">
+                <label style="display: flex; align-items: center; gap: 10px; justify-content: space-between">
+                  <span style="font-size: 11.5px; color: {{ t.dim }}; line-height: 1.35">{{ f.label }}</span>
+                  <input value="{{ f.value }}" onChange="{{ f.onChange }}" style="width: 72px; flex: 0 0 72px; border: 1px solid {{ t.fieldBorder }}; background: {{ t.field }}; border-radius: 12px; padding: 8px 10px; font-size: 14px; font-weight: 500; text-align: right" />
+                </label>
+              </sc-for>
+            </div>
+            <div style="margin-top: auto; font-size: 11.5px; color: {{ t.dim }}; line-height: 1.6; border-top: 1px solid {{ t.border }}; padding-top: 12px">{{ s.note }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+
+    <section style="background: {{ t.panel }}; border: 1px solid {{ t.border }}; border-radius: 30px; padding: 26px 30px 20px; backdrop-filter: blur(22px)">
+      <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px">
+        <h2 style="margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.03em">{{ plansTitle }}</h2>
+        <div style="display: flex; gap: 4px; padding: 4px; background: {{ t.inset }}; border-radius: 999px">
+          <sc-for list="{{ planTabs }}" as="tab" hint-placeholder-count="2">
+            <div onClick="{{ tab.pick }}" style="padding: 7px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 500; cursor: pointer; background: {{ tab.bg }}; color: {{ tab.color }}">{{ tab.label }}</div>
+          </sc-for>
+        </div>
+        <span style="font-size: 12.5px; color: {{ t.dim }}">{{ plansHint }}</span>
+        <a href="#" style="margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 999px; border: 1px solid {{ t.fieldBorder }}; font-size: 12.5px; color: {{ t.text }}; text-decoration: none" style-hover="background: {{ t.hover }}">
+          <span>Open Orders app</span>
+          <span style="font-size: 14px; line-height: 1">&#8250;</span>
+        </a>
+      </div>
+      <div style="display: grid; grid-template-columns: 96px 122px 58px repeat(4, minmax(0, 1fr)) 84px; padding: 0 8px 10px; font-size: 11.5px; color: {{ t.dim }}">
+        <span>Ticker</span><span>Status</span><span style="text-align: right">Sh</span><span style="text-align: right">Entry</span><span style="text-align: right">SL</span><span style="text-align: right">TP</span><span style="text-align: right">High</span><span style="text-align: right">Log</span>
+      </div>
+      <div style="max-height: 268px; overflow-y: auto">
+        <sc-for list="{{ plans }}" as="p" hint-placeholder-count="4">
+          <div style="display: grid; grid-template-columns: 96px 122px 58px repeat(4, minmax(0, 1fr)) 84px; padding: 13px 8px; align-items: center; border-top: 1px solid {{ t.border }}; font-size: 14px" style-hover="background: {{ t.hover }}">
+            <span style="font-weight: 600">{{ p.ticker }}</span>
+            <span style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: {{ p.statusColor }}">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: {{ p.statusColor }}"></span>{{ p.status }}
+            </span>
+            <span style="text-align: right; color: {{ t.dim }}">{{ p.shares }}</span>
+            <span style="text-align: right; font-weight: 500">{{ p.entry }}</span>
+            <span style="text-align: right; color: {{ t.down }}">{{ p.sl }}</span>
+            <span style="text-align: right; color: {{ t.up }}">{{ p.tp }}</span>
+            <span style="text-align: right; color: {{ t.dim }}">{{ p.high }}</span>
+            <span style="text-align: right; font-size: 12.5px; cursor: pointer">History</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; padding-top: 14px; border-top: 1px solid {{ t.border }}; margin-top: 4px">
+        <span style="font-size: 12px; color: {{ t.dim }}">{{ plansFooter }}</span>
+        <a href="#" style="margin-left: auto; font-size: 12.5px; color: {{ t.accentFlat }}; text-decoration: none">See the full history &#8250;</a>
+      </div>
+    </section>
+
+    <div style="position: sticky; bottom: 16px; z-index: 30; margin-top: 4px">
+      <div style="background: {{ t.bar }}; border: 1px solid {{ t.barBorder }}; color: {{ t.barText }}; border-radius: 999px; padding: 12px 14px 12px 26px; display: flex; align-items: center; gap: 26px; backdrop-filter: blur(26px)">
+        <sc-for list="{{ barStats }}" as="b" hint-placeholder-count="4">
+          <div style="display: flex; flex-direction: column">
+            <span style="font-size: 11px; color: {{ t.barDim }}">{{ b.label }}</span>
+            <span style="font-size: 16px; font-weight: 600; letter-spacing: -0.02em; color: {{ b.color }}">{{ b.value }}</span>
+          </div>
+        </sc-for>
+        <div style="margin-left: auto; display: flex; align-items: center; gap: 12px">
+          <span title="Saves the plan only — live orders still pass the risk gate and kill switch." style="width: 26px; height: 26px; border-radius: 50%; border: 1px solid {{ t.barBorder }}; color: {{ t.barDim }}; display: grid; place-items: center; font-size: 12px; cursor: help">i</span>
+          <div onClick="{{ savePlan }}" style="background: {{ t.barAccent }}; color: {{ t.barAccentText }}; border-radius: 999px; padding: 15px 34px; font-size: 15px; font-weight: 600; cursor: pointer" style-hover="filter: brightness(1.08)">Save this plan</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1500,&quot;height&quot;:1250},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;nightglow&quot;,&quot;softpaper&quot;,&quot;crimson&quot;,&quot;electric&quot;,&quot;dune&quot;,&quot;study&quot;,&quot;pop&quot;,&quot;graphite&quot;,&quot;nordic&quot;,&quot;blacklime&quot;],&quot;default&quot;:&quot;graphite&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const THEMES = {
+  nightglow: {
+    label: "Nightglow", swatch: "#8b5cf6",
+    pageBg: "radial-gradient(1100px 700px at 12% -10%, rgba(124,58,237,0.42), transparent 62%), radial-gradient(900px 680px at 88% 6%, rgba(37,60,255,0.34), transparent 60%), radial-gradient(1200px 800px at 55% 110%, rgba(88,28,235,0.30), transparent 65%), #07060d",
+    text: "#f3f1fb", dim: "#a29dbe", panel: "rgba(255,255,255,0.045)", border: "rgba(255,255,255,0.10)",
+    inset: "rgba(255,255,255,0.06)", hover: "rgba(255,255,255,0.07)", tick: "rgba(255,255,255,0.22)",
+    field: "rgba(255,255,255,0.05)", fieldBorder: "rgba(255,255,255,0.13)",
+    accent: "linear-gradient(120deg, #a78bfa, #6d28d9)", accentText: "#ffffff", accentFlat: "#8b5cf6",
+    accentSoft: "rgba(139,92,246,0.18)", accentSoftBorder: "rgba(167,139,250,0.5)", accentSoftText: "#ddd6fe",
+    up: "#86efac", upDim: "#9fd8b5", upBg: "rgba(74,222,128,0.10)", upBorder: "rgba(74,222,128,0.26)",
+    down: "#fda4af", downDim: "#e5a3ad", downBg: "rgba(251,113,133,0.10)", downBorder: "rgba(251,113,133,0.28)",
+    hero: "#100d1e", heroBorder: "rgba(167,139,250,0.24)", heroText: "#f3f1fb", heroDim: "#a29dbe", heroAccent: "#c4b5fd",
+    heroInset: "rgba(255,255,255,0.06)", heroUp: "#86efac", heroUpBg: "rgba(74,222,128,0.10)", heroUpBorder: "rgba(74,222,128,0.24)",
+    heroDown: "#fda4af", heroDownBg: "rgba(251,113,133,0.10)", heroDownBorder: "rgba(251,113,133,0.26)",
+    bar: "rgba(12,10,24,0.88)", barBorder: "rgba(167,139,250,0.28)", barText: "#f3f1fb", barDim: "#a29dbe",
+    barAccent: "linear-gradient(120deg, #a78bfa, #6d28d9)", barAccentText: "#ffffff",
+    solidUp: "#7de6a4", solidDown: "#ff8098", solidNeutral: "#b7a6ff", onSolid: "#141033",
+    sunken: "#191536",
+    ringTrack: "rgba(255,255,255,0.12)", ringFill: "#a78bfa"
+  },
+  softpaper: {
+    label: "Soft paper", swatch: "#1a1a1a",
+    pageBg: "linear-gradient(180deg, #f2f2f4 0%, #eceef4 60%, #e8eaf2 100%)",
+    text: "#15151a", dim: "#6c6b76", panel: "#fbfbfd", border: "#e4e4ea",
+    inset: "#f1f1f5", hover: "#f4f4f8", tick: "#cfcfd8",
+    field: "#f6f6f9", fieldBorder: "#e2e2e9",
+    accent: "#15151a", accentText: "#ffffff", accentFlat: "#15151a",
+    accentSoft: "#eceef6", accentSoftBorder: "#d8dbe8", accentSoftText: "#3a3f52",
+    up: "#1d7a52", upDim: "#4c9273", upBg: "#eaf4ee", upBorder: "#cfe6da",
+    down: "#b3402c", downDim: "#b9705f", downBg: "#fbeeea", downBorder: "#f0d5cd",
+    hero: "#15151a", heroBorder: "#26262e", heroText: "#f7f7fa", heroDim: "#9c9caa", heroAccent: "#c9c9d6",
+    heroInset: "rgba(255,255,255,0.07)", heroUp: "#7ee0a8", heroUpBg: "rgba(126,224,168,0.12)", heroUpBorder: "rgba(126,224,168,0.28)",
+    heroDown: "#f3a08c", heroDownBg: "rgba(243,160,140,0.12)", heroDownBorder: "rgba(243,160,140,0.28)",
+    bar: "rgba(21,21,26,0.94)", barBorder: "#2a2a33", barText: "#f7f7fa", barDim: "#9c9caa",
+    barAccent: "#f7f7fa", barAccentText: "#15151a",
+    solidUp: "#6fd8a0", solidDown: "#ff8b76", solidNeutral: "#dcdee6", onSolid: "#15151a",
+    sunken: "#1e1e26",
+    ringTrack: "rgba(255,255,255,0.14)", ringFill: "#f7f7fa"
+  },
+  crimson: {
+    label: "Crimson press", swatch: "#e11d48",
+    pageBg: "linear-gradient(180deg, #f6f2f2 0%, #f2eeed 100%)",
+    text: "#171313", dim: "#6f6663", panel: "#fdfbfa", border: "#e8e1de",
+    inset: "#f3eeec", hover: "#f7f2f0", tick: "#dbd2ce",
+    field: "#f7f3f1", fieldBorder: "#e6ded9",
+    accent: "#e11d48", accentText: "#ffffff", accentFlat: "#e11d48",
+    accentSoft: "#fdeaee", accentSoftBorder: "#f6cdd6", accentSoftText: "#a8123a",
+    up: "#166b4c", upDim: "#4c8a71", upBg: "#eaf3ee", upBorder: "#cde3d7",
+    down: "#c31f45", downDim: "#bd6478", downBg: "#fdedf0", downBorder: "#f4d2da",
+    hero: "#171313", heroBorder: "#2b2222", heroText: "#faf7f6", heroDim: "#a2938f", heroAccent: "#fb7185",
+    heroInset: "rgba(255,255,255,0.07)", heroUp: "#7fdca9", heroUpBg: "rgba(127,220,169,0.12)", heroUpBorder: "rgba(127,220,169,0.26)",
+    heroDown: "#fb7185", heroDownBg: "rgba(251,113,133,0.14)", heroDownBorder: "rgba(251,113,133,0.3)",
+    bar: "rgba(23,19,19,0.94)", barBorder: "#2f2424", barText: "#faf7f6", barDim: "#a2938f",
+    barAccent: "#e11d48", barAccentText: "#ffffff",
+    solidUp: "#62cf9a", solidDown: "#ff7a8f", solidNeutral: "#f4ddd9", onSolid: "#171313",
+    sunken: "#231c1c",
+    ringTrack: "rgba(255,255,255,0.14)", ringFill: "#fb7185"
+  },
+  electric: {
+    label: "Electric lime", swatch: "#6d28d9",
+    pageBg: "linear-gradient(180deg, #f6f5fb 0%, #efeefa 100%)",
+    text: "#141330", dim: "#635f86", panel: "#ffffff", border: "#e7e5f4",
+    inset: "#f2f0fb", hover: "#f6f4fe", tick: "#d5d1ee",
+    field: "#f7f6fd", fieldBorder: "#e4e1f4",
+    accent: "#6d28d9", accentText: "#ffffff", accentFlat: "#6d28d9",
+    accentSoft: "#efeaff", accentSoftBorder: "#dbd0ff", accentSoftText: "#5b21b6",
+    up: "#3f7d16", upDim: "#6a9349", upBg: "#f1f8e4", upBorder: "#dcecc0",
+    down: "#b3123f", downDim: "#b45a75", downBg: "#fdeaf0", downBorder: "#f6cfda",
+    hero: "#1b1145", heroBorder: "#2f2470", heroText: "#f6f4ff", heroDim: "#a49dd6", heroAccent: "#c7f24a",
+    heroInset: "rgba(255,255,255,0.08)", heroUp: "#c7f24a", heroUpBg: "rgba(199,242,74,0.14)", heroUpBorder: "rgba(199,242,74,0.32)",
+    heroDown: "#ff9db3", heroDownBg: "rgba(255,157,179,0.13)", heroDownBorder: "rgba(255,157,179,0.3)",
+    bar: "rgba(27,17,69,0.95)", barBorder: "#352a7d", barText: "#f6f4ff", barDim: "#a49dd6",
+    barAccent: "#c7f24a", barAccentText: "#1b1145",
+    solidUp: "#c7f24a", solidDown: "#ff9db3", solidNeutral: "#cfc4ff", onSolid: "#1b1145",
+    sunken: "#251a5c",
+    ringTrack: "rgba(255,255,255,0.15)", ringFill: "#c7f24a"
+  },
+  dune: {
+    label: "Dune", swatch: "#f2c44c",
+    pageBg: "linear-gradient(165deg, #efe9e3 0%, #e9e0d8 45%, #ded2c6 100%)",
+    text: "#171514", dim: "#6d645d", panel: "rgba(255,253,251,0.86)", border: "rgba(120,104,90,0.16)",
+    inset: "rgba(120,104,90,0.09)", hover: "rgba(120,104,90,0.08)", tick: "rgba(120,104,90,0.32)",
+    field: "rgba(255,253,251,0.72)", fieldBorder: "rgba(120,104,90,0.2)",
+    accent: "#171514", accentText: "#ffffff", accentFlat: "#171514",
+    accentSoft: "#f7e6ba", accentSoftBorder: "#e6cf95", accentSoftText: "#6b5312",
+    up: "#1f6b4f", upDim: "#4f8a73", upBg: "rgba(31,107,79,0.09)", upBorder: "rgba(31,107,79,0.22)",
+    down: "#b0402c", downDim: "#b5705f", downBg: "rgba(176,64,44,0.08)", downBorder: "rgba(176,64,44,0.2)",
+    hero: "#171514", heroBorder: "#2b2724", heroText: "#faf7f4", heroDim: "#a09589", heroAccent: "#f2c44c",
+    heroInset: "rgba(255,255,255,0.07)", heroUp: "#8ddcb0", heroUpBg: "rgba(141,220,176,0.12)", heroUpBorder: "rgba(141,220,176,0.26)",
+    heroDown: "#f3a48d", heroDownBg: "rgba(243,164,141,0.12)", heroDownBorder: "rgba(243,164,141,0.28)",
+    bar: "rgba(23,21,20,0.94)", barBorder: "#302b27", barText: "#faf7f4", barDim: "#a09589",
+    barAccent: "#f2c44c", barAccentText: "#171514",
+    solidUp: "#7fd8ab", solidDown: "#f4956f", solidNeutral: "#f2c44c", onSolid: "#171514",
+    sunken: "#221f1c",
+    ringTrack: "rgba(255,255,255,0.14)", ringFill: "#f2c44c"
+  },
+  study: {
+    label: "Study cream", swatch: "#e4607d",
+    pageBg: "linear-gradient(170deg, #f8f8e4 0%, #f4f3dc 60%, #eeecd0 100%)",
+    text: "#1b1a16", dim: "#6b6a56", panel: "#fdfdf1", border: "#e4e3c6",
+    inset: "#f1f1d9", hover: "#f5f5e2", tick: "#cfcfae",
+    field: "#f7f7e6", fieldBorder: "#e2e1c2",
+    accent: "#e4607d", accentText: "#ffffff", accentFlat: "#e4607d",
+    accentSoft: "#fce9ee", accentSoftBorder: "#f4ccd7", accentSoftText: "#b03354",
+    up: "#256b58", upDim: "#548a7a", upBg: "#e9f3ee", upBorder: "#c8e2d6",
+    down: "#c23b4f", downDim: "#bd6b79", downBg: "#fceaec", downBorder: "#f3ced4",
+    hero: "#20443c", heroBorder: "#2e5a4f", heroText: "#f5faf6", heroDim: "#a3bfb4", heroAccent: "#f2b13c",
+    heroInset: "rgba(255,255,255,0.09)", heroUp: "#9fe3b8", heroUpBg: "rgba(159,227,184,0.14)", heroUpBorder: "rgba(159,227,184,0.3)",
+    heroDown: "#ff9aa8", heroDownBg: "rgba(255,154,168,0.14)", heroDownBorder: "rgba(255,154,168,0.3)",
+    bar: "rgba(32,68,60,0.95)", barBorder: "#336054", barText: "#f5faf6", barDim: "#a3bfb4",
+    barAccent: "#f2b13c", barAccentText: "#20443c",
+    solidUp: "#7fd3a8", solidDown: "#f2718c", solidNeutral: "#f2b13c", onSolid: "#1b1a16",
+    sunken: "#173730",
+    ringTrack: "rgba(255,255,255,0.16)", ringFill: "#f2b13c"
+  },
+  pop: {
+    label: "Pop yellow", swatch: "#ffd60a",
+    pageBg: "#ffd60a",
+    text: "#101010", dim: "#5b5324", panel: "#fff7cf", border: "#e8c00a",
+    inset: "#ffe873", hover: "#ffeb8a", tick: "#c9a20a",
+    field: "#fffae0", fieldBorder: "#e2bd12",
+    accent: "#101010", accentText: "#ffd60a", accentFlat: "#101010",
+    accentSoft: "#101010", accentSoftBorder: "#101010", accentSoftText: "#ffd60a",
+    up: "#0f7a3d", upDim: "#4a7a58", upBg: "#d8f5df", upBorder: "#8fd3a5",
+    down: "#c02c17", downDim: "#a35b4c", downBg: "#ffe0d8", downBorder: "#f0a08c",
+    hero: "#101010", heroBorder: "#2a2a2a", heroText: "#fffbe6", heroDim: "#b9b39a", heroAccent: "#ffd60a",
+    heroInset: "#1a1a1a", heroUp: "#22c55e", heroUpBg: "rgba(34,197,94,0.14)", heroUpBorder: "rgba(34,197,94,0.4)",
+    heroDown: "#f4523b", heroDownBg: "rgba(244,82,59,0.14)", heroDownBorder: "rgba(244,82,59,0.4)",
+    bar: "#101010", barBorder: "#101010", barText: "#fffbe6", barDim: "#b9b39a",
+    barAccent: "#ffd60a", barAccentText: "#101010",
+    solidUp: "#22c55e", solidDown: "#f4523b", solidNeutral: "#ffd60a", onSolid: "#101010",
+    sunken: "#151515",
+    ringTrack: "#2a2a2a", ringFill: "#ffd60a"
+  },
+  graphite: {
+    label: "Graphite amber", swatch: "#f0a52e",
+    pageBg: "linear-gradient(180deg, #17181a 0%, #121315 100%)",
+    text: "#eceded", dim: "#95999d", panel: "#1c1e21", border: "#2a2d31",
+    inset: "#232629", hover: "#26292d", tick: "#41464b",
+    field: "#202326", fieldBorder: "#31353a",
+    accent: "#f0a52e", accentText: "#17181a", accentFlat: "#f0a52e",
+    accentSoft: "rgba(240,165,46,0.14)", accentSoftBorder: "rgba(240,165,46,0.4)", accentSoftText: "#f4c377",
+    up: "#4fc38a", upDim: "#7fae97", upBg: "rgba(79,195,138,0.10)", upBorder: "rgba(79,195,138,0.24)",
+    down: "#f2705c", downDim: "#c08074", downBg: "rgba(242,112,92,0.10)", downBorder: "rgba(242,112,92,0.26)",
+    hero: "#101113", heroBorder: "#2c2f33", heroText: "#eceded", heroDim: "#95999d", heroAccent: "#f0a52e",
+    heroInset: "#1a1c1f", heroUp: "#4fc38a", heroUpBg: "rgba(79,195,138,0.10)", heroUpBorder: "rgba(79,195,138,0.24)",
+    heroDown: "#f2705c", heroDownBg: "rgba(242,112,92,0.10)", heroDownBorder: "rgba(242,112,92,0.26)",
+    bar: "rgba(16,17,19,0.95)", barBorder: "#2c2f33", barText: "#eceded", barDim: "#95999d",
+    barAccent: "#f0a52e", barAccentText: "#17181a",
+    solidUp: "#4fc38a", solidDown: "#f2705c", solidNeutral: "#f0a52e", onSolid: "#17181a",
+    sunken: "#181a1d",
+    ringTrack: "#2a2d31", ringFill: "#f0a52e"
+  },
+  nordic: {
+    label: "Nordic ice", swatch: "#3f6f9c",
+    pageBg: "linear-gradient(180deg, #eef1f4 0%, #e6ebf0 100%)",
+    text: "#141a20", dim: "#5f6a75", panel: "#fbfcfd", border: "#dde3e9",
+    inset: "#eef1f5", hover: "#f2f5f8", tick: "#c4ccd5",
+    field: "#f5f7fa", fieldBorder: "#dbe1e8",
+    accent: "#3f6f9c", accentText: "#ffffff", accentFlat: "#3f6f9c",
+    accentSoft: "#e8eff6", accentSoftBorder: "#cfdce8", accentSoftText: "#2f5878",
+    up: "#1c6f5a", upDim: "#4d8a7a", upBg: "#e9f3f0", upBorder: "#c9e2da",
+    down: "#a8412f", downDim: "#ad7064", downBg: "#fbeeeb", downBorder: "#f0d6cf",
+    hero: "#152230", heroBorder: "#243545", heroText: "#f2f6fa", heroDim: "#9aabbb", heroAccent: "#7fb3e0",
+    heroInset: "rgba(255,255,255,0.07)", heroUp: "#7fd8b6", heroUpBg: "rgba(127,216,182,0.12)", heroUpBorder: "rgba(127,216,182,0.26)",
+    heroDown: "#f2a293", heroDownBg: "rgba(242,162,147,0.12)", heroDownBorder: "rgba(242,162,147,0.28)",
+    bar: "rgba(21,34,48,0.95)", barBorder: "#26394b", barText: "#f2f6fa", barDim: "#9aabbb",
+    barAccent: "#7fb3e0", barAccentText: "#152230",
+    solidUp: "#63c9a5", solidDown: "#ec7f6b", solidNeutral: "#8fc0e8", onSolid: "#152230",
+    sunken: "#1c2b3b",
+    ringTrack: "rgba(255,255,255,0.15)", ringFill: "#7fb3e0"
+  },
+  blacklime: {
+    label: "Black lime", swatch: "#b6f24a",
+    pageBg: "#050505",
+    text: "#f4f4f0", dim: "#98988f", panel: "#141414", border: "#242424",
+    inset: "#1d1d1d", hover: "#1f1f1f", tick: "#3a3a3a",
+    field: "#1b1b1b", fieldBorder: "#2c2c2c",
+    accent: "#b6f24a", accentText: "#0d0d0d", accentFlat: "#b6f24a",
+    accentSoft: "#1d2410", accentSoftBorder: "#3c5220", accentSoftText: "#cdf47f",
+    up: "#b6f24a", upDim: "#8fae63", upBg: "rgba(182,242,74,0.10)", upBorder: "rgba(182,242,74,0.26)",
+    down: "#ff8c42", downDim: "#c3805a", downBg: "rgba(255,140,66,0.10)", downBorder: "rgba(255,140,66,0.28)",
+    hero: "#101010", heroBorder: "#262626", heroText: "#f4f4f0", heroDim: "#98988f", heroAccent: "#b6f24a",
+    heroInset: "#191919", heroUp: "#b6f24a", heroUpBg: "rgba(182,242,74,0.10)", heroUpBorder: "rgba(182,242,74,0.24)",
+    heroDown: "#ff8c42", heroDownBg: "rgba(255,140,66,0.10)", heroDownBorder: "rgba(255,140,66,0.26)",
+    bar: "rgba(16,16,16,0.95)", barBorder: "#2a2a2a", barText: "#f4f4f0", barDim: "#98988f",
+    barAccent: "#b6f24a", barAccentText: "#0d0d0d",
+    solidUp: "#b6f24a", solidDown: "#ff8c42", solidNeutral: "#e9e9e0", onSolid: "#0d0d0d",
+    sunken: "#0a0a0a",
+    ringTrack: "#262626", ringFill: "#b6f24a"
+  }
+};
+
+const NAV = [
+  { label: "Dashboard", badge: "", shape: "square" },
+  { label: "Market Overview", badge: "", shape: "bar" },
+  { label: "Daily Scanner", badge: "", shape: "ring" },
+  { label: "Gainers", badge: "", shape: "diamond" },
+  { label: "Order Terminal", badge: "", shape: "dot" },
+  { label: "Watchlist", badge: "2", shape: "ring" },
+  { label: "Positions", badge: "", shape: "tall" },
+  { label: "Orders", badge: "3", shape: "bar" },
+  { label: "Performance", badge: "", shape: "tall" },
+  { label: "Backtest", badge: "", shape: "square" },
+  { label: "Analytics", badge: "", shape: "diamond" },
+  { label: "Alerts", badge: "", shape: "dot" },
+  { label: "News & Catalyst", badge: "", shape: "bar" }
+];
+
+const PLANS = [
+  { ticker: "KWM", status: "Armed", shares: "86", entry: "$2.30", sl: "$2.07", tp: "$2.88", high: "$2.41" },
+  { ticker: "NVDA", status: "Trailing", shares: "12", entry: "$202.00", sl: "$208.04", tp: "$281.00", high: "$234.17" },
+  { ticker: "SOFI", status: "Armed", shares: "310", entry: "$8.05", sl: "$7.48", tp: "$9.66", high: "$8.19" },
+  { ticker: "AMD", status: "Trailing", shares: "40", entry: "$121.40", sl: "$126.60", tp: "$148.10", high: "$131.02" },
+  { ticker: "PLTR", status: "Filled", shares: "95", entry: "$26.10", sl: "$24.20", tp: "$32.60", high: "$33.05" },
+  { ticker: "NVDA", status: "Cancelled", shares: "1", entry: "$200.00", sl: "$196.00", tp: "$260.00", high: "$223.90" },
+  { ticker: "TSLA", status: "Stopped", shares: "18", entry: "$188.20", sl: "$179.00", tp: "$226.00", high: "$191.40" },
+  { ticker: "COIN", status: "Filled", shares: "22", entry: "$142.60", sl: "$132.00", tp: "$178.00", high: "$180.15" },
+  { ticker: "RIVN", status: "Stopped", shares: "140", entry: "$14.90", sl: "$13.85", tp: "$18.60", high: "$15.10" }
+];
+
+class Component extends DCLogic {
+  state = {
+    navOpen: true,
+    planTab: "live",
+    theme: THEMES[this.props.theme] ? this.props.theme : "nightglow",
+    ticker: "KWM", entry: "2.30", amount: "200", sizeMode: "money", unit: "pct",
+    slPct: "10", tpPct: "25.22", slAbs: "2.07", tpAbs: "2.88",
+    portfolio: "20000", fee: "0.35", preset: "balanced",
+    stages: [
+      { on: true, name: "Break-even", desc: "Stops a winner from turning into a loss.", note: "If it stalls here it exits at this floor — a small gain, never red.", v: ["3", "1.5"], labels: ["Arm at gain %", "Lift SL to gain %"] },
+      { on: true, name: "Profit lock", desc: "Banks a real slice instead of giving it all back.", note: "This floor sits above rung one; however far price retraces, it holds.", v: ["6", "3"], labels: ["Arm at gain %", "Lift SL to gain %"] },
+      { on: true, name: "Trail", desc: "Lets a runner run, following at a fixed distance.", note: "Rungs one and two measure from entry; the trail measures from the high.", v: ["10", "20", "10", "15"], labels: ["SL trails from gain %", "TP widens from gain %", "SL below high %", "TP above high %"] },
+      { on: true, name: "Partial take-profit", desc: "Takes cash off the table without closing the runner.", note: "Sent as a limit at the arm price, never market — it will not walk down its own book.", v: ["30", "25", "10"], labels: ["Arm at gain %", "Sell % of position", "Skip under N shares"] }
+    ]
+  };
+
+  ringRef = React.createRef();
+  componentDidMount() { this.paintRing(); }
+  componentDidUpdate() { this.paintRing(); }
+  paintRing() {
+    const el = this.ringRef.current; if (!el) return;
+    const d = this.derived();
+    const budget = d.pf * 0.01;
+    const share = budget > 0 ? Math.max(0, Math.min(1, d.risk / budget)) : 0;
+    el.style.width = (share * 100).toFixed(1) + "%";
+  }
+
+  n(v) { const x = parseFloat(v); return isFinite(x) ? x : 0; }
+  money(v) { return "$" + v.toFixed(2); }
+  set(k) { return e => this.setState({ [k]: e.target.value }); }
+
+  derived() {
+    const entry = this.n(this.state.entry), pf = this.n(this.state.portfolio), fee = this.n(this.state.fee);
+    const pct = this.state.unit === "pct";
+    const slPct = pct ? this.n(this.state.slPct) : (entry ? (1 - this.n(this.state.slAbs) / entry) * 100 : 0);
+    const tpPct = pct ? this.n(this.state.tpPct) : (entry ? (this.n(this.state.tpAbs) / entry - 1) * 100 : 0);
+    const sl = entry * (1 - slPct / 100), tp = entry * (1 + tpPct / 100);
+    const shares = entry > 0 ? Math.floor(this.n(this.state.amount) / entry) : 0;
+    const cost = shares * entry, feeCost = cost * fee / 100;
+    return { entry, sl, tp, slPct, tpPct, shares, cost, pf, risk: shares * (entry - sl) + feeCost, reward: shares * (tp - entry) - feeCost };
+  }
+
+  applyPreset(name) {
+    const map = {
+      conservative: [["2", "1"], ["4", "2.5"], ["8", "16", "7", "12"], ["20", "40", "10"]],
+      balanced: [["3", "1.5"], ["6", "3"], ["10", "20", "10", "15"], ["30", "25", "10"]],
+      runner: [["4", "1"], ["10", "4"], ["14", "28", "16", "22"], ["45", "20", "10"]]
+    };
+    this.setState(s => ({ preset: name, stages: s.stages.map((st, i) => ({ ...st, v: map[name][i].slice() })) }));
+  }
+
+  renderVals() {
+    const t = THEMES[this.state.theme];
+    const d = this.derived();
+    const pct = this.state.unit === "pct";
+    const rr = d.risk > 0 ? (d.reward / d.risk).toFixed(2) + ":1" : "—";
+    const rungsOn = this.state.stages.filter(s => s.on).length;
+    const onBg = t.accent, onText = t.accentText, off = "transparent", offText = t.dim;
+    const open = this.state.navOpen;
+    const liveCount = PLANS.filter(p => p.status === "Armed" || p.status === "Trailing").length;
+
+    return {
+      t,
+      themeOptions: Object.keys(THEMES).map(k => {
+        const th = THEMES[k], active = this.state.theme === k;
+        return { label: th.label, swatch: th.swatch, pick: () => this.setState({ theme: k }),
+          bg: active ? t.accent : t.panel, color: active ? t.accentText : t.dim,
+          border: active ? "transparent" : t.border };
+      }),
+
+      expanded: open, collapsed: !open,
+      navWidth: open ? "244px" : "84px",
+      navPad: open ? "24px 18px" : "24px 14px",
+      navItemPad: open ? "8px 12px" : "8px",
+      navJustify: open ? "flex-start" : "center",
+      navToggleGlyph: open ? "\u2039\u2039" : "\u203a\u203a",
+      navToggleTitle: open ? "Collapse sidebar" : "Expand sidebar",
+      toggleNav: () => this.setState(s => ({ navOpen: !s.navOpen })),
+      navItems: NAV.map(n => {
+        const active = n.label === "Order Terminal";
+        return {
+          label: n.label, badge: n.badge, showBadge: open && !!n.badge,
+          weight: active ? 600 : 400,
+          bg: active ? t.accent : "transparent",
+          hoverBg: active ? t.accent : t.hover,
+          color: active ? t.accentText : t.dim,
+          iconBg: active ? "rgba(255,255,255,0.18)" : t.inset,
+          markBg: n.shape === "ring" ? "transparent" : (active ? t.accentText : t.tick),
+          markBorder: n.shape === "ring" ? "2px solid " + (active ? t.accentText : t.tick) : "none",
+          markRadius: (n.shape === "dot" || n.shape === "ring") ? "50%" : n.shape === "bar" ? "2px" : "3px",
+          markW: n.shape === "bar" ? "13px" : n.shape === "tall" ? "5px" : "11px",
+          markH: n.shape === "bar" ? "5px" : n.shape === "tall" ? "13px" : "11px",
+          markRotate: n.shape === "diamond" ? "rotate(45deg)" : "none"
+        };
+      }),
+
+      ticker: this.state.ticker, tickerUpper: this.state.ticker.toUpperCase(),
+      entry: this.state.entry, amount: this.state.amount, portfolio: this.state.portfolio, fee: this.state.fee,
+      onTicker: this.set("ticker"), onEntry: this.set("entry"), onAmount: this.set("amount"),
+      onPortfolio: this.set("portfolio"), onFee: this.set("fee"),
+      onSl: this.set(pct ? "slPct" : "slAbs"), onTp: this.set(pct ? "tpPct" : "tpAbs"),
+      slInput: pct ? this.state.slPct : this.state.slAbs,
+      tpInput: pct ? this.state.tpPct : this.state.tpAbs,
+      unitSuffix: pct ? "%" : "$",
+      ringRef: this.ringRef,
+
+      setSizeMoney: () => this.setState({ sizeMode: "money" }),
+      setSizeRisk: () => this.setState({ sizeMode: "risk" }),
+      sizeMoneyBg: this.state.sizeMode === "money" ? onBg : off,
+      sizeRiskBg: this.state.sizeMode === "risk" ? onBg : off,
+      sizeMoneyColor: this.state.sizeMode === "money" ? onText : offText,
+      sizeRiskColor: this.state.sizeMode === "risk" ? onText : offText,
+      setUnitPct: () => this.setState({ unit: "pct" }),
+      setUnitPrice: () => this.setState({ unit: "price", slAbs: d.sl.toFixed(2), tpAbs: d.tp.toFixed(2) }),
+      unitPctBg: pct ? onBg : off, unitPriceBg: pct ? off : onBg,
+      unitPctColor: pct ? onText : offText, unitPriceColor: pct ? offText : onText,
+
+      quickAmounts: ["100", "200", "500", "1000"].map(a => ({ label: "$" + a, apply: () => this.setState({ amount: a }) })),
+      rrPresets: [1.5, 2, 3].map(r => ({ label: r + " : 1", apply: () => this.setState(s => ({ unit: "pct", tpPct: (this.n(s.slPct) * r).toFixed(2) })) })),
+
+      entryPrice: this.money(d.entry), slPrice: this.money(d.sl), tpPrice: this.money(d.tp),
+      slPctLabel: d.slPct.toFixed(1) + "%", tpPctLabel: d.tpPct.toFixed(1) + "%",
+      shares: String(d.shares), cost: this.money(d.cost),
+      risk: this.money(d.risk), reward: this.money(d.reward),
+      riskPct: d.pf > 0 ? (d.risk / d.pf * 100).toFixed(2) + "%" : "—",
+      budgetUse: d.pf > 0 ? Math.round(d.risk / (d.pf * 0.01) * 100) + "%" : "—",
+      savePlan: () => {},
+
+      stats: [
+        { value: rr, label: "reward for every unit of risk", color: t.heroText },
+        { value: d.risk + d.reward > 0 ? (d.risk / (d.risk + d.reward) * 100).toFixed(1) + "%" : "—", label: "win rate needed to break even", color: t.heroText },
+        { value: this.money(d.reward), label: "gain at target, net of fees", color: t.heroUp }
+      ],
+
+      barStats: [
+        { label: "Position", value: d.shares + " sh · " + this.money(d.cost), color: t.barText },
+        { label: "Risk", value: this.money(d.risk), color: t.heroDown },
+        { label: "Reward : risk", value: rr, color: t.barText },
+        { label: "Exit ladder", value: rungsOn + " of 4 rungs", color: t.heroAccent }
+      ],
+
+      presets: ["conservative", "balanced", "runner"].map(k => ({
+        label: k, apply: () => this.applyPreset(k),
+        bg: this.state.preset === k ? onBg : off,
+        color: this.state.preset === k ? onText : offText
+      })),
+
+      stages: this.state.stages.map((s, i) => ({
+        num: String(i + 1), name: s.name, desc: s.desc, note: s.note,
+        cardBg: s.on ? t.inset : "transparent",
+        cardBorder: s.on ? t.border : t.border,
+        nameColor: s.on ? t.text : t.dim,
+        dotBg: s.on ? t.accent : "transparent",
+        dotColor: s.on ? t.accentText : t.dim,
+        dotBorder: s.on ? "transparent" : t.fieldBorder,
+        toggle: () => this.setState(st => ({ stages: st.stages.map((x, j) => j === i ? { ...x, on: !x.on } : x) })),
+        fields: s.labels.map((label, k) => ({
+          label, value: s.v[k],
+          onChange: (e) => { const val = e.target.value; this.setState(st => ({ stages: st.stages.map((x, j) => j === i ? { ...x, v: x.v.map((vv, m) => m === k ? val : vv) } : x) })); }
+        }))
+      })),
+
+      plansTitle: this.state.planTab === "live" ? "Plans in play" : "Recently closed",
+      plansHint: this.state.planTab === "live"
+        ? "only plans the engine is still watching live here"
+        : "last five closed plans — everything older lives in the Orders app",
+      plansFooter: this.state.planTab === "live"
+        ? liveCount + " live now · 214 plans in total history"
+        : "showing 5 of 214 · filter, search and paging live in the Orders app",
+      planTabs: [
+        { key: "live", label: "In play " + liveCount },
+        { key: "closed", label: "Closed" }
+      ].map(x => ({
+        label: x.label, pick: () => this.setState({ planTab: x.key }),
+        bg: this.state.planTab === x.key ? onBg : off,
+        color: this.state.planTab === x.key ? onText : offText
+      })),
+      plans: (this.state.planTab === "live" ? PLANS.filter(p => p.status === "Armed" || p.status === "Trailing") : PLANS.filter(p => p.status !== "Armed" && p.status !== "Trailing").slice(0, 5))
+        .map(p => ({ ...p, statusColor: p.status === "Trailing" ? t.up : p.status === "Armed" ? t.accentFlat : t.dim }))
+    };
+  }
+}
+</script>
+</body>
+</html>
