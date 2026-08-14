@@ -39,12 +39,20 @@ type Options struct {
 	// BookDepth lets a preview size against the market instead of only against the
 	// money. Optional; without it depth is reported as unknown.
 	BookDepth BookDepth
+	// Symbols answers whether a ticker exists at all, and SymbolQuoter whether the
+	// venue will quote it. Both optional: without them the terminal accepts anything,
+	// which is where it started.
+	Symbols      SymbolDirectory
+	SymbolQuoter SymbolQuoter
 }
 
 type Handler struct {
 	repository         Repository
 	allowedOrigin      string
 	bookDepth          BookDepth
+	symbols            SymbolDirectory
+	symbolQuoter       SymbolQuoter
+	symbolVerdicts     *symbolVerdicts
 	logger             *slog.Logger
 	mux                *http.ServeMux
 	events             EventSource
@@ -79,10 +87,14 @@ func NewHandler(repository Repository, options Options) *Handler {
 		gainersSource:      options.Gainers,
 		bracketSource:      options.Brackets,
 		bookDepth:          options.BookDepth,
+		symbols:            options.Symbols,
+		symbolQuoter:       options.SymbolQuoter,
+		symbolVerdicts:     newSymbolVerdicts(30 * time.Minute),
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
 	handler.mux.HandleFunc("GET /scan", handler.scan)
+	handler.mux.HandleFunc("GET /symbols/{ticker}", handler.symbolLookup)
 	handler.mux.HandleFunc("GET /candidates", handler.candidates)
 	handler.mux.HandleFunc("GET /gainers", handler.gainers)
 	handler.mux.HandleFunc("GET /watchlist", handler.watchlist)

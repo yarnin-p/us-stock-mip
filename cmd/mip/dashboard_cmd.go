@@ -329,7 +329,12 @@ func runServe(args []string, stderr io.Writer) error {
 		Brackets:           bracketService,
 		// The same store the quotes are written to. A preview that sizes from money
 		// alone prices an exit it has not checked exists.
-		BookDepth:     store,
+		BookDepth: store,
+		// The directory answers instantly from the local universe; the quoter is the
+		// broker agreeing it will carry the symbol, which is the answer that decides
+		// whether an order can be sent at all.
+		Symbols:       store,
+		SymbolQuoter:  symbolQuoterFor(bracketBroker),
 		RuntimeHealth: runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.
@@ -3373,4 +3378,33 @@ func limitTickers(tickers []string, maximum int) []string {
 		return tickers
 	}
 	return tickers[:maximum]
+}
+
+/* The venue's own answer to "do you carry this symbol", taken from the snapshot call
+ * because that is the same test the stream subscription applies. Returns nil when the
+ * broker cannot answer, and the handler treats a missing quoter as "cannot disprove"
+ * rather than as a refusal -- an unreachable broker should not make every symbol look
+ * invalid. */
+func symbolQuoterFor(broker any) dashboard.SymbolQuoter {
+	source, ok := broker.(webullSnapshotSource)
+	if !ok || source == nil {
+		return nil
+	}
+	return snapshotSymbolQuoter{source: source}
+}
+
+type snapshotSymbolQuoter struct{ source webullSnapshotSource }
+
+func (quoter snapshotSymbolQuoter) QuotableSymbols(
+	ctx context.Context, symbols []string,
+) ([]string, error) {
+	snapshots, err := quoter.source.SnapshotsBestEffort(ctx, symbols, false)
+	if err != nil {
+		return nil, err
+	}
+	quotable := make([]string, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		quotable = append(quotable, snapshot.Symbol)
+	}
+	return quotable, nil
 }

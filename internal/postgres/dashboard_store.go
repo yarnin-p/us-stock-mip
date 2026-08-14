@@ -1278,3 +1278,25 @@ func dashboardQuote(
 		ObservedAt: *observedAt, Source: feedSource,
 	}
 }
+
+/* The local symbol directory. One indexed lookup, which is what makes it worth doing
+ * at the field: a typo comes back before the next keystroke lands, without asking the
+ * broker anything. */
+func (store *Store) LookupSymbol(
+	ctx context.Context, ticker string,
+) (dashboard.SymbolInfo, error) {
+	info := dashboard.SymbolInfo{Ticker: ticker}
+	err := store.pool.QueryRow(ctx, `
+		SELECT ticker, coalesce(company_name,''), coalesce(exchange,'')
+		  FROM stocks
+		 WHERE ticker = $1`, ticker,
+	).Scan(&info.Ticker, &info.Name, &info.Exchange)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return dashboard.SymbolInfo{Ticker: ticker}, nil
+	}
+	if err != nil {
+		return dashboard.SymbolInfo{}, fmt.Errorf("looking up %s: %w", ticker, err)
+	}
+	info.Known = true
+	return info, nil
+}

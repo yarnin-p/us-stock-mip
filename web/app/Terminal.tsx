@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useCurrency } from "./currency";
+import { sanitizeDecimal, sanitizeInteger, sanitizeTicker } from "./inputs";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
@@ -256,6 +257,31 @@ export function TerminalView() {
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState("");
   const [reload, setReload] = useState(0);
+
+  /* What the server says about the symbol in the field. Debounced, because it asks on
+   * a pause in typing rather than on every keystroke, and aborted on the next edit so
+   * a slow answer for "KW" cannot land after "KWM". */
+  const [symbol, setSymbol] = useState<{
+    ticker: string; known: boolean; tradable: boolean; reason?: string; name?: string;
+  } | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    const clean = ticker.trim();
+    if (clean.length < 1) { setSymbol(null); setChecking(false); return; }
+    const controller = new AbortController();
+    setChecking(true);
+    const timer = setTimeout(() => {
+      fetch(`${API}/symbols/${encodeURIComponent(clean)}`, { signal: controller.signal })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((answer) => { if (answer) setSymbol(answer); })
+        .catch(() => {})
+        .finally(() => setChecking(false));
+    }, 250);
+    return () => { controller.abort(); clearTimeout(timer); setChecking(false); };
+  }, [ticker]);
+
+  const symbolBad = Boolean(symbol && symbol.ticker === ticker.trim() && !symbol.tradable);
 
   /* The hub hands the ticker over in the query string. Read after mount rather than
    * during render: the server has no location to read, so initialising state from it
@@ -568,13 +594,26 @@ export function TerminalView() {
     ? Math.min(1, plan.risk_percent_of_account / 0.01)
     : 0;
   const armed = [breakEvenOn, profitLockOn, true, partialOn].filter(Boolean).length;
-  const canSend = Boolean(request) && ladderError === "" && Boolean(plan);
+  const canSend =
+    Boolean(request) && ladderError === "" && Boolean(plan) && !symbolBad;
 
-  const field = (label: string, value: string, set: (next: string) => void) => (
+  /* Percentages take a decimal point; a share count does not. "Skip under 10.5 shares"
+   * is not a rule anyone can act on, and the server rounds it anyway. */
+  const field = (
+    label: string,
+    value: string,
+    set: (next: string) => void,
+    whole = false,
+  ) => (
     <label className="tg-rungfield">
       <span>{label}</span>
-      <input value={value} inputMode="decimal"
-        onChange={(event) => set(event.target.value)} />
+      <input
+        value={value}
+        inputMode={whole ? "numeric" : "decimal"}
+        onChange={(event) =>
+          set(whole ? sanitizeInteger(event.target.value) : sanitizeDecimal(event.target.value))
+        }
+      />
     </label>
   );
 
@@ -625,13 +664,21 @@ export function TerminalView() {
           </div>
 
           <div className="tg-fields">
-            <label className="tg-card">
-              <span>Ticker</span>
+            <label className={`tg-card${symbolBad ? " bad" : ""}`}>
+              <span>
+                Ticker
+                {symbol?.name && symbol.tradable && (
+                  <em className="tg-symname">{symbol.name}</em>
+                )}
+              </span>
               <input
                 className="tg-in tg-in-ticker" value={ticker} placeholder="RCEL"
                 spellCheck={false} autoComplete="off"
-                onChange={(event) => setTicker(event.target.value.toUpperCase())}
+                aria-invalid={symbolBad}
+                onChange={(event) => setTicker(sanitizeTicker(event.target.value))}
               />
+              {symbolBad && <em className="tg-symbad">{symbol?.reason}</em>}
+              {checking && !symbolBad && <em className="tg-symcheck">checking…</em>}
             </label>
             <label className="tg-card">
               <span>Entry price</span>
@@ -639,7 +686,7 @@ export function TerminalView() {
                 <i className="tg-prefix">$</i>
                 <input
                   className="tg-in" value={entry} inputMode="decimal" placeholder="7.77"
-                  onChange={(event) => setEntry(event.target.value)}
+                  onChange={(event) => setEntry(sanitizeDecimal(event.target.value))}
                 />
               </span>
             </label>
@@ -668,7 +715,7 @@ export function TerminalView() {
               <input
                 className="tg-in tg-in-amount" value={amount} inputMode="decimal"
                 placeholder={basis === "budget" ? "200" : "40"}
-                onChange={(event) => setAmount(event.target.value)}
+                onChange={(event) => setAmount(sanitizeDecimal(event.target.value))}
               />
               <span className="tg-shares">
                 {plan ? `= ${plan.shares.toLocaleString()} shares` : ""}
@@ -699,7 +746,7 @@ export function TerminalView() {
                 <input
                   className="tg-in tg-in-exit" value={stopPct} inputMode="decimal"
                   placeholder={exitUnit === "pct" ? "10" : "2.07"}
-                  onChange={(event) => setStopPct(event.target.value)}
+                  onChange={(event) => setStopPct(sanitizeDecimal(event.target.value))}
                 />
                 <i>{exitUnit === "pct" ? "%" : "$"}</i>
               </div>
@@ -725,7 +772,7 @@ export function TerminalView() {
                 <input
                   className="tg-in tg-in-exit" value={targetPct} inputMode="decimal"
                   placeholder={exitUnit === "pct" ? "25" : "2.88"}
-                  onChange={(event) => setTargetPct(event.target.value)}
+                  onChange={(event) => setTargetPct(sanitizeDecimal(event.target.value))}
                 />
                 <i>{exitUnit === "pct" ? "%" : "$"}</i>
               </div>
@@ -748,7 +795,7 @@ export function TerminalView() {
             <label className="tg-pillfield pushed">
               <span>Equity</span>
               <input value={equity} inputMode="decimal"
-                onChange={(event) => setEquity(event.target.value)} />
+                onChange={(event) => setEquity(sanitizeDecimal(event.target.value))} />
             </label>
             <label className="tg-pillfield narrow">
               <span>Fee %</span>
@@ -757,7 +804,7 @@ export function TerminalView() {
               <input
                 value={feeOverride || (fee.fraction * 100).toFixed(2)}
                 inputMode="decimal"
-                onChange={(event) => setFeeOverride(event.target.value)}
+                onChange={(event) => setFeeOverride(sanitizeDecimal(event.target.value))}
               />
             </label>
           </div>
@@ -932,7 +979,7 @@ export function TerminalView() {
             <div className="tg-rungfields">
               {field("Arm at gain %", partialAfter, setPartialAfter)}
               {field("Sell % of position", partialFraction, setPartialFraction)}
-              {field("Skip under N shares", partialMinShares, setPartialMinShares)}
+              {field("Skip under N shares", partialMinShares, setPartialMinShares, true)}
             </div>
             <p className="tg-rungnote">
               Sent as a limit at the arm price, never market — it will not walk down its
@@ -1049,7 +1096,7 @@ function CurrencySwitch({
           <span>USD/THB</span>
           <input
             value={draft || rate.toFixed(2)} inputMode="decimal"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => setDraft(sanitizeDecimal(event.target.value))}
             onBlur={() => { const next = Number(draft); if (next > 0) onRate(next); setDraft(""); }}
           />
         </label>
@@ -1520,12 +1567,12 @@ function Manage({
           <label className="tm-field">
             <span>SL price</span>
             <input className="tm-input" value={stop} inputMode="decimal"
-              onChange={(event) => setStop(event.target.value)} />
+              onChange={(event) => setStop(sanitizeDecimal(event.target.value))} />
           </label>
           <label className="tm-field">
             <span>TP price</span>
             <input className="tm-input" value={target} inputMode="decimal"
-              onChange={(event) => setTarget(event.target.value)} />
+              onChange={(event) => setTarget(sanitizeDecimal(event.target.value))} />
           </label>
         </div>
         <label className="tm-field">
@@ -1761,13 +1808,13 @@ function Entry({
           <label className="tm-field">
             <span>Fill price</span>
             <input className="tm-input" value={fill} inputMode="decimal"
-              onChange={(event) => setFill(event.target.value)}
+              onChange={(event) => setFill(sanitizeDecimal(event.target.value))}
               placeholder={String(bracket.requested_entry)} />
           </label>
           <label className="tm-field">
             <span>Shares filled (empty = as planned)</span>
             <input className="tm-input" value={shares} inputMode="decimal"
-              onChange={(event) => setShares(event.target.value)}
+              onChange={(event) => setShares(sanitizeInteger(event.target.value))}
               placeholder={String(bracket.quantity)} />
           </label>
         </div>

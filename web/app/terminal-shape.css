@@ -1041,3 +1041,16 @@
 }
 .tg-fx .tg-seg { background: #1e2023; }
 .tg .tg-fx .tg-seg button { padding: 7px 14px; font-size: 12.5px; font-weight: 700; }
+
+/* A symbol the broker will not quote. The card carries the state rather than the
+ * input alone, so the reason has somewhere to sit under the field. */
+.tg-card.bad { box-shadow: inset 0 0 0 1px var(--tg-red); }
+.tg-card.bad .tg-in { border-bottom-color: var(--tg-red); }
+.tg-symname {
+  font-style: normal;
+  margin-left: 8px;
+  color: var(--tg-small);
+  font-weight: 600;
+}
+.tg-symbad { font-style: normal; font-size: 11.5px; color: var(--tg-red); line-height: 1.4; }
+.tg-symcheck { font-style: normal; font-size: 11.5px; color: var(--tg-small); }

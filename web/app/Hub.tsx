@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useCurrency } from "./currency";
+import { sanitizeTicker } from "./inputs";
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8080";
 
@@ -195,7 +196,7 @@ export function HubView() {
             <input
               id="hub-ticker" value={ticker} placeholder="KWM"
               spellCheck={false} autoComplete="off"
-              onChange={(event) => setTicker(event.target.value.toUpperCase())}
+              onChange={(event) => setTicker(sanitizeTicker(event.target.value))}
               onKeyDown={(event) => { if (event.key === "Enter") go(); }}
             />
           </label>
