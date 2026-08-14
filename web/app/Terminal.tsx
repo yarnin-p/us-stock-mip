@@ -732,7 +732,7 @@ export function TerminalView() {
           </div>
 
           <div className="tg-exits">
-            <div className="tg-exit sl">
+            <div className="tg-exit tg-sl">
               <div className="tg-exithead">
                 <span>STOP LOSS</span>
                 <div className="tg-steppers">
@@ -758,7 +758,7 @@ export function TerminalView() {
                   : "below entry"}
               </div>
             </div>
-            <div className="tg-exit tp">
+            <div className="tg-exit tg-tp">
               <div className="tg-exithead">
                 <span>TAKE PROFIT</span>
                 <div className="tg-steppers">
@@ -842,21 +842,21 @@ export function TerminalView() {
           </section>
 
           <div className="tg-stack tg-enter tg-enter-2">
-            <div className="tg-stackrow tp">
+            <div className="tg-stackrow tg-tp">
               <b>TAKE PROFIT</b>
               <span className="tg-stackright">
                 <span>{plan ? `+${((plan.target_price / plan.entry_price - 1) * 100).toFixed(1)}%` : ""}</span>
                 <i>{plan ? `$${money(plan.target_price)}` : "—"}</i>
               </span>
             </div>
-            <div className="tg-stackrow entry">
+            <div className="tg-stackrow tg-entry">
               <b>ENTRY</b>
               <span className="tg-stackright">
                 <span>{plan ? `${plan.shares.toLocaleString()} sh · $${money(plan.cost)}` : ""}</span>
                 <i>{plan ? `$${money(plan.entry_price)}` : "—"}</i>
               </span>
             </div>
-            <div className="tg-stackrow sl">
+            <div className="tg-stackrow tg-sl">
               <b>STOP LOSS</b>
               <span className="tg-stackright">
                 <span>{plan ? `−${((1 - plan.stop_price / plan.entry_price) * 100).toFixed(1)}%` : ""}</span>

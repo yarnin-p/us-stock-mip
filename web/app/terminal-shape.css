@@ -270,13 +270,13 @@
   min-height: 208px;
   transition: transform var(--tg-lift), box-shadow var(--tg-lift);
 }
-.tg-exit.sl { background: var(--tg-red); }
-.tg-exit.tp { background: var(--tg-green); }
-.tg-exit.sl:hover {
+.tg-exit.tg-sl { background: var(--tg-red); }
+.tg-exit.tg-tp { background: var(--tg-green); }
+.tg-exit.tg-sl:hover {
   transform: translateY(-3px);
   box-shadow: 0 18px 40px -24px rgba(242, 112, 92, 0.9);
 }
-.tg-exit.tp:hover {
+.tg-exit.tg-tp:hover {
   transform: translateY(-3px);
   box-shadow: 0 18px 40px -24px rgba(79, 195, 138, 0.9);
 }
@@ -304,8 +304,8 @@
   user-select: none;
   transition: transform var(--tg-press), background 140ms ease;
 }
-.tg .tg-exit.sl .tg-stepper:hover { background: var(--tg-ink); color: var(--tg-red); }
-.tg .tg-exit.tp .tg-stepper:hover { background: var(--tg-ink); color: var(--tg-green); }
+.tg .tg-exit.tg-sl .tg-stepper:hover { background: var(--tg-ink); color: var(--tg-red); }
+.tg .tg-exit.tg-tp .tg-stepper:hover { background: var(--tg-ink); color: var(--tg-green); }
 .tg .tg-stepper:active { transform: scale(0.88); }
 
 .tg-exitvalue { display: flex; align-items: baseline; gap: 6px; margin-top: auto; }
@@ -437,6 +437,13 @@
 .tg-metercap span { opacity: 0.72; }
 .tg-metercap b { font-weight: 800; }
 
+/* A note on the modifier names: .tp/.sl/.entry were bare single words, and
+ * globals.css carries a `.book, .entry { margin-top: 22px }` from another screen
+ * entirely. It landed on the ENTRY row and pushed it 22px down, so the stack read as
+ * uneven spacing with no rule of mine to blame. Namespaced, the collision cannot
+ * happen again for any of them.
+ */
+
 /* ---- price stack ----------------------------------------------------------- */
 
 .tg-stack { display: grid; grid-template-columns: 1fr; gap: 8px; }
@@ -449,13 +456,13 @@
   justify-content: space-between;
   gap: 12px;
 }
-.tg-stackrow.tp { background: var(--tg-green); }
-.tg-stackrow.entry { background: var(--tg-paper); }
-.tg-stackrow.sl { background: var(--tg-red); }
+.tg-stackrow.tg-tp { background: var(--tg-green); }
+.tg-stackrow.tg-entry { background: var(--tg-paper); }
+.tg-stackrow.tg-sl { background: var(--tg-red); }
 .tg-stackrow > b { font-size: 14px; font-weight: 800; }
 .tg-stackright { display: flex; align-items: baseline; gap: 12px; }
 .tg-stackright span { font-size: 13px; font-weight: 600; opacity: 0.72; }
-.tg-stackrow.entry .tg-stackright span { opacity: 0.62; }
+.tg-stackrow.tg-entry .tg-stackright span { opacity: 0.62; }
 .tg-stackright i {
   font-style: normal;
   font-size: 28px;
