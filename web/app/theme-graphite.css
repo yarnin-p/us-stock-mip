@@ -1,0 +1,135 @@
+/* Graphite + amber — the token layer for the redesigned order terminal.
+ *
+ * These are the values from the design handoff, named rather than repeated. The
+ * handoff ships ten schemes over one layout (Terminal-G-Themes) and graphite is the
+ * chosen one; keeping the palette behind custom properties means the other nine cost
+ * a class, not a rewrite.
+ *
+ * Scoped to .tg rather than :root on purpose. The rest of the console is still on the
+ * warm-white surface, and a token layer that leaked would repaint screens nobody asked
+ * to change. Put .tg on the terminal shell and the tokens exist inside it and nowhere
+ * else.
+ *
+ * A note on the reversal this represents: terminal.css opens by explaining that an
+ * earlier version made this screen dark, and that doing so was the wrong instrument
+ * because it broke consistency with every other screen. That reasoning still holds --
+ * what changes it is that the handoff takes the hub graphite too. Dark is no longer
+ * one room painted differently; it is where the product is going. Until the other
+ * screens follow, the terminal and the hub will not match the rest, and that is a
+ * known, temporary state rather than an oversight.
+ */
+
+.tg {
+  /* Surfaces, from the page backwards. */
+  --tg-page: #151618;
+  --tg-plane: #1c1e21;
+  --tg-raised: #232629;
+  --tg-deeper: #191b1e;
+  --tg-hover: #2b2f33;
+  --tg-hover-soft: #262a2e;
+  --tg-off: #1e2023;
+
+  /* Fields. The border is the affordance -- dashed until focus, then solid amber. */
+  --tg-field: #3a4045;
+  --tg-field-hover: #6f757a;
+
+  /* The two poles. Ink is what sits on a coloured fill; paper is the light plane. */
+  --tg-ink: #17181a;
+  --tg-paper: #eceded;
+
+  /* Text. Do not go dimmer than --tg-small at 12px or below: that is the AA floor,
+   * and the handoff calls it out explicitly. */
+  --tg-text: #b6bbbf;
+  --tg-label: #8f959a;
+  --tg-small: #9aa0a6;
+  --tg-disabled: #2c3034;
+
+  /* Meaning. Amber is the product, green is reward, red is risk. risk-on-white is the
+   * one variant that exists because #f2705c cannot carry AA on the paper action bar. */
+  --tg-amber: #f0a52e;
+  --tg-green: #4fc38a;
+  --tg-red: #f2705c;
+  --tg-risk-on-white: #b7381f;
+
+  /* Radii, largest to smallest. Pills are 999; planes are 30. */
+  --tg-r-pill: 999px;
+  --tg-r-plane: 30px;
+  --tg-r-card: 28px;
+  --tg-r-block: 26px;
+  --tg-r-rung: 24px;
+  --tg-r-row: 22px;
+  --tg-r-field: 20px;
+  --tg-r-line: 18px;
+  --tg-r-item: 16px;
+  --tg-r-inner: 14px;
+  --tg-r-chip: 12px;
+  --tg-r-tight: 10px;
+
+  /* Motion. One loop, never a second. */
+  --tg-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tg-pop: 480ms;
+  --tg-lift: 180ms;
+  --tg-press: 115ms;
+  --tg-flash: 420ms;
+  --tg-meter: 160ms;
+  --tg-sheet: 220ms;
+
+  /* Shadows exist on hover only. */
+  --tg-shadow-card: 0 22px 50px -30px rgba(0, 0, 0, 0.9);
+
+  color: var(--tg-text);
+  background: var(--tg-page);
+  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Large figures carry negative tracking; the handoff sets it per size, and the amount
+ * scales with the number rather than being one value everywhere. */
+.tg .tg-fig-xl { font-size: 76px; font-weight: 700; letter-spacing: -0.06em; }
+.tg .tg-fig-lg { font-size: 64px; font-weight: 700; letter-spacing: -0.055em; }
+.tg .tg-fig-md { font-size: 34px; font-weight: 700; letter-spacing: -0.04em; }
+.tg .tg-fig-sm { font-size: 28px; font-weight: 700; letter-spacing: -0.04em; }
+
+@keyframes tg-pop-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The risk plane brightens once whenever the number under it changes. It is the only
+ * thing on the screen that moves without being touched, which is what makes it read as
+ * the number that matters. */
+@keyframes tg-flash {
+  0% { filter: brightness(1); }
+  45% { filter: brightness(1.16); }
+  100% { filter: brightness(1); }
+}
+
+@keyframes tg-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+
+.tg .tg-enter { animation: tg-pop-in var(--tg-pop) var(--tg-ease) both; }
+.tg .tg-enter-1 { animation-delay: 90ms; }
+.tg .tg-enter-2 { animation-delay: 170ms; }
+.tg .tg-enter-3 { animation-delay: 240ms; }
+
+.tg .tg-dot-live {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tg-amber);
+  animation: tg-pulse 2.4s ease-in-out infinite;
+}
+
+/* Every animation here is decoration over a state that is already legible without it.
+ * Honouring the reduced-motion preference costs nothing and removes all of it. */
+@media (prefers-reduced-motion: reduce) {
+  .tg *,
+  .tg *::before,
+  .tg *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
