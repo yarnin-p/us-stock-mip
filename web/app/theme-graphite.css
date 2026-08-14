@@ -77,7 +77,55 @@
   /* Shadows exist on hover only. */
   --tg-shadow-card: 0 22px 50px -30px rgba(0, 0, 0, 0.9);
 
-  color: var(--tg-text);
+  /* The seam that makes this a re-skin rather than a rewrite.
+   *
+   * Every rule in terminal.css already reads its colours from the console's --te-*
+   * variables, so re-pointing those inside .tg repaints the whole screen without
+   * touching a single selector. The first attempt set only background and color on
+   * this element and left the children on the light palette -- a dark shell around
+   * white cards, with the title rendered dark-on-dark. Half a theme is worse than
+   * either whole one.
+   *
+   * Scoped here, so the other thirteen sections keep the warm-white surface until
+   * they are converted too. */
+  --te-bg: var(--tg-page);
+  --te-bg-warm: var(--tg-page);
+  --te-card: var(--tg-plane);
+  --te-surface-subtle: var(--tg-raised);
+  --te-sidebar: var(--tg-plane);
+
+  --te-border: var(--tg-field);
+  --te-border-soft: #24282c;
+
+  --te-text: #e8eaec;
+  --te-text-2: var(--tg-text);
+  --te-muted: var(--tg-small);
+
+  /* Amber replaces the violet brand inside this screen. It is the product's accent in
+   * the handoff and the colour every active control uses there. */
+  --te-brand: var(--tg-amber);
+  --te-brand-hover: #f7b850;
+  --te-brand-soft: rgba(240, 165, 46, 0.55);
+  --te-brand-chart: var(--tg-amber);
+  --te-brand-bg: rgba(240, 165, 46, 0.14);
+
+  --te-green: var(--tg-green);
+  --te-green-soft: rgba(79, 195, 138, 0.55);
+  --te-green-bg: rgba(79, 195, 138, 0.13);
+
+  --te-red: var(--tg-red);
+  --te-red-bg: rgba(242, 112, 92, 0.13);
+
+  --te-orange: var(--tg-amber);
+  --te-orange-soft: rgba(240, 165, 46, 0.5);
+  --te-orange-bg: rgba(240, 165, 46, 0.13);
+
+  /* Shadows on a dark surface read as depth only if they are darker than the plane,
+   * never as the soft warm haze that works on paper. */
+  --te-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  --te-shadow-hover: var(--tg-shadow-card);
+
+  color: var(--te-text);
   background: var(--tg-page);
   font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   font-variant-numeric: tabular-nums;

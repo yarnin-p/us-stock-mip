@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./tradeedge.css";
-// Before terminal.css, so the terminal's own rules win over a token default rather
-// than the other way round. The token layer is scoped to .tg and paints nothing on
-// its own -- every other screen is untouched by its presence here.
+// After tradeedge.css so it can re-point that file's --te-* variables, and before
+// terminal.css so the terminal's own rules still win over anything set here. Scoped
+// to .tg: every other screen keeps the warm-white surface.
 import "./theme-graphite.css";
 import "./terminal.css";
 
