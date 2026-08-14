@@ -20,6 +20,9 @@ import (
 var sessionTime = time.Date(2026, 8, 10, 14, 0, 0, 0, time.UTC)
 
 type stubRepository struct {
+	// now lets a test move the clock the store would have stamped. Nil means the
+	// wall clock, which is right for every test that does not care.
+	now         func() time.Time
 	mutex       sync.Mutex
 	records     map[int64]Record
 	adjustments []AdjustmentRecord
@@ -570,6 +573,13 @@ func TestHandleTickStopsWhenTheContextEnds(t *testing.T) {
 // SaveEntryLink mirrors the store: state and handles move together, and settled is
 // set once. A stub that let them drift would let a test pass on an arrangement the
 // database refuses.
+func (repository *stubRepository) clock() time.Time {
+	if repository.now != nil {
+		return repository.now()
+	}
+	return time.Now().UTC()
+}
+
 func (repository *stubRepository) SaveEntryLink(
 	_ context.Context, id int64, link EntryLink, adjustment AdjustmentRecord,
 ) (Record, error) {
@@ -589,6 +599,10 @@ func (repository *stubRepository) SaveEntryLink(
 	if link.SentAt != nil {
 		record.EntrySentAt = link.SentAt
 	}
+	// The real store stamps updated_at on every write, and the retry pause is
+	// measured from it. A stub that leaves it at zero makes every unprotected
+	// position look infinitely stale and the pause untestable.
+	record.UpdatedAt = repository.clock()
 	repository.records[id] = record
 	repository.adjustments = append(repository.adjustments, adjustment)
 	return record, nil
@@ -601,7 +615,13 @@ func (repository *stubRepository) UnsettledEntryBrackets(
 	defer repository.mutex.Unlock()
 	records := make([]Record, 0, len(repository.records))
 	for _, record := range repository.records {
-		if record.Mode != mode || record.EntrySettled {
+		if record.Mode != mode {
+			continue
+		}
+		// Mirrors the store: an unprotected position is swept whatever the entry
+		// flag says, because the flag is about the buy and the state is about the
+		// stock.
+		if record.EntrySettled && record.State != StateUnprotected {
 			continue
 		}
 		switch record.State {

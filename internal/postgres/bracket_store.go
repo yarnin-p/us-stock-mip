@@ -510,7 +510,16 @@ func (store *Store) UnsettledEntryBrackets(
 		`SELECT `+bracketColumns+`
 		   FROM brackets
 		  WHERE mode = $1
-		    AND entry_settled = false
+		    AND (
+		      entry_settled = false
+		      -- Always, whatever the order says. entry_settled answers "is the buy
+		      -- finished with"; UNPROTECTED answers "is this stock covered", and a
+		      -- filled-out buy sets the first while leaving the second false. Reading
+		      -- only the flag hid every bare position from the retry that exists to
+		      -- fix it -- the fill completes, the stop is refused, and the sweep never
+		      -- looks at it again.
+		      OR state = 'UNPROTECTED'
+		    )
 		    AND state IN ('WORKING', 'UNPROTECTED', 'PROTECTED')
 		  ORDER BY opened_at`,
 		mode,

@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
+
+	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
 
 /* Sending the buy, and giving up on it.
@@ -94,7 +95,7 @@ func (service *Service) SendEntry(ctx context.Context, id int64) (Record, error)
 		return refused, fmt.Errorf("%w: %s", ErrEntryRefused, reason)
 	}
 
-	sentAt := time.Now().UTC()
+	sentAt := service.clock()
 	sent, err := service.repository.SaveEntryLink(ctx, id, EntryLink{
 		Ref: ticket.Ref, ClientOrderID: ticket.ClientOrderID,
 		State: StateWorking, SentAt: &sentAt,
@@ -198,4 +199,304 @@ func (service *Service) AbandonEntry(
 		"bracket_id", id, "ticker", record.Ticker, "reason", reason,
 	)
 	return abandoned, nil
+}
+
+// EntryFill is what the venue says the buy got.
+type EntryFill struct {
+	Price    float64
+	Quantity float64
+	// Settled means the buy will not fill any further. A partial that is still
+	// working must not close the question: more may come, and the protection has to
+	// grow with it.
+	Settled bool
+}
+
+/* ArmFromEntry turns a fill into protection.
+ *
+ * It is the step the operator used to perform by reading a number off the broker
+ * screen and typing it back in. The price is the one that filled, not the one that
+ * was asked for, because every rung of the ladder measures from it -- a break-even
+ * floor computed from the requested entry is not break-even.
+ *
+ * Two things make this different from Arm. It runs from WORKING, or again from
+ * UNPROTECTED when a first attempt failed. And when the stop cannot be placed it does
+ * not return the bracket to a plan: stock is held. That case lands in UNPROTECTED,
+ * which is the only state in this system whose whole job is to be impossible to
+ * mistake for anything else.
+ */
+func (service *Service) ArmFromEntry(
+	ctx context.Context, id int64, fill EntryFill,
+) (Record, error) {
+	record, err := service.repository.Bracket(ctx, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.State != StateWorking && record.State != StateUnprotected {
+		return Record{}, fmt.Errorf(
+			"bracket %d is %s; protection is set from a working or unprotected entry",
+			id, record.State,
+		)
+	}
+	if !(fill.Price > 0) || !(fill.Quantity > 0) {
+		return Record{}, errors.New(
+			"protection needs the price and size that actually filled",
+		)
+	}
+
+	account, err := service.accounts.DefaultBrokerAccount(ctx)
+	if err != nil {
+		return Record{}, fmt.Errorf("resolving the broker account: %w", err)
+	}
+	stop, target, err := Levels(fill.Price, record.Config)
+	if err != nil {
+		return Record{}, err
+	}
+
+	shape := service.shape()
+	// The generation is what stops a broker refusing the second stop of the day for
+	// reusing a handle it cancelled hours earlier.
+	record.StopGeneration++
+	stopID := fmt.Sprintf("bracket-%d-stop-%d", id, record.StopGeneration)
+	if shape.HeldByEngine(false) {
+		// Nothing rests at the venue outside the regular session -- Webull accepts no
+		// stop of any kind -- so the level lives here and the engine sends a sell when
+		// a print breaches it. That is protection, but only while this process runs,
+		// and the note says so rather than leaving it to be discovered.
+		stopID = ""
+	} else if _, placeErr := service.orders.PlaceOrder(
+		ctx, execution.BrokerOrderRequest{
+			AccountID: account, ClientOrderID: stopID,
+			Ticker: record.Ticker, Side: "SELL", OrderType: shape.OrderType,
+			TimeInForce: "GTC", TradingSession: "ALL",
+			Quantity: fill.Quantity, StopPrice: stop, LimitPrice: shape.LimitFor(stop),
+		},
+	); placeErr != nil {
+		return service.exposed(ctx, id, record, fill, stop, placeErr)
+	}
+
+	targetID := fmt.Sprintf("bracket-%d-target-%d", id, record.StopGeneration)
+	if _, placeErr := service.orders.PlaceOrder(
+		ctx, execution.BrokerOrderRequest{
+			AccountID: account, ClientOrderID: targetID,
+			Ticker: record.Ticker, Side: "SELL", OrderType: "LIMIT",
+			TimeInForce: "GTC", TradingSession: "ALL",
+			Quantity: fill.Quantity, LimitPrice: target,
+		},
+	); placeErr != nil {
+		// Not exposed. The stop is in, which is the leg that stops a loss; a missing
+		// target costs an exit taken by hand, and saying UNPROTECTED here would cry
+		// wolf on the one word that must always mean what it says.
+		targetID = ""
+		service.warn(
+			"the target did not place; the stop is in and the upside has to be taken "+
+				"by hand",
+			"bracket_id", id, "ticker", record.Ticker, "error", placeErr,
+		)
+	}
+
+	record.AccountID = account
+	record.Quantity = fill.Quantity
+	record.EntryPrice = fill.Price
+	record.StopPrice = stop
+	record.TargetPrice = target
+	record.HighWater = fill.Price
+	record.StopOrderID = stopID
+	record.TargetOrderID = targetID
+	if _, err := service.repository.SaveLevels(ctx, record, AdjustmentRecord{
+		BracketID: id, Trigger: TriggerEntryFilled,
+		NewStop: stop, NewTarget: target,
+		LastPrice: fill.Price, HighWater: fill.Price, Applied: true,
+		Reason: fmt.Sprintf(
+			"entry filled %.0f at %.4f; stop %.4f, target %.4f",
+			fill.Quantity, fill.Price, stop, target,
+		),
+	}); err != nil {
+		return Record{}, fmt.Errorf("recording the protected bracket: %w", err)
+	}
+	protected, err := service.repository.SaveEntryLink(ctx, id, EntryLink{
+		Ref: record.EntryOrderRef, ClientOrderID: record.EntryOrderID,
+		State: StateProtected, Settled: fill.Settled,
+	}, AdjustmentRecord{
+		BracketID: id, Trigger: TriggerInitial,
+		NewStop: stop, NewTarget: target,
+		LastPrice: fill.Price, HighWater: fill.Price, Applied: true,
+		Reason: fmt.Sprintf(
+			"protection placed for %.0f shares on account %s", fill.Quantity, account,
+		),
+	})
+	if err != nil {
+		return Record{}, fmt.Errorf("recording the protection: %w", err)
+	}
+	service.info(
+		"entry protected",
+		"bracket_id", id, "ticker", record.Ticker,
+		"filled", fill.Quantity, "price", fill.Price,
+		"stop", stop, "target", target, "stop_order", stopID,
+	)
+	return protected, nil
+}
+
+/* exposed records stock held with nothing behind it.
+ *
+ * The levels are written even though no order carries them: they are what a retry
+ * will use, and what the engine would fire on if it is holding the stop itself. What
+ * is not written is a stop order handle, because there is no stop order -- and a
+ * handle for an order that does not exist is how a screen comes to report protection
+ * that is not there.
+ */
+func (service *Service) exposed(
+	ctx context.Context,
+	id int64,
+	record Record,
+	fill EntryFill,
+	stop float64,
+	cause error,
+) (Record, error) {
+	record.Quantity = fill.Quantity
+	record.EntryPrice = fill.Price
+	record.StopPrice = stop
+	record.HighWater = fill.Price
+	record.StopOrderID = ""
+	if _, saveErr := service.repository.SaveLevels(ctx, record, AdjustmentRecord{
+		BracketID: id, Trigger: TriggerEntryFilled,
+		NewStop: stop, LastPrice: fill.Price, HighWater: fill.Price, Applied: true,
+		Reason: fmt.Sprintf("entry filled %.0f at %.4f", fill.Quantity, fill.Price),
+	}); saveErr != nil {
+		return Record{}, fmt.Errorf(
+			"%.0f %s are held and the stop was refused (%v), and the fill could not "+
+				"even be recorded: %w -- this position is unprotected and unrecorded",
+			fill.Quantity, record.Ticker, cause, saveErr,
+		)
+	}
+	unprotected, saveErr := service.repository.SaveEntryLink(ctx, id, EntryLink{
+		Ref: record.EntryOrderRef, ClientOrderID: record.EntryOrderID,
+		State: StateUnprotected, Settled: fill.Settled,
+	}, AdjustmentRecord{
+		BracketID: id, Trigger: TriggerEntryExposed,
+		NewStop: stop, LastPrice: fill.Price, HighWater: fill.Price,
+		Applied: false, BrokerError: cause.Error(),
+		Reason: "the stop was refused; these shares are held with nothing behind them",
+	})
+	if saveErr != nil {
+		return Record{}, fmt.Errorf(
+			"%.0f %s are held with no stop (%v) and the state could not be saved: %w",
+			fill.Quantity, record.Ticker, cause, saveErr,
+		)
+	}
+	service.warn(
+		"POSITION UNPROTECTED: the entry filled and the stop was refused",
+		"bracket_id", id, "ticker", record.Ticker,
+		"quantity", fill.Quantity, "price", fill.Price, "stop", stop,
+		"error", cause,
+	)
+	return unprotected, nil
+}
+
+/* ResizeProtection grows the stop and target to cover a position that filled further.
+ *
+ * A partial fill is protected on what was held at the time. If the rest fills a
+ * minute later the resting stop covers less stock than the account holds, and the
+ * difference is guarded by nothing -- the same shape as an unprotected position,
+ * just smaller and much harder to see.
+ *
+ * The levels are recomputed from the new average, because that is what the ladder
+ * measures from and a break-even floor against the first partial's price is not
+ * break-even for the position as a whole.
+ */
+func (service *Service) ResizeProtection(
+	ctx context.Context, id int64, fill EntryFill,
+) (Record, error) {
+	record, err := service.repository.Bracket(ctx, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.State != StateProtected {
+		return Record{}, fmt.Errorf(
+			"bracket %d is %s; only a protected position is resized", id, record.State,
+		)
+	}
+	if !(fill.Quantity > record.Quantity) {
+		return record, nil
+	}
+	previousStop, previousTarget := record.StopPrice, record.TargetPrice
+	stop, target, err := Levels(fill.Price, record.Config)
+	if err != nil {
+		return Record{}, err
+	}
+	record.Quantity = fill.Quantity
+	record.EntryPrice = fill.Price
+	record.StopPrice = stop
+	record.TargetPrice = target
+	// The size is the edit that matters here; moveLevels only touches a leg whose
+	// price changed, so it is called with the old prices to force both legs through.
+	if err := service.resizeLegs(ctx, &record); err != nil {
+		return Record{}, err
+	}
+	resized, err := service.repository.SaveLevels(ctx, record, AdjustmentRecord{
+		BracketID: id, Trigger: TriggerEntryToppedUp,
+		PreviousStop: previousStop, NewStop: stop,
+		PreviousTarget: previousTarget, NewTarget: target,
+		LastPrice: fill.Price, HighWater: record.HighWater, Applied: true,
+		Reason: fmt.Sprintf(
+			"more of the entry filled; protection resized to %.0f shares at %.4f",
+			fill.Quantity, fill.Price,
+		),
+	})
+	if err != nil {
+		return Record{}, fmt.Errorf("recording the resize: %w", err)
+	}
+	if fill.Settled {
+		return service.repository.SaveEntryLink(ctx, id, EntryLink{
+			Ref: record.EntryOrderRef, ClientOrderID: record.EntryOrderID,
+			State: StateProtected, Settled: true,
+		}, AdjustmentRecord{
+			BracketID: id, Trigger: TriggerEntrySent,
+			LastPrice: fill.Price, HighWater: record.HighWater, Applied: true,
+			Reason: fmt.Sprintf("the entry is complete at %.0f shares", fill.Quantity),
+		})
+	}
+	return resized, nil
+}
+
+// resizeLegs pushes the current size and prices onto both resting orders. Unlike
+// moveLevels it does not skip a leg whose price is unchanged: the quantity is what
+// moved, and a stop covering the old size is the whole problem.
+func (service *Service) resizeLegs(ctx context.Context, record *Record) error {
+	legs := []struct {
+		name      string
+		orderID   *string
+		price     float64
+		orderType string
+		isStop    bool
+	}{
+		{"stop", &record.StopOrderID, record.StopPrice, service.shape().OrderType, true},
+		{"target", &record.TargetOrderID, record.TargetPrice, "LIMIT", false},
+	}
+	for _, leg := range legs {
+		if *leg.orderID == "" {
+			continue
+		}
+		request := execution.ModifyOrderRequest{
+			AccountID: record.AccountID, ClientOrderID: *leg.orderID,
+			Ticker: record.Ticker, OrderType: leg.orderType,
+			TimeInForce: "GTC", Quantity: record.Quantity,
+		}
+		if leg.isStop {
+			request.StopPrice = leg.price
+			if leg.orderType == "STOP_LOSS_LIMIT" {
+				request.LimitPrice = service.shape().LimitFor(leg.price)
+			}
+		} else {
+			request.LimitPrice = leg.price
+		}
+		live, err := service.orders.ModifyOrder(ctx, request)
+		*leg.orderID = live
+		if err != nil {
+			return fmt.Errorf(
+				"resizing the %s to %.0f shares: %w -- part of this position is not "+
+					"covered", leg.name, record.Quantity, err,
+			)
+		}
+	}
+	return nil
 }

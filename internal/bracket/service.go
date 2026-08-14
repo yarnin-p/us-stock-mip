@@ -222,11 +222,27 @@ type Service struct {
 	accounts  AccountSource
 	stopShape StopShape
 	log       *slog.Logger
+	// now is the clock. Injectable because entry_sent_at drives a deadline, and a
+	// deadline measured against a clock nobody can move is a deadline nobody can test.
+	now func() time.Time
 	// entries is the order path the buy goes down. Optional in exactly one sense:
 	// without it a plan can still be written and a fill made by hand can still be
 	// protected, and SendEntry says plainly that it cannot buy. It is never used for
 	// a sell -- those go to orders, which is a venue; this is the risk gate.
 	entries EntryOrders
+}
+
+// WithClock replaces the clock. Tests set it; production leaves it alone.
+func (service *Service) WithClock(now func() time.Time) *Service {
+	service.now = now
+	return service
+}
+
+func (service *Service) clock() time.Time {
+	if service.now != nil {
+		return service.now()
+	}
+	return time.Now().UTC()
 }
 
 // WithEntryOrders attaches the path a buy is sent down. Separate from WithStopShape
