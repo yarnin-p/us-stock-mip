@@ -222,6 +222,9 @@ type Service struct {
 	accounts  AccountSource
 	stopShape StopShape
 	log       *slog.Logger
+	// announcer is told what happened, for the operator watching. Optional: nothing
+	// decides anything on the strength of an announcement.
+	announcer Announcer
 	// now is the clock. Injectable because entry_sent_at drives a deadline, and a
 	// deadline measured against a clock nobody can move is a deadline nobody can test.
 	now func() time.Time
@@ -230,6 +233,20 @@ type Service struct {
 	// protected, and SendEntry says plainly that it cannot buy. It is never used for
 	// a sell -- those go to orders, which is a venue; this is the risk gate.
 	entries EntryOrders
+}
+
+// WithAnnouncer attaches the thing that tells a watching screen what just happened.
+func (service *Service) WithAnnouncer(announcer Announcer) *Service {
+	service.announcer = announcer
+	return service
+}
+
+// announce is the guarded call, so every site is one line and none of them has to
+// remember the nil check.
+func (service *Service) announce(announcement Announcement) {
+	if service.announcer != nil {
+		service.announcer.Announce(announcement)
+	}
 }
 
 // WithClock replaces the clock. Tests set it; production leaves it alone.

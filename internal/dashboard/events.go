@@ -94,6 +94,17 @@ func (hub *EventHub) run() {
 	}
 }
 
+// Publish broadcasts an event raised inside this process, rather than one read from
+// the database's notification channel. The bracket engine uses it: what it does is
+// worth watching as it happens, and a round trip through Postgres to say so would be
+// slower and would lose everything except the fact that something changed.
+func (hub *EventHub) Publish(event Event) {
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	hub.publish(event)
+}
+
 func (hub *EventHub) publish(event Event) {
 	hub.mutex.Lock()
 	defer hub.mutex.Unlock()

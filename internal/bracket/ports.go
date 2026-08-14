@@ -167,3 +167,39 @@ type EntryStatus struct {
 	// cannot tell them apart.
 	Done bool
 }
+
+/* Announcer is told what this package just did, as it does it.
+ *
+ * Everything here already leaves a trail in the database, and the trail is the record
+ * of account. This is different: it is the operator watching. A stop that ratchets up
+ * while they have the screen open should appear on it, and a refusal should appear
+ * louder -- at that moment the level on the screen and the level at the broker have
+ * stopped agreeing, and that is the one thing worth interrupting somebody for.
+ *
+ * Optional, and genuinely so. Nothing decides anything on the strength of an
+ * announcement, so a service wired without one behaves identically and simply has
+ * nobody watching.
+ */
+type Announcer interface {
+	Announce(Announcement)
+}
+
+// Announcement is one thing that happened, in the operator's terms.
+type Announcement struct {
+	BracketID int64
+	Ticker    string
+	// Trigger is the rung or the act: BREAK_EVEN, ENTRY_SENT, STOP_FIRED. The screen
+	// already has copy for each, so this stays the domain's word rather than a
+	// sentence assembled here.
+	Trigger Trigger
+	State   State
+	// Detail is the sentence for a human, and it is the same one written to the
+	// trail. Two wordings of one event is how a screen and an audit log come to
+	// disagree about what happened.
+	Detail string
+	Price  float64
+	Level  float64
+	// Applied is false when the venue refused. Kept separate from Detail so a screen
+	// can colour it without parsing prose.
+	Applied bool
+}

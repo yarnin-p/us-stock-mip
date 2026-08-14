@@ -60,6 +60,9 @@ type Engine struct {
 	// for one move; two prints for different symbols have nothing to race over
 	// and must not queue behind each other.
 	locks map[string]*sync.Mutex
+	// announcer is told about every move as it is recorded, for the operator
+	// watching. Optional; nothing here decides anything on the strength of it.
+	announcer Announcer
 }
 
 // SliceSeller sells part of a position, for the partial take-profit rung.
@@ -105,6 +108,8 @@ type EngineOptions struct {
 	StopShape StopShape
 	// Canceller is required only when the stop changes hands with the session.
 	Canceller StopCanceller
+	// Announcer is told about every move as it happens. Optional.
+	Announcer Announcer
 	Logger    *slog.Logger
 	Mode      string
 	// AmendableAt gates amendments to the sessions the broker accepts them in.
@@ -173,6 +178,7 @@ func NewEngine(options EngineOptions) (*Engine, error) {
 		finisher:   options.Finisher,
 		stopShape:  shape,
 		canceller:  options.Canceller,
+		announcer:  options.Announcer,
 		logger:     options.Logger,
 		mode:       mode,
 		session:    options.AmendableAt,
@@ -933,5 +939,24 @@ func (engine *Engine) record(
 			"ticker", record.Ticker, "bracket_id", record.ID,
 			"applied", applied, "error", err,
 		)
+	}
+	/* Every move the engine makes passes through here, which is why the
+	 * announcement is here and not at each rung: one place to write it, and no way
+	 * for a new rung to be added and forgotten.
+	 *
+	 * The trail and the screen are told the same sentence. Two wordings of one event
+	 * is how an audit log and a dashboard come to disagree about what happened.
+	 */
+	if engine.announcer != nil {
+		detail := adjustment.Reason
+		if !applied && brokerError != "" {
+			detail = brokerError
+		}
+		engine.announcer.Announce(Announcement{
+			BracketID: record.ID, Ticker: record.Ticker,
+			Trigger: adjustment.Trigger, State: record.State,
+			Detail: detail, Price: lastPrice, Level: adjustment.StopPrice,
+			Applied: applied,
+		})
 	}
 }

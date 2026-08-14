@@ -1363,3 +1363,83 @@
   font-weight: 700;
   letter-spacing: 0.03em;
 }
+
+/* Stock held with nothing behind it. Loud on purpose and above everything: an
+   operator who has this and does not know it is the worst state this screen can be
+   in, and it is the only condition here that earns an interruption. */
+.tg .tg-bare {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 16px 20px;
+  border-radius: 22px;
+  background: rgba(255, 95, 86, 0.14);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 95, 86, 0.55);
+}
+.tg .tg-bare b {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ff7a72;
+  letter-spacing: -0.01em;
+}
+.tg .tg-bare span { font-size: 13px; color: var(--tg-text); }
+
+/* What the engine just did, newest first. Small and quiet: it is a running
+   commentary, and a commentary that shouts competes with the alarm above it. */
+.tg .tg-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  list-style: none;
+  border-radius: 18px;
+  background: #202427;
+}
+.tg .tg-feed li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.tg .tg-feed li b { min-width: 54px; font-weight: 700; color: #fff; }
+.tg .tg-feed li span { color: var(--tg-amber); white-space: nowrap; }
+.tg .tg-feed li i {
+  flex: 1;
+  font-style: normal;
+  color: var(--tg-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tg .tg-feed li time { color: var(--tg-text); opacity: 0.6; font-variant-numeric: tabular-nums; }
+.tg .tg-feed li.bad span { color: #ff7a72; font-weight: 700; }
+
+/* The gate's reasons, one per line. Each names a thing to go and change, which is
+   why they are a list and not a paragraph. */
+.tg .tg-refusals {
+  margin: 0 0 4px;
+  padding: 12px 16px 12px 30px;
+  list-style: disc;
+  border-radius: 16px;
+  background: rgba(255, 95, 86, 0.12);
+  color: #ff7a72;
+  font-size: 13px;
+  line-height: 1.6;
+}
+/* Saving a plan is the quiet option beside a button that spends money. */
+.tg .tg-sheetactions .tg-plain {
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 22px;
+  background: transparent;
+  color: var(--tg-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tg .tg-sheetactions .tg-plain:hover { color: #fff; }
+/* REVIEW — LIVE, REAL MONEY. The one heading allowed to be red. */
+.tg .tg-sheet.review h3.live { color: #ff7a72; }

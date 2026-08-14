@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/momentum-intelligence-platform/mip/internal/bracket"
+	"github.com/momentum-intelligence-platform/mip/internal/dashboard"
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
 
@@ -114,4 +115,33 @@ func refusalsOf(order execution.Order) []string {
 		reasons = append(reasons, violation.Code)
 	}
 	return reasons
+}
+
+/* What the bracket engine just did, on its way to a watching screen.
+ *
+ * Wiring again: internal/bracket must not know an HTTP event stream exists, and the
+ * dashboard must not know what a rung is. The port speaks in the domain's words --
+ * trigger, state, level -- and this turns them into the shape the browser already
+ * subscribes to.
+ */
+type bracketAnnouncer struct {
+	hub *dashboard.EventHub
+}
+
+var _ bracket.Announcer = bracketAnnouncer{}
+
+func (announcer bracketAnnouncer) Announce(item bracket.Announcement) {
+	announcer.hub.Publish(dashboard.Event{
+		// One scope for everything a bracket does, so a screen subscribes once and
+		// filters on the trigger rather than guessing at a list of scope names.
+		Scope:     "bracket",
+		Operation: string(item.Trigger),
+		Subject:   string(item.State),
+		Ticker:    item.Ticker,
+		ID:        item.BracketID,
+		Detail:    item.Detail,
+		Price:     item.Price,
+		Level:     item.Level,
+		Applied:   item.Applied,
+	})
 }

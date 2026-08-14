@@ -176,6 +176,25 @@ type Event struct {
 	Scope      string    `json:"scope"`
 	Operation  string    `json:"operation,omitempty"`
 	OccurredAt time.Time `json:"occurred_at"`
+	/* What happened, for the events that carry news rather than an instruction to
+	 * refetch.
+	 *
+	 * Most of this hub's traffic says "the positions changed" and the browser goes
+	 * and reads them again. The bracket engine's traffic is different: a stop moving
+	 * is a thing the operator wants to see happen, and telling them to refetch and
+	 * work out what changed is not the same as saying "the stop is now 4.09". All
+	 * optional, so every existing consumer is unaffected.
+	 */
+	Subject string  `json:"subject,omitempty"`
+	Ticker  string  `json:"ticker,omitempty"`
+	ID      int64   `json:"id,omitempty"`
+	Detail  string  `json:"detail,omitempty"`
+	Price   float64 `json:"price,omitempty"`
+	Level   float64 `json:"level,omitempty"`
+	// Applied is false when the venue refused what this event describes. A refusal
+	// is news too -- more than a success, because the level on the screen and the
+	// level at the broker have just stopped agreeing.
+	Applied bool `json:"applied,omitempty"`
 }
 
 type NewsCatalyst struct {

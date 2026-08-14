@@ -628,7 +628,7 @@ func (handler *Handler) eventStream(
 	response.Header().Set("X-Accel-Buffering", "no")
 	writeSSE(response, "ready", Event{
 		Scope: "candidates,scan,watchlist,positions,trades,score_history," +
-			"alerts,health,execution,strategy,spike_watch",
+			"alerts,health,execution,strategy,spike_watch,bracket",
 		OccurredAt: time.Now().UTC(),
 	})
 	flusher.Flush()

@@ -18,7 +18,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LadderPlane, LadderValues, countRungs, ladderErrorOf, presetLadder,
 } from "./Ladder";
-import { describe as describeState, live as isLive } from "./bracketState";
+import {
+  describe as describeState, holding as holdingState, live as isLive,
+} from "./bracketState";
+import { readTrigger, useBracketEvents } from "./bracketEvents";
 import { useCurrency } from "./currency";
 import { sanitizeDecimal, sanitizeInteger, sanitizeTicker } from "./inputs";
 
@@ -252,7 +255,15 @@ export function TerminalView() {
   /* The review step. Nothing is written until it has been seen once -- the design's
    * two-step, and the reason the primary button opens a sheet instead of acting. */
   const [confirming, setConfirming] = useState(false);
-  const [saved, setSaved] = useState<{ id: number; ticker: string } | null>(null);
+  const [saved, setSaved] = useState<
+    { id: number; ticker: string; sent: boolean } | null
+  >(null);
+  // The gate's reasons, one per line. They are a list because each is a thing to
+  // go and change, and joining them makes a fixable problem into a paragraph.
+  const [refusals, setRefusals] = useState<string[]>([]);
+  // Read here as well as in the badge, because the review sheet has to name it
+  // on the button that spends the money.
+  const mode = useTradingMode();
 
   // ±0.5 in percent, ±0.01 in price. Clamped at zero: a negative stop is not a stop.
   const nudge = useCallback(
@@ -437,10 +448,18 @@ export function TerminalView() {
     };
   }, [request]);
 
-  const open = useCallback(async () => {
+  /* Write the plan, and -- if this is a buy -- send it.
+   *
+   * Two calls rather than one endpoint that does both, because they are two
+   * different decisions and only the second one spends money. A refusal from the
+   * gate leaves a saved plan behind on purpose: the ceiling moves, the same plan is
+   * sent again, and nothing has to be retyped.
+   */
+  const commit = useCallback(async (send: boolean) => {
     if (!request) return;
     setOpening(true);
     setOpenError("");
+    setRefusals([]);
     try {
       const response = await fetch(`${API}/brackets`, {
         method: "POST",
@@ -449,9 +468,28 @@ export function TerminalView() {
       });
       const answer = await response.json();
       if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`);
+      const id = answer?.id ?? 0;
+
+      if (send && id) {
+        const sent = await fetch(`${API}/brackets/${id}/entry`, { method: "POST" });
+        const outcome = await sent.json();
+        if (!sent.ok) {
+          // The plan exists and is saved; only the buy was turned down. Saying so
+          // without losing the plan is the difference between "raise the ceiling and
+          // press again" and "type all of that in a second time".
+          setRefusals(
+            outcome?.refusals ?? [outcome?.error ?? `HTTP ${sent.status}`],
+          );
+          setReload((value) => value + 1);
+          setConfirming(false);
+          setSaved({ id, ticker: request.ticker, sent: false });
+          return;
+        }
+      }
+
       setReload((value) => value + 1);
       setConfirming(false);
-      setSaved({ id: answer?.id ?? 0, ticker: request.ticker });
+      setSaved({ id, ticker: request.ticker, sent: send });
       setTicker("");
       setEntry("");
       setAmount("");
@@ -784,7 +822,10 @@ export function TerminalView() {
       {confirming && plan && (
         <div className="tg-sheet review">
           <div>
-            <h3>REVIEW — PAPER, simulated</h3>
+            <h3 className={mode === "live" ? "live" : ""}>
+              REVIEW — {(mode || "…").toUpperCase()}
+              {mode === "live" ? ", REAL MONEY" : mode ? ", simulated" : ""}
+            </h3>
             <div className="headline">
               {plan.shares.toLocaleString()} {plan.ticker} @ ${money(plan.entry_price)}
             </div>
@@ -794,12 +835,30 @@ export function TerminalView() {
               {rungs.note ? ` · ${rungs.note}` : ""}
             </div>
           </div>
+          {refusals.length > 0 && (
+            <ul className="tg-refusals" role="alert">
+              {refusals.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          )}
           <div className="tg-sheetactions">
             <button type="button" className="tg-cancel" onClick={() => setConfirming(false)}>
               Cancel
             </button>
-            <button type="button" className="tg-confirm" disabled={opening} onClick={open}>
-              {opening ? "Saving…" : "SAVE PLAN"}
+            {/* Saving and buying are two decisions, so they are two buttons. Only
+                one of them spends money, and it says which stock and how much. */}
+            <button
+              type="button" className="tg-plain" disabled={opening}
+              onClick={() => commit(false)}
+            >
+              Save plan only
+            </button>
+            <button
+              type="button" className="tg-confirm" disabled={opening}
+              onClick={() => commit(true)}
+            >
+              {opening
+                ? "Sending…"
+                : `BUY ${plan.shares.toLocaleString()} ${plan.ticker} · $${money(plan.cost)}`}
             </button>
           </div>
         </div>
@@ -882,7 +941,13 @@ function CurrencySwitch({
   );
 }
 
-function ModeBadge() {
+/* The real mode, read once and shared.
+ *
+ * The review sheet used to carry the words "PAPER, simulated" as a string in the
+ * markup while the badge beside it read the server. Under a button that only saved a
+ * plan that was untidy; under a button that spends money it is the worst sentence on
+ * the screen, because it is reassuring and it is not checked. */
+function useTradingMode(): string {
   const [mode, setMode] = useState("");
   useEffect(() => {
     fetch(`${API}/brackets?limit=1`)
@@ -890,6 +955,11 @@ function ModeBadge() {
       .then((answer) => setMode(answer?.mode ?? ""))
       .catch(() => setMode(""));
   }, []);
+  return mode;
+}
+
+function ModeBadge() {
+  const mode = useTradingMode();
   if (!mode) return null;
   return (
     <span className={`tm-mode ${mode === "live" ? "live" : ""}`}>
@@ -898,12 +968,27 @@ function ModeBadge() {
   );
 }
 
-/* Plans in play. Only what the engine is still watching -- the full, filterable
- * history belongs to the Orders app, which is why there is no pagination here. */
+/* Positions and drafts. Only what the engine is still watching -- the full,
+ * filterable history belongs to the Orders app, which is why there is no pagination
+ * here.
+ *
+ * Two tables rather than one, because a plan nobody has sent and stock held at a
+ * broker are not the same object and nothing useful is done to both. They were one
+ * list called "Plans in play", which was the right name when a plan was all this
+ * screen could make. */
 function PlansInPlay({ reload }: { reload: number }) {
   const [rows, setRows] = useState<BracketRecord[]>([]);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"live" | "closed">("live");
+  const [tab, setTab] = useState<"live" | "drafts" | "closed">("live");
+  const [tick, setTick] = useState(0);
+
+  /* Refetch on what the engine says, rather than on a timer.
+   *
+   * A three-second poll is three seconds of not knowing, and the moments this table
+   * exists for -- a fill arriving, a stop ratcheting, a stop refused -- are exactly
+   * where that gap is felt. The event carries what happened; the refetch is what
+   * makes the row agree with it. */
+  const feed = useBracketEvents(() => setTick((count) => count + 1));
   /* Which row is open for work. Arming, moving a level and closing all live here --
    * the design shows this plane as a list, and the list is the only place those
    * actions can be reached from, so a row has to be able to open. */
@@ -919,25 +1004,75 @@ function PlansInPlay({ reload }: { reload: number }) {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "load failed"));
   }, [reload]);
 
-  const live = rows.filter((row: BracketRecord) => isLive(row.state));
+  /* Two tables, not one. A draft is a sentence somebody wrote; a position is money
+   * at a broker. Nothing useful is done to both, and the old single list called them
+   * all "plans in play" -- true when a plan was all this screen could make. */
+  const positions = rows.filter(
+    (row: BracketRecord) => holdingState(row.state) || row.state === "WORKING",
+  );
+  const drafts = rows.filter(
+    (row: BracketRecord) => row.state === "DRAFT" || row.state === "REFUSED",
+  );
   const closed = rows.filter((row: BracketRecord) => !isLive(row.state));
-  const shown = tab === "live" ? live : closed.slice(0, 5);
+  const shown =
+    tab === "live" ? positions : tab === "drafts" ? drafts : closed.slice(0, 5);
+  const bare = positions.filter((row: BracketRecord) => row.state === "UNPROTECTED");
 
   return (
     <section className="tg-plane tg-plansplane">
+      {/* The one condition that earns an interruption. It sits above everything
+          because an operator who has this and does not know it is the worst state
+          this screen can be in. */}
+      {bare.length > 0 && (
+        <div className="tg-bare" role="alert" aria-live="assertive">
+          <b>
+            {bare.map((row) => `${row.quantity} ${row.ticker}`).join(", ")}
+            {bare.length === 1 ? " is" : " are"} held with no stop at the broker
+          </b>
+          <span>
+            The engine retries every few seconds. Open the position to retry now or
+            sell out.
+          </span>
+        </div>
+      )}
       <div className="tg-planehead">
         <div className="tg-planstitle">
-          <h2>Plans in play</h2>
+          <h2>{tab === "drafts" ? "Drafts" : "Positions"}</h2>
           <div className="tg-seg">
             <button type="button" className={tab === "live" ? "on" : ""}
-              onClick={() => setTab("live")}>In play {live.length}</button>
+              onClick={() => setTab("live")}>Positions {positions.length}</button>
+            <button type="button" className={tab === "drafts" ? "on" : ""}
+              onClick={() => setTab("drafts")}>Drafts {drafts.length}</button>
             <button type="button" className={tab === "closed" ? "on" : ""}
               onClick={() => setTab("closed")}>Closed</button>
           </div>
-          <span className="tg-step">only plans the engine is still watching live</span>
+          <span className="tg-step">
+            {tab === "drafts"
+              ? "written here, nothing sent to the broker"
+              : "money at the broker right now"}
+          </span>
         </div>
         <a className="tg-back" href="/positions">Open Orders app ›</a>
       </div>
+
+      {/* What the engine just did. Live, because the point of watching a ladder is
+          watching it move -- a table that only shows the result says a stop is at
+          4.09 without ever showing it get there. */}
+      {feed.length > 0 && (
+        <ol className="tg-feed">
+          {feed.slice(0, 6).map((event, index) => (
+            <li
+              key={`${event.occurred_at}-${index}`}
+              className={event.applied === false ? "bad" : ""}
+            >
+              <b>{event.ticker}</b>
+              <span>{readTrigger(event.operation)}</span>
+              {event.detail && <i>{event.detail}</i>}
+              <time>{event.occurred_at.slice(11, 19)}</time>
+            </li>
+          ))}
+        </ol>
+      )}
 
       {error && <p className="tg-err">{error}</p>}
       <div className="tg-plansgrid">
@@ -995,7 +1130,10 @@ function PlansInPlay({ reload }: { reload: number }) {
         )}
       </div>
       <div className="tg-plansfoot">
-        <span>{live.length} live now · {rows.length} plans in total history</span>
+        <span>
+          {positions.length} at the broker · {drafts.length} drafted ·{" "}
+          {rows.length} in total history
+        </span>
         <a href="/positions">See the full history ›</a>
       </div>
     </section>

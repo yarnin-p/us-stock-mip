@@ -121,6 +121,11 @@ func (service *Service) SendEntry(ctx context.Context, id int64) (Record, error)
 				reason, saveErr,
 			)
 		}
+		service.announce(Announcement{
+			BracketID: id, Ticker: record.Ticker, Trigger: TriggerEntryRefused,
+			State: StateRefused, Applied: false, Price: record.RequestedEntry,
+			Detail: reason,
+		})
 		return refused, &RefusedError{Reasons: ticket.Refusals}
 	}
 
@@ -154,6 +159,14 @@ func (service *Service) SendEntry(ctx context.Context, id int64) (Record, error)
 		"quantity", record.Quantity, "limit", record.RequestedEntry,
 		"order", ticket.ClientOrderID,
 	)
+	service.announce(Announcement{
+		BracketID: id, Ticker: record.Ticker, Trigger: TriggerEntrySent,
+		State: StateWorking, Applied: true, Price: record.RequestedEntry,
+		Detail: fmt.Sprintf(
+			"buying %.0f %s at %.4f", record.Quantity, record.Ticker,
+			record.RequestedEntry,
+		),
+	})
 	return sent, nil
 }
 
@@ -227,6 +240,10 @@ func (service *Service) AbandonEntry(
 		"entry abandoned",
 		"bracket_id", id, "ticker", record.Ticker, "reason", reason,
 	)
+	service.announce(Announcement{
+		BracketID: id, Ticker: record.Ticker, Trigger: TriggerEntryCancelled,
+		State: StateDraft, Applied: true, Detail: reason,
+	})
 	return abandoned, nil
 }
 
@@ -362,6 +379,14 @@ func (service *Service) ArmFromEntry(
 		"filled", fill.Quantity, "price", fill.Price,
 		"stop", stop, "target", target, "stop_order", stopID,
 	)
+	service.announce(Announcement{
+		BracketID: id, Ticker: record.Ticker, Trigger: TriggerEntryFilled,
+		State: StateProtected, Applied: true, Price: fill.Price, Level: stop,
+		Detail: fmt.Sprintf(
+			"filled %.0f at %.4f; stop %.4f, target %.4f",
+			fill.Quantity, fill.Price, stop, target,
+		),
+	})
 	return protected, nil
 }
 
@@ -418,6 +443,13 @@ func (service *Service) exposed(
 		"quantity", fill.Quantity, "price", fill.Price, "stop", stop,
 		"error", cause,
 	)
+	service.announce(Announcement{
+		BracketID: id, Ticker: record.Ticker, Trigger: TriggerEntryExposed,
+		State: StateUnprotected, Applied: false, Price: fill.Price, Level: stop,
+		Detail: fmt.Sprintf(
+			"%.0f %s are held with no stop: %v", fill.Quantity, record.Ticker, cause,
+		),
+	})
 	return unprotected, nil
 }
 

@@ -298,7 +298,8 @@ func runServe(args []string, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("configuring the protective stop: %w", err)
 	}
-	bracketService = bracketService.WithLogger(logger)
+	bracketService = bracketService.WithLogger(logger).
+		WithAnnouncer(bracketAnnouncer{hub: eventHub})
 
 	/* The buy, and the thing that turns a fill into a stop.
 	 *
@@ -337,7 +338,8 @@ func runServe(args []string, stderr io.Writer) error {
 	}
 
 	bracketFeed, err := buildBracketFeed(
-		ctx, appConfig, store, bracketService, bracketBroker, logger,
+		ctx, appConfig, store, bracketService, bracketBroker,
+		bracketAnnouncer{hub: eventHub}, logger,
 	)
 	if err != nil {
 		return fmt.Errorf("wiring the bracket price feed: %w", err)
@@ -493,6 +495,7 @@ func buildBracketFeed(
 	store *postgres.Store,
 	finisher bracket.Finisher,
 	modifier execution.OrderModifier,
+	announcer bracket.Announcer,
 	logger *slog.Logger,
 ) (*bracket.Supervisor, error) {
 	if appConfig.BracketFeedAdapter == "none" {
@@ -544,6 +547,7 @@ func buildBracketFeed(
 		// Withdrawing the resting stop at the close is half of the session handover, so
 		// the engine refuses that arrangement without a broker that can cancel.
 		Canceller:   canceller,
+		Announcer:   announcer,
 		Logger:      logger,
 		Mode:        appConfig.TradingMode,
 		AmendableAt: bracketAmendableAt(appConfig),
