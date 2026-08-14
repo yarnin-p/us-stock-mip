@@ -254,6 +254,19 @@ export function TerminalView() {
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState("");
   const [reload, setReload] = useState(0);
+
+  /* The hub hands the ticker over in the query string. Read after mount rather than
+   * during render: the server has no location to read, so initialising state from it
+   * would make the first client pass disagree with the server HTML.
+   *
+   * Only on load, and only into an empty field -- arriving with ?ticker=X and then
+   * typing something else should not have the URL win back on the next render. */
+  useEffect(() => {
+    const passed = new URLSearchParams(window.location.search).get("ticker");
+    if (!passed) return;
+    const clean = passed.trim().toUpperCase().slice(0, 8);
+    if (clean) setTicker((current) => (current === "" ? clean : current));
+  }, []);
   /* The review step. Nothing is written until it has been seen once -- the design's
    * two-step, and the reason the primary button opens a sheet instead of acting. */
   const [confirming, setConfirming] = useState(false);
