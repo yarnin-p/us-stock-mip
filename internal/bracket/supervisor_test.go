@@ -314,7 +314,10 @@ func TestCloseCancelsEveryFeedAndWaits(t *testing.T) {
 // only thing that can tell the feed when to start and stop paying for a symbol.
 func TestServiceReportsOpensAndClosesToTheFeed(t *testing.T) {
 	repository := newStubRepository()
-	service, err := NewService(repository, "paper")
+	service, err := NewService(
+		repository, NoBroker("this test only exercises the feed"),
+		stubAccounts{id: "acct-1"}, "paper",
+	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
@@ -343,7 +346,10 @@ func TestServiceReportsOpensAndClosesToTheFeed(t *testing.T) {
 
 func TestServiceWorksWithoutAFeed(t *testing.T) {
 	repository := newStubRepository()
-	service, err := NewService(repository, "paper")
+	service, err := NewService(
+		repository, NoBroker("this test only exercises the feed"),
+		stubAccounts{id: "acct-1"}, "paper",
+	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}

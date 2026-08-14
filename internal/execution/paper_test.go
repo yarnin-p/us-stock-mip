@@ -120,7 +120,7 @@ func TestAmendingAPaperStopMovesWhereItActuallyFills(t *testing.T) {
 		t.Fatalf("place: %v", err)
 	}
 	// The engine ratchets it up under a new high.
-	if err := adapter.ModifyOrder(context.Background(), ModifyOrderRequest{
+	if _, err := adapter.ModifyOrder(context.Background(), ModifyOrderRequest{
 		AccountID: "a", ClientOrderID: "bracket-2-stop", Ticker: "RMCF",
 		OrderType: "STOP_LOSS", TimeInForce: "GTC", Quantity: 100, StopPrice: 1.70,
 	}); err != nil {

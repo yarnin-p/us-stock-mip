@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
@@ -135,12 +137,12 @@ func (client *Client) CancelOrder(
 // the old one with nothing in the system saying so.
 func (client *Client) ModifyOrder(
 	ctx context.Context, request execution.ModifyOrderRequest,
-) error {
+) (string, error) {
 	if err := validateModifyRequest(request); err != nil {
-		return err
+		return "", err
 	}
 	if client.currentAccessToken() == "" {
-		return errors.New("webull access token is required")
+		return "", errors.New("webull access token is required")
 	}
 	// The learned endpoint, or the compiled-in guess if nothing has been measured.
 	path, accountInBody := client.modifyEndpoint()
@@ -152,9 +154,93 @@ func (client *Client) ModifyOrder(
 	}
 	var body json.RawMessage
 	if err := client.postJSONQuery(ctx, path, query, payload, &body); err != nil {
-		return err
+		if !venueHasNoAmend(err) {
+			return request.ClientOrderID, err
+		}
+		// The venue does not have this call at all. Nothing was sent, so the order is
+		// still resting exactly where it was, and the only way left to move it is to
+		// take it back and put a new one in its place.
+		return client.replaceOrder(ctx, request)
 	}
-	return rejectionIn("amend an order", body)
+	if err := rejectionIn("amend an order", body); err != nil {
+		// A refusal, not a missing endpoint: the venue read the request and said no.
+		// The order is untouched and the caller keeps its handle.
+		return request.ClientOrderID, err
+	}
+	return request.ClientOrderID, nil
+}
+
+// venueHasNoAmend reports whether the venue answered "there is no such call here",
+// as opposed to refusing the request itself.
+//
+// Only 404 and 405 count, and deliberately nothing else. The fallback below cancels
+// a live protective order, so the question it turns on has to be one with an
+// unambiguous answer: a timeout, a 500, or a rejected payload all leave open the
+// possibility that the amendment landed, and withdrawing a stop on a maybe is how a
+// position ends up with nothing protecting it because of a network blip.
+func venueHasNoAmend(err error) bool {
+	var apiError *APIError
+	if !errors.As(err, &apiError) {
+		return false
+	}
+	return apiError.StatusCode == http.StatusNotFound ||
+		apiError.StatusCode == http.StatusMethodNotAllowed
+}
+
+/* Moving a level on a venue with no amend: withdraw, then place again at the new
+ * price.
+ *
+ * This is strictly worse than an amend and is not a design choice. Between the two
+ * calls the position has nothing protecting it -- brief on the clock, expensive in
+ * risk, and exactly the window a halted name reopens into. It lives here rather than
+ * in the caller because which of these it takes to move a level is a fact about this
+ * venue, and the engine and the terminal have no business knowing it: they ask for
+ * the level to move, and one day, when this endpoint answers, they will keep asking
+ * the same way and quietly get the better guarantee.
+ *
+ * The new handle is returned. An empty one means the old order is gone and nothing
+ * replaced it, which the caller must record rather than treat as a failed no-op. */
+func (client *Client) replaceOrder(
+	ctx context.Context, request execution.ModifyOrderRequest,
+) (string, error) {
+	if err := client.CancelOrder(
+		ctx, request.AccountID, request.ClientOrderID,
+	); err != nil {
+		// Nothing has been withdrawn, so the old level is still protecting the
+		// position. Saying so and stopping leaves it that way.
+		return request.ClientOrderID, fmt.Errorf(
+			"this venue has no amend, and withdrawing the order to replace it failed: "+
+				"%w -- the level was not changed", err,
+		)
+	}
+	fresh := replacementOrderID(request.ClientOrderID)
+	replacement := execution.BrokerOrderRequest{
+		AccountID: request.AccountID, ClientOrderID: fresh,
+		Ticker: request.Ticker, Side: "SELL", OrderType: request.OrderType,
+		TimeInForce: request.TimeInForce, TradingSession: "ALL",
+		Quantity:  request.Quantity,
+		StopPrice: request.StopPrice, LimitPrice: request.LimitPrice,
+	}
+	if _, err := client.PlaceOrder(ctx, replacement); err != nil {
+		return "", fmt.Errorf(
+			"this venue has no amend, so the order was withdrawn to be replaced and "+
+				"the replacement was refused: %w -- nothing is protecting this position "+
+				"now and it needs an order by hand", err,
+		)
+	}
+	return fresh, nil
+}
+
+// replacementOrderID derives a fresh handle from the old one, staying inside the 32
+// characters Webull allows. A reused ID is rejected as a duplicate, and a truncated
+// one collides with the order it replaced.
+func replacementOrderID(previous string) string {
+	suffix := strconv.FormatInt(time.Now().UnixMilli()%1_000_000_000, 36)
+	stem := previous
+	if limit := 32 - len(suffix) - 1; len(stem) > limit {
+		stem = stem[:limit]
+	}
+	return stem + "-" + suffix
 }
 
 var _ execution.OrderModifier = (*Client)(nil)

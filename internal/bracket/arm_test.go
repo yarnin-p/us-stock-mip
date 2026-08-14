@@ -14,6 +14,8 @@ import (
 type stubProtector struct {
 	mutex  sync.Mutex
 	placed []execution.BrokerOrderRequest
+	cancelled []string
+	moved     []execution.ModifyOrderRequest
 	// failStop and failTarget make the two halves fail independently, because the
 	// whole design of Arm is that they are not equally important.
 	failStop, failTarget error
@@ -34,6 +36,24 @@ func (protector *stubProtector) PlaceOrder(
 	return execution.Submission{BrokerOrderID: order.ClientOrderID}, nil
 }
 
+func (protector *stubProtector) CancelOrder(
+	_ context.Context, _, clientOrderID string,
+) error {
+	protector.mutex.Lock()
+	defer protector.mutex.Unlock()
+	protector.cancelled = append(protector.cancelled, clientOrderID)
+	return nil
+}
+
+func (protector *stubProtector) ModifyOrder(
+	_ context.Context, request execution.ModifyOrderRequest,
+) (string, error) {
+	protector.mutex.Lock()
+	defer protector.mutex.Unlock()
+	protector.moved = append(protector.moved, request)
+	return request.ClientOrderID, nil
+}
+
 func (protector *stubProtector) orders() []execution.BrokerOrderRequest {
 	protector.mutex.Lock()
 	defer protector.mutex.Unlock()
@@ -52,18 +72,24 @@ func (accounts stubAccounts) DefaultBrokerAccount(
 }
 
 func armService(
-	t *testing.T, record Record, protector Protector, accounts AccountSource,
+	t *testing.T, record Record, protector BrokerOrders, accounts AccountSource,
 ) (*Service, *stubRepository) {
 	t.Helper()
 	repository := newStubRepository(record)
-	service, err := NewService(repository, "paper")
+	// A test with no venue gets the one that refuses, not a nil. That is the same
+	// thing production gets when credentials are missing, so a test for "arming
+	// without a broker" exercises the real path rather than a shape only tests see.
+	if protector == nil {
+		protector = NoBroker("this test wired no venue")
+	}
+	if accounts == nil {
+		accounts = stubAccounts{id: "acct-1"}
+	}
+	service, err := NewService(repository, protector, accounts, "paper")
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
-	if protector != nil {
-		service = service.WithBroker(protector, accounts, quietLogger())
-	}
-	return service, repository
+	return service.WithLogger(quietLogger()), repository
 }
 
 func pendingRecord() Record {
@@ -192,13 +218,13 @@ func TestAFailedTargetStillArmsAndSaysSo(t *testing.T) {
 
 func TestArmingRefusesWithoutWhatItNeeds(t *testing.T) {
 	for name, testCase := range map[string]struct {
-		protector Protector
+		protector BrokerOrders
 		accounts  AccountSource
 		input     ArmInput
 		wants     string
 	}{
 		"no broker wired": {
-			input: ArmInput{FillPrice: 10}, wants: "nothing in the market",
+			input: ArmInput{FillPrice: 10}, wants: "the position is unprotected",
 		},
 		"no fill price": {
 			protector: &stubProtector{}, accounts: stubAccounts{id: "a"},

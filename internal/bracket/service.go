@@ -215,26 +215,43 @@ type Service struct {
 	// a caller that only reads brackets -- a test, a report -- does not have to
 	// stand up a market-data connection to do it.
 	feed Feed
-	// protector and accounts are what arming needs. Both optional, and both absent
-	// together: a service wired without a broker can still plan, record and read.
-	protector Protector
+	// orders is the venue. Required, not optional: every operation here that changes
+	// a position has to reach a broker, and making this something a caller could
+	// forget to wire is how Amend came to edit the record and tell nobody.
+	orders    BrokerOrders
 	accounts  AccountSource
-	// withdrawer takes back the GTC orders arming rested at the broker. Optional for
-	// the same reason protector is: a service that only plans has nothing to withdraw.
-	withdrawer StopWithdrawer
-	stopShape  StopShape
-	log        *slog.Logger
+	stopShape StopShape
+	log       *slog.Logger
 }
 
-func NewService(repository Repository, mode string) (*Service, error) {
+// NewService builds the service. The broker and the account it trades are arguments
+// rather than optional wiring, because a bracket service that cannot reach a venue is
+// not a lesser version of this one -- it is one that can quietly claim a position is
+// protected. Refusing to build is the only honest answer to that.
+func NewService(
+	repository Repository, orders BrokerOrders, accounts AccountSource, mode string,
+) (*Service, error) {
 	if repository == nil {
 		return nil, errors.New("bracket service requires a repository")
+	}
+	if orders == nil {
+		return nil, errors.New(
+			"bracket service requires a broker: every level it moves has to reach one",
+		)
+	}
+	if accounts == nil {
+		return nil, errors.New(
+			"bracket service requires an account source, or every order is refused for " +
+				"want of an account",
+		)
 	}
 	mode = strings.TrimSpace(mode)
 	if mode == "" {
 		mode = "paper"
 	}
-	return &Service{repository: repository, mode: mode}, nil
+	return &Service{
+		repository: repository, orders: orders, accounts: accounts, mode: mode,
+	}, nil
 }
 
 // WithFeed attaches the feed the service reports opens and closes to. Without one
@@ -246,58 +263,6 @@ func (service *Service) WithFeed(feed Feed) *Service {
 	return service
 }
 
-// Protector puts the two orders that protect a filled position into the market.
-//
-// One method, because that is all this package needs from a broker here. It is the
-// same shape as the engine's SliceSeller and deliberately a separate name: the two
-// are different promises made at different moments, and each consumer stating its
-// own requirement is what keeps either from growing to fit the other.
-type Protector interface {
-	PlaceOrder(
-		context.Context, execution.BrokerOrderRequest,
-	) (execution.Submission, error)
-}
-
-// AccountSource names the broker account the protective orders belong to. Without
-// one every later amendment is refused by the broker for want of an account, so a
-// bracket is not armed until this has answered.
-type AccountSource interface {
-	DefaultBrokerAccount(context.Context) (string, error)
-}
-
-// WithBroker attaches the broker protective orders go to. Without it a bracket can
-// still be opened, previewed and read; it simply cannot be armed, and Arm says so
-// rather than reporting a position as protected by nothing.
-func (service *Service) WithBroker(
-	protector Protector, accounts AccountSource, logger *slog.Logger,
-) *Service {
-	service.protector = protector
-	service.accounts = accounts
-	service.log = logger
-	return service
-}
-
-// StopWithdrawer takes back an order this service placed. Arming rests two GTC orders
-// at the broker -- the stop and the target -- and GTC means they outlive the bracket
-// unless something withdraws them. Closing is that something.
-//
-// Named for what it does rather than for the broker behind it, and declared here rather
-// than shared with the engine's StopCanceller of the same shape: the two are promises
-// made at different moments, and each consumer stating its own is what stops either
-// growing to fit the other.
-type StopWithdrawer interface {
-	CancelOrder(ctx context.Context, accountID, clientOrderID string) error
-}
-
-// WithWithdrawer attaches the way resting protective orders are taken back. Without it
-// Close still closes -- the state has to become durable either way -- but it says
-// loudly that orders were left behind, because a GTC sell nobody is watching will
-// eventually meet a price.
-func (service *Service) WithWithdrawer(withdrawer StopWithdrawer) *Service {
-	service.withdrawer = withdrawer
-	return service
-}
-
 // WithStopShape chooses how the protective stop is expressed. It must match what the
 // engine amends with, or the amendment drops the limit the broker is holding.
 func (service *Service) WithStopShape(shape StopShape) (*Service, error) {
@@ -306,6 +271,13 @@ func (service *Service) WithStopShape(shape StopShape) (*Service, error) {
 	}
 	service.stopShape = shape
 	return service, nil
+}
+
+// WithLogger attaches the log. Optional, and genuinely so: nothing here changes
+// behaviour based on whether anybody is listening.
+func (service *Service) WithLogger(logger *slog.Logger) *Service {
+	service.log = logger
+	return service
 }
 
 func (service *Service) shape() StopShape {
@@ -347,13 +319,6 @@ type ArmInput struct {
 func (service *Service) Arm(
 	ctx context.Context, id int64, input ArmInput,
 ) (Record, error) {
-	if service.protector == nil || service.accounts == nil {
-		return Record{}, errors.New(
-			"no broker is wired for protective orders, so this bracket cannot be " +
-				"armed; arming it would claim to protect a position with nothing in " +
-				"the market",
-		)
-	}
 	if !(input.FillPrice > 0) {
 		return Record{}, errors.New("arming a bracket needs the price that filled")
 	}
@@ -411,7 +376,7 @@ func (service *Service) Arm(
 		input.Note = strings.TrimSpace(
 			note + " · stop held by the engine; no protection while MIP is down",
 		)
-	} else if _, err := service.protector.PlaceOrder(
+	} else if _, err := service.orders.PlaceOrder(
 		ctx, execution.BrokerOrderRequest{
 			AccountID: account, ClientOrderID: stopID,
 			Ticker: record.Ticker, Side: "SELL", OrderType: shape.OrderType,
@@ -426,7 +391,7 @@ func (service *Service) Arm(
 	}
 	note := strings.TrimSpace(input.Note)
 	targetID := fmt.Sprintf("bracket-%d-target", id)
-	if _, err := service.protector.PlaceOrder(ctx, execution.BrokerOrderRequest{
+	if _, err := service.orders.PlaceOrder(ctx, execution.BrokerOrderRequest{
 		AccountID: account, ClientOrderID: targetID,
 		Ticker: record.Ticker, Side: "SELL", OrderType: "LIMIT",
 		TimeInForce: "GTC", TradingSession: "ALL",
@@ -631,23 +596,37 @@ func (service *Service) Amend(
 			reason += "; engine released"
 		}
 	}
-	/* The broker before the database.
+	/* The venue before the database.
 	 *
 	 * This wrote the record and stopped, so moving a stop by hand changed the number
-	 * on the screen and left the order at the broker exactly where it was. Every
-	 * later screen then read the new number and reported a position protected at a
-	 * level nothing was holding -- the one lie this system must never tell.
+	 * on the screen and left the order at the venue exactly where it was. Every later
+	 * screen then read the new number and reported a position protected at a level
+	 * nothing was holding -- and the engine read it too, taking a price that was never
+	 * sent as the baseline its ratchet works up from.
 	 *
-	 * Cancel and replace rather than amend, because amend does not work: probing the
-	 * account on 2026-08-14 found none of the four documented modify paths recognised,
-	 * including the one the adapter sends. Cancel and place are proven, and they are
-	 * what arming already uses.
-	 *
-	 * The order matters and so does the failure. Cancel first, place second, and if
-	 * the place fails the position is left with no resting stop -- so that case
-	 * returns an error loud enough to act on rather than a record quietly saved.
-	 */
-	if err := service.replaceProtection(ctx, &record, previousStop, previousTarget); err != nil {
+	 * It goes down the same port the engine's trailing uses, so there is one way this
+	 * package moves a level and both the operator and the ladder take it. */
+	if err := service.moveLevels(ctx, &record, previousStop, previousTarget); err != nil {
+		/* The venue refused, so the record must not claim the level moved.
+		 *
+		 * The prices go back to what they were, but the order IDs do not: moveLevels
+		 * has already written what is live now, and an empty one means an order was
+		 * withdrawn and nothing replaced it. Saving that with an audit row marked
+		 * unapplied is what the engine does on the same failure, and it is the only
+		 * version of this an operator can act on. */
+		record.StopPrice, record.TargetPrice = previousStop, previousTarget
+		if _, saveErr := service.repository.SaveBracket(ctx, record, AdjustmentRecord{
+			BracketID: id, Trigger: TriggerManual,
+			PreviousStop: previousStop, NewStop: previousStop,
+			PreviousTarget: previousTarget, NewTarget: previousTarget,
+			LastPrice: record.HighWater, HighWater: record.HighWater,
+			Applied: false, BrokerError: err.Error(), Reason: reason,
+		}); saveErr != nil {
+			service.warn(
+				"the amendment failed at the broker and the attempt could not be recorded",
+				"bracket_id", id, "ticker", record.Ticker, "error", saveErr,
+			)
+		}
 		return Record{}, err
 	}
 
@@ -701,7 +680,7 @@ func (service *Service) withdrawResting(ctx context.Context, record Record) {
 		if order.id == "" {
 			continue
 		}
-		if service.withdrawer == nil {
+		if service.orders == nil {
 			service.warn(
 				"a resting protective order was left at the broker because this service "+
 					"has no way to withdraw one; cancel it by hand before trading this "+
@@ -711,7 +690,7 @@ func (service *Service) withdrawResting(ctx context.Context, record Record) {
 			)
 			continue
 		}
-		if err := service.withdrawer.CancelOrder(
+		if err := service.orders.CancelOrder(
 			ctx, record.AccountID, order.id,
 		); err != nil {
 			// An order the broker has already filled or expired cannot be cancelled,
@@ -798,12 +777,6 @@ func (service *Service) Exit(
 	if record.State != StateActive && record.State != StatePending {
 		return Record{}, fmt.Errorf("%s is already closed", record.State)
 	}
-	if service.protector == nil {
-		return Record{}, errors.New(
-			"no broker is wired, so nothing here can sell -- close the position in the " +
-				"broker app and then mark this plan closed",
-		)
-	}
 	quantity := input.Quantity
 	if quantity <= 0 {
 		quantity = record.Quantity
@@ -833,7 +806,7 @@ func (service *Service) Exit(
 	if input.LimitPrice > 0 {
 		request.LimitPrice = input.LimitPrice
 	}
-	if _, err := service.protector.PlaceOrder(ctx, request); err != nil {
+	if _, err := service.orders.PlaceOrder(ctx, request); err != nil {
 		return Record{}, fmt.Errorf(
 			"placing the closing order for %s: %w -- the protective orders have been "+
 				"withdrawn, so this position is now unguarded and must be dealt with by hand",
@@ -865,16 +838,18 @@ func (service *Service) Exit(
 	return closed, nil
 }
 
-/* Moving a resting protective order by taking it back and placing a new one.
+/* Moving the levels that are already resting at the venue.
  *
- * Used by the manual amend. The engine has its own path that tries ModifyOrder first,
- * and that path is currently broken at the venue -- when it is fixed, or replaced with
- * this, the two should meet here.
+ * One call per leg whose price actually changed, straight down the same port the
+ * engine's trailing uses. How a particular venue performs that move -- an amend in
+ * place, or a withdrawal and a fresh order -- is the adapter's business, and this
+ * has no opinion about it beyond storing the order ID that comes back.
  *
- * Only the legs whose price actually changed are touched. Cancelling and re-placing an
- * order at the price it already has is a window of no protection bought for nothing.
+ * A leg whose price did not move is left alone. On a venue with no working amend the
+ * adapter has to withdraw and re-place, and doing that to reach the price an order
+ * already has is a window of no protection bought for nothing.
  */
-func (service *Service) replaceProtection(
+func (service *Service) moveLevels(
 	ctx context.Context, record *Record, previousStop, previousTarget float64,
 ) error {
 	legs := []struct {
@@ -886,59 +861,42 @@ func (service *Service) replaceProtection(
 		isStop    bool
 	}{
 		{"stop", &record.StopOrderID, record.StopPrice, previousStop,
-			service.stopShape.OrderType, true},
+			service.shape().OrderType, true},
 		{"target", &record.TargetOrderID, record.TargetPrice, previousTarget,
 			"LIMIT", false},
 	}
 	for _, leg := range legs {
-		// Nothing to do when the price did not move, and nothing to move when no order
-		// was ever rested. Changing the ladder rules or taking the wheel touches
-		// neither, which is why the broker is only required once a level actually
-		// changes.
+		// Nothing to move when the price is unchanged, and nothing to move when no
+		// order was ever rested -- a stop held by the engine has no venue side.
 		if leg.price == leg.was || *leg.orderID == "" {
 			continue
 		}
-		if service.protector == nil {
-			return fmt.Errorf(
-				"no broker is wired, so the %s cannot be moved where it matters",
-				leg.name,
-			)
-		}
-		if service.withdrawer != nil {
-			if err := service.withdrawer.CancelOrder(
-				ctx, record.AccountID, *leg.orderID,
-			); err != nil {
-				// Nothing has been withdrawn, so the old level is still protecting the
-				// position. Refusing here leaves it that way.
-				return fmt.Errorf(
-					"withdrawing the %s order to move it: %w -- the level was not changed",
-					leg.name, err,
-				)
-			}
-		}
-		fresh := fmt.Sprintf(
-			"bracket-%d-%s-%d", record.ID, leg.name, time.Now().UnixMilli(),
-		)
-		request := execution.BrokerOrderRequest{
-			AccountID: record.AccountID, ClientOrderID: fresh,
-			Ticker: record.Ticker, Side: "SELL", OrderType: leg.orderType,
-			TimeInForce: "GTC", TradingSession: "ALL", Quantity: record.Quantity,
+		request := execution.ModifyOrderRequest{
+			AccountID: record.AccountID, ClientOrderID: *leg.orderID,
+			Ticker: record.Ticker, OrderType: leg.orderType,
+			TimeInForce: "GTC", Quantity: record.Quantity,
 		}
 		if leg.isStop {
 			request.StopPrice = leg.price
-			request.LimitPrice = service.stopShape.LimitFor(leg.price)
+			// Both, always, on a stop-limit. Moving the trigger and leaving the limit
+			// the venue is holding turns the protection into something else.
+			if leg.orderType == "STOP_LOSS_LIMIT" {
+				request.LimitPrice = service.shape().LimitFor(leg.price)
+			}
 		} else {
 			request.LimitPrice = leg.price
 		}
-		if _, err := service.protector.PlaceOrder(ctx, request); err != nil {
-			*leg.orderID = ""
+		live, err := service.orders.ModifyOrder(ctx, request)
+		if err != nil {
+			// What is live now, even on failure: an adapter that withdrew and could
+			// not re-place hands back an empty ID, and that is exactly the fact an
+			// operator needs. Recorded before the error is returned so it is not lost.
+			*leg.orderID = live
 			return fmt.Errorf(
-				"placing the new %s order at %.4f: %w -- the old one has been withdrawn, "+
-					"so this position has no %s protecting it and needs one by hand now",
-				leg.name, leg.price, err, leg.name,
+				"moving the %s to %.4f: %w", leg.name, leg.price, err,
 			)
 		}
-		*leg.orderID = fresh
+		*leg.orderID = live
 	}
 	return nil
 }

@@ -208,19 +208,24 @@ func (adapter *PaperAdapter) CancelOrder(
 // ModifyOrder amends a working paper order in place so trailing behaves here the
 // way it will against a live broker. Only an order still recorded as submitted
 // can be amended; a filled one is history.
+//
+// It returns the client order ID it was given. Amending in place is what a venue
+// does when it can, and the paper venue always can, so the handle never changes
+// here. An adapter for a venue that cannot amend has to withdraw and re-place and
+// hands back a new one -- which is why callers read the return rather than assume.
 func (adapter *PaperAdapter) ModifyOrder(
 	_ context.Context, request ModifyOrderRequest,
-) error {
+) (string, error) {
 	if strings.TrimSpace(request.ClientOrderID) == "" {
-		return errors.New("paper modify requires a client order ID")
+		return "", errors.New("paper modify requires a client order ID")
 	}
 	for _, price := range []float64{request.StopPrice, request.LimitPrice} {
 		if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
-			return errors.New("paper modify prices must be finite and nonnegative")
+			return "", errors.New("paper modify prices must be finite and nonnegative")
 		}
 	}
 	if request.StopPrice <= 0 && request.LimitPrice <= 0 {
-		return errors.New("paper modify requires a stop or limit price")
+		return "", errors.New("paper modify requires a stop or limit price")
 	}
 	adapter.mutex.Lock()
 	defer adapter.mutex.Unlock()
@@ -230,7 +235,7 @@ func (adapter *PaperAdapter) ModifyOrder(
 			continue
 		}
 		if order.state != string(StateSubmitted) {
-			return fmt.Errorf(
+			return "", fmt.Errorf(
 				"paper order %s is %s and cannot be modified",
 				request.ClientOrderID, order.state,
 			)
@@ -248,9 +253,9 @@ func (adapter *PaperAdapter) ModifyOrder(
 		if request.Quantity > 0 {
 			order.quantity = request.Quantity
 		}
-		return nil
+		return request.ClientOrderID, nil
 	}
-	return fmt.Errorf("paper order %s is not working", request.ClientOrderID)
+	return "", fmt.Errorf("paper order %s is not working", request.ClientOrderID)
 }
 
 var _ OrderModifier = (*PaperAdapter)(nil)

@@ -110,12 +110,23 @@ func TestPreviewRejectsAnEmptyTicker(t *testing.T) {
 
 func newTestService(t *testing.T) (*Service, *stubRepository) {
 	t.Helper()
+	service, repository, _ := newTestServiceOn(t, &recordingBroker{})
+	return service, repository
+}
+
+// newTestServiceOn builds the service on a venue the caller can inspect. Handing the
+// broker back is the point: the interesting assertion about most of these operations
+// is what reached the venue, and a test that cannot see the venue cannot make it.
+func newTestServiceOn(
+	t *testing.T, broker *recordingBroker,
+) (*Service, *stubRepository, *recordingBroker) {
+	t.Helper()
 	repository := newStubRepository()
-	service, err := NewService(repository, "paper")
+	service, err := NewService(repository, broker, fixedAccount{}, "paper")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	return service, repository
+	return service, repository, broker
 }
 
 func TestOpenRecordsPendingWithoutPlacingAnything(t *testing.T) {
@@ -202,8 +213,6 @@ func TestActivateRefusesABracketThatIsNotPending(t *testing.T) {
 func TestAmendLetsTheOperatorWidenAStopDeliberately(t *testing.T) {
 	service, _ := newTestService(t)
 	// Moving a level reaches the venue now, so these need something to reach.
-	service = service.WithBroker(&recordingBroker{}, fixedAccount{}, nil).
-		WithWithdrawer(&recordingBroker{})
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
 		context.Background(), created.ID, 7.77, "stop-1", "target-1",
@@ -267,13 +276,17 @@ func TestCloseRejectsANonClosingState(t *testing.T) {
 }
 
 func TestNewServiceRequiresARepository(t *testing.T) {
-	if _, err := NewService(nil, "paper"); err == nil {
+	if _, err := NewService(
+		nil, &recordingBroker{}, fixedAccount{}, "paper",
+	); err == nil {
 		t.Fatal("a nil repository was accepted")
 	}
 }
 
 func TestNewServiceDefaultsToPaper(t *testing.T) {
-	service, err := NewService(newStubRepository(), "  ")
+	service, err := NewService(
+		newStubRepository(), &recordingBroker{}, fixedAccount{}, "  ",
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -335,8 +348,6 @@ func TestAmendRefusesALadderWhoseRungsAreOutOfOrder(t *testing.T) {
 func TestHoldAndReleasePutTheOperatorInCharge(t *testing.T) {
 	service, repository := newTestService(t)
 	// Moving a level reaches the venue now, so these need something to reach.
-	service = service.WithBroker(&recordingBroker{}, fixedAccount{}, nil).
-		WithWithdrawer(&recordingBroker{})
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
 		context.Background(), created.ID, 10, "stop-1", "target-1",
@@ -496,8 +507,15 @@ func TestTheDepthMultipleIsConfigurable(t *testing.T) {
 type recordingBroker struct {
 	placed    []execution.BrokerOrderRequest
 	cancelled []string
+	moved     []execution.ModifyOrderRequest
 	placeErr  error
 	cancelErr error
+	modifyErr error
+	// replaces makes this venue behave like one with no working amend: every move
+	// is a withdrawal and a fresh order, and the handle changes. Webull is such a
+	// venue today, so a test that only ever sees an in-place amend is testing an
+	// arrangement production does not have.
+	replaces bool
 }
 
 func (broker *recordingBroker) PlaceOrder(
@@ -520,65 +538,167 @@ func (broker *recordingBroker) CancelOrder(
 	return nil
 }
 
+func (broker *recordingBroker) ModifyOrder(
+	ctx context.Context, request execution.ModifyOrderRequest,
+) (string, error) {
+	broker.moved = append(broker.moved, request)
+	if broker.modifyErr != nil {
+		return request.ClientOrderID, broker.modifyErr
+	}
+	if !broker.replaces {
+		return request.ClientOrderID, nil
+	}
+	if err := broker.CancelOrder(ctx, request.AccountID, request.ClientOrderID); err != nil {
+		return request.ClientOrderID, err
+	}
+	fresh := request.ClientOrderID + "-replaced"
+	side := execution.BrokerOrderRequest{
+		AccountID: request.AccountID, ClientOrderID: fresh, Ticker: request.Ticker,
+		Side: "SELL", OrderType: request.OrderType, TimeInForce: request.TimeInForce,
+		TradingSession: "ALL", Quantity: request.Quantity,
+		StopPrice: request.StopPrice, LimitPrice: request.LimitPrice,
+	}
+	if _, err := broker.PlaceOrder(ctx, side); err != nil {
+		// The old order is gone and nothing replaced it. An empty handle is how that
+		// is said, and the caller has to be able to record it.
+		return "", err
+	}
+	return fresh, nil
+}
+
 type fixedAccount struct{}
 
 func (fixedAccount) DefaultBrokerAccount(context.Context) (string, error) {
 	return "acct-1", nil
 }
 
-/* Moving a level by hand must take the old order back and place a new one at the new
- * price. It used to write the record and stop there, which is how the screen came to
- * report a stop at a level the broker had never been told about. */
-func TestAmendMovesTheOrderAtTheBrokerToo(t *testing.T) {
-	service, _ := newTestService(t)
-	broker := &recordingBroker{}
-	service = service.WithBroker(broker, fixedAccount{}, nil).WithWithdrawer(broker)
+/* Moving a level by hand has to reach the venue in the same breath.
+ *
+ * This used to write the record and stop there. The screen then reported a stop at a
+ * level the broker had never been told about -- and the engine read that number too,
+ * taking a price that was never sent as the baseline its ratchet works up from. */
+func TestAmendMovesTheLevelAtTheVenue(t *testing.T) {
+	service, _, broker := newTestServiceOn(t, &recordingBroker{})
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
 		context.Background(), created.ID, 7.77, "stop-1", "target-1",
 	); err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	before := len(broker.placed)
 	if _, err := service.Amend(context.Background(), created.ID,
 		AmendInput{StopPrice: 6.50}); err != nil {
 		t.Fatalf("amend: %v", err)
 	}
-	if len(broker.cancelled) != 1 || broker.cancelled[0] != "stop-1" {
-		t.Fatalf("cancelled = %v, want the old stop order withdrawn", broker.cancelled)
+	if len(broker.moved) != 1 {
+		t.Fatalf("the venue saw %d moves, want exactly one", len(broker.moved))
 	}
-	if len(broker.placed) != before+1 {
-		t.Fatalf("placed %d orders, want one replacement", len(broker.placed)-before)
+	move := broker.moved[0]
+	if move.ClientOrderID != "stop-1" {
+		t.Fatalf("moved order = %q, want the resting stop", move.ClientOrderID)
 	}
-	fresh := broker.placed[len(broker.placed)-1]
-	if fresh.StopPrice != 6.50 {
-		t.Fatalf("replacement stop = %v, want 6.50", fresh.StopPrice)
-	}
-	if fresh.Side != "SELL" {
-		t.Fatalf("replacement side = %s, want SELL", fresh.Side)
+	if move.StopPrice != 6.50 {
+		t.Fatalf("moved to %v, want 6.50", move.StopPrice)
 	}
 }
 
-/* When the replacement cannot be placed the old one has already gone, so the position
- * is bare. Saying so is the only useful thing left to do -- reporting success would
- * leave a screen claiming protection that does not exist. */
-func TestAmendRefusesWhenTheReplacementCannotBePlaced(t *testing.T) {
-	service, _ := newTestService(t)
-	broker := &recordingBroker{}
-	service = service.WithBroker(broker, fixedAccount{}, nil).WithWithdrawer(broker)
+/* Only the leg that changed. On a venue with no working amend the adapter has to
+ * withdraw and re-place, and doing that to reach a price an order already has is a
+ * window with nothing protecting the position, bought for nothing. */
+func TestAmendLeavesTheUnchangedLegAlone(t *testing.T) {
+	service, _, broker := newTestServiceOn(t, &recordingBroker{})
 	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
 	if _, err := service.Activate(
 		context.Background(), created.ID, 7.77, "stop-1", "target-1",
 	); err != nil {
 		t.Fatalf("activate: %v", err)
 	}
-	broker.placeErr = errors.New("venue refused")
-	_, err := service.Amend(context.Background(), created.ID,
-		AmendInput{StopPrice: 6.50})
-	if err == nil {
-		t.Fatal("a failed replacement was reported as a successful amendment")
+	if _, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 6.50}); err != nil {
+		t.Fatalf("amend: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no stop protecting it") {
-		t.Fatalf("error = %v, want it to say the position is unprotected", err)
+	for _, move := range broker.moved {
+		if move.ClientOrderID == "target-1" {
+			t.Fatal("the target was moved, but its price did not change")
+		}
+	}
+}
+
+/* A venue that cannot amend is served by an adapter that withdraws and re-places, and
+ * then the handle changes. The record has to learn the new one or the next amendment,
+ * and the close, address an order that no longer exists. */
+func TestAmendStoresTheHandleAVenueHandsBack(t *testing.T) {
+	service, repository, broker := newTestServiceOn(
+		t, &recordingBroker{replaces: true},
+	)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	if _, err := service.Activate(
+		context.Background(), created.ID, 7.77, "stop-1", "target-1",
+	); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	amended, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 6.50})
+	if err != nil {
+		t.Fatalf("amend: %v", err)
+	}
+	if amended.StopOrderID != "stop-1-replaced" {
+		t.Fatalf("stop handle = %q, want the replacement", amended.StopOrderID)
+	}
+	stored, err := repository.Bracket(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("reading it back: %v", err)
+	}
+	if stored.StopOrderID != "stop-1-replaced" {
+		t.Fatalf("stored handle = %q, want the replacement", stored.StopOrderID)
+	}
+	if len(broker.cancelled) != 1 || broker.cancelled[0] != "stop-1" {
+		t.Fatalf("cancelled = %v, want the old stop withdrawn", broker.cancelled)
+	}
+}
+
+/* When the venue refuses, the record must not claim the level moved -- and it must not
+ * keep a handle for an order the adapter has already withdrawn either. */
+func TestAmendKeepsTheOldLevelWhenTheVenueRefuses(t *testing.T) {
+	service, repository, _ := newTestServiceOn(
+		t, &recordingBroker{replaces: true, placeErr: errors.New("venue is down")},
+	)
+	created, _ := service.Open(context.Background(), terminalInput(), "acct-1")
+	activated, err := service.Activate(
+		context.Background(), created.ID, 7.77, "stop-1", "target-1",
+	)
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if _, err := service.Amend(context.Background(), created.ID,
+		AmendInput{StopPrice: 6.50}); err == nil {
+		t.Fatal("amend succeeded, but the venue refused the replacement")
+	}
+	stored, err := repository.Bracket(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("reading it back: %v", err)
+	}
+	if stored.StopPrice != activated.StopPrice {
+		t.Fatalf(
+			"stored stop = %v, want the old %v: the move never reached the venue",
+			stored.StopPrice, activated.StopPrice,
+		)
+	}
+	if stored.StopOrderID != "" {
+		t.Fatalf(
+			"stored handle = %q, want empty: the adapter withdrew it and could not "+
+				"replace it, so nothing is protecting this position",
+			stored.StopOrderID,
+		)
+	}
+	adjustments, err := repository.BracketAdjustments(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("adjustments: %v", err)
+	}
+	last := adjustments[len(adjustments)-1]
+	if last.Applied || last.BrokerError == "" {
+		t.Fatalf(
+			"audit row applied=%v error=%q, want an unapplied row carrying the reason",
+			last.Applied, last.BrokerError,
+		)
 	}
 }

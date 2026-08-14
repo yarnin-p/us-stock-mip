@@ -247,17 +247,23 @@ type ModifyOrderRequest struct {
 	StopPrice     float64
 }
 
-// OrderModifier is implemented by brokers that can amend a working order in
-// place. It is deliberately separate from BrokerAdapter, because not every
-// broker can do this and a caller must be able to tell which one it holds.
+// OrderModifier moves a working order's prices. Whether the broker behind it can
+// amend in place or has to withdraw and re-place is the adapter's business and
+// nobody else's: the caller wants the level moved, and how a particular venue
+// spells that is exactly the detail an adapter exists to absorb.
 //
-// The distinction matters for money. Cancelling a stop and placing a new one
-// leaves the position unprotected in between, and that gap is exactly when a
-// halted, fast-moving name gaps through the level. Code that finds only a
-// BrokerAdapter should report the weaker guarantee rather than treat the two as
-// equivalent.
+// It returns the client order ID that is live afterwards. Usually that is the one
+// passed in. An adapter serving a venue with no working amend has to withdraw and
+// re-place, and then the handle changes -- so the caller stores what comes back
+// rather than assuming it still holds the right one. Assuming is how the next
+// amendment goes to an order that no longer exists.
+//
+// Amending in place is worth preferring where a venue offers it: cancelling a stop
+// and placing a new one leaves the position unprotected in between, and that gap is
+// exactly when a halted, fast-moving name gaps through the level. That preference
+// belongs in the adapter too.
 type OrderModifier interface {
-	ModifyOrder(context.Context, ModifyOrderRequest) error
+	ModifyOrder(context.Context, ModifyOrderRequest) (string, error)
 }
 
 // OrderOutcome is what became of one order that was placed.

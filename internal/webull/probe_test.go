@@ -241,7 +241,7 @@ func TestModifyOrderReportsARefusalCarriedInAnHTTP200(t *testing.T) {
 				`"error_code":"INVALID_PRICE","error_msg":"stop above last trade"}]}`,
 		))
 	})
-	err := client.ModifyOrder(context.Background(), execution.ModifyOrderRequest{
+	_, err := client.ModifyOrder(context.Background(), execution.ModifyOrderRequest{
 		AccountID: "account-1", ClientOrderID: "bracket-7-stop",
 		Ticker: "RMCF", OrderType: "STOP_LOSS", TimeInForce: "GTC",
 		Quantity: 1700, StopPrice: 1.52,
@@ -259,7 +259,7 @@ func TestModifyOrderAcceptsAnEmptyAcknowledgement(t *testing.T) {
 	client := probeClient(t, func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusOK)
 	})
-	if err := client.ModifyOrder(
+	if _, err := client.ModifyOrder(
 		context.Background(), execution.ModifyOrderRequest{
 			AccountID: "account-1", ClientOrderID: "bracket-7-stop",
 			Ticker: "RMCF", OrderType: "STOP_LOSS", TimeInForce: "GTC",
@@ -468,7 +468,7 @@ func TestCalibrationChangesWhatLaterOrdersSend(t *testing.T) {
 	// And an amendment must go to the learned endpoint, with account_id where that
 	// endpoint wants it.
 	modifyPaths, modifyQueries = nil, nil
-	if err := client.ModifyOrder(
+	if _, err := client.ModifyOrder(
 		context.Background(), execution.ModifyOrderRequest{
 			AccountID: "acct-1", ClientOrderID: "bracket-1-stop", Ticker: "RMCF",
 			OrderType: "STOP_LOSS", TimeInForce: "GTC",

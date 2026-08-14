@@ -160,19 +160,67 @@ func (repository *stubRepository) auditCount() int {
 	return len(repository.adjustments)
 }
 
+// stubModifier is the whole venue, not a slice of it.
+//
+// It used to implement only ModifyOrder, which meant a test could stand up a service
+// or an engine that had no way to place or cancel -- and an operation that quietly
+// skipped the venue passed against it. Implementing all three is what lets a test
+// assert the negative: that a call which should have reached a broker did.
 type stubModifier struct {
-	mutex    sync.Mutex
-	requests []execution.ModifyOrderRequest
-	err      error
+	mutex     sync.Mutex
+	requests  []execution.ModifyOrderRequest
+	placed    []execution.BrokerOrderRequest
+	cancelled []string
+	err       error
+	placeErr  error
+	cancelErr error
 }
 
 func (modifier *stubModifier) ModifyOrder(
 	_ context.Context, request execution.ModifyOrderRequest,
-) error {
+) (string, error) {
 	modifier.mutex.Lock()
 	defer modifier.mutex.Unlock()
 	modifier.requests = append(modifier.requests, request)
-	return modifier.err
+	if modifier.err != nil {
+		// The handle is unchanged: this venue amends in place, so a refusal leaves the
+		// order exactly where it was rather than withdrawing it.
+		return request.ClientOrderID, modifier.err
+	}
+	return request.ClientOrderID, nil
+}
+
+func (modifier *stubModifier) PlaceOrder(
+	_ context.Context, request execution.BrokerOrderRequest,
+) (execution.Submission, error) {
+	modifier.mutex.Lock()
+	defer modifier.mutex.Unlock()
+	modifier.placed = append(modifier.placed, request)
+	if modifier.placeErr != nil {
+		return execution.Submission{}, modifier.placeErr
+	}
+	return execution.Submission{BrokerOrderID: request.ClientOrderID}, nil
+}
+
+func (modifier *stubModifier) CancelOrder(
+	_ context.Context, _, clientOrderID string,
+) error {
+	modifier.mutex.Lock()
+	defer modifier.mutex.Unlock()
+	modifier.cancelled = append(modifier.cancelled, clientOrderID)
+	return modifier.cancelErr
+}
+
+func (modifier *stubModifier) placements() []execution.BrokerOrderRequest {
+	modifier.mutex.Lock()
+	defer modifier.mutex.Unlock()
+	return append([]execution.BrokerOrderRequest(nil), modifier.placed...)
+}
+
+func (modifier *stubModifier) cancellations() []string {
+	modifier.mutex.Lock()
+	defer modifier.mutex.Unlock()
+	return append([]string(nil), modifier.cancelled...)
 }
 
 func (modifier *stubModifier) calls() []execution.ModifyOrderRequest {

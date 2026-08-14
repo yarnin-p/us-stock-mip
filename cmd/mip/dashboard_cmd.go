@@ -209,10 +209,6 @@ func runServe(args []string, stderr io.Writer) error {
 	// The bracket terminal runs in whatever mode execution is in. It never places
 	// an order itself, so this wiring cannot promote paper to live; flipping modes
 	// stays a deliberate configuration change.
-	bracketService, err := bracket.NewService(store, appConfig.TradingMode)
-	if err != nil {
-		return fmt.Errorf("wiring the bracket terminal: %w", err)
-	}
 	// One broker instance, shared. The service places the protective orders through
 	// it, the engine amends those same orders, and -- in paper -- it is the venue that
 	// fills them. Two instances would mean the engine amending orders the service
@@ -257,48 +253,52 @@ func runServe(args []string, stderr io.Writer) error {
 			)
 		}
 	}
+	// Whatever the outcome, the service gets a broker. Not fatal when there is none:
+	// the dashboard is also the scanner, the gainers list and the research surface,
+	// and refusing to start all of that because a credential is missing would take
+	// away the screens that still work. Brackets can be planned and read; anything
+	// that would reach a venue says exactly why it cannot.
+	var orders bracket.BrokerOrders
 	switch {
 	case err != nil:
-		// Not fatal. The dashboard is also the scanner, the gainers list and the
-		// research surface, and refusing to start all of that because a broker
-		// credential is missing would take away the screens that still work. Brackets
-		// can be planned and read; arming says why it cannot happen.
 		logger.Error(
 			"no broker for protective orders; brackets can be planned but not armed "+
 				"or trailed",
 			"mode", appConfig.TradingMode, "error", err,
 		)
+		orders = bracket.NoBroker("the broker credentials are missing or invalid")
 		bracketBroker = nil
 	default:
-		if protector, ok := bracketBroker.(bracket.Protector); ok {
-			bracketService = bracketService.WithBroker(
-				protector, bracketAccounts{appConfig: appConfig, store: store}, logger,
-			)
-			// Whatever can rest a GTC order should be able to take it back. Asked
-			// separately rather than assumed, so a broker that cannot says so at
-			// start-up instead of leaving the discovery to a closed bracket whose
-			// stop is still live.
-			if withdrawer, can := bracketBroker.(bracket.StopWithdrawer); can {
-				bracketService = bracketService.WithWithdrawer(withdrawer)
-			} else {
-				logger.Warn(
-					"this broker cannot cancel orders, so the GTC stop and target " +
-						"placed at arm will outlive a closed bracket and have to be " +
-						"cancelled by hand",
-				)
-			}
-			bracketService, err = bracketService.WithStopShape(
-				bracketStopShape(appConfig),
-			)
-			if err != nil {
-				return fmt.Errorf("configuring the protective stop: %w", err)
-			}
-		} else {
+		venue, ok := bracketBroker.(bracket.BrokerOrders)
+		if !ok {
+			// One question, asked once. It used to be three -- can it place, can it
+			// cancel, can it amend -- and a broker that answered yes to some of them
+			// left the rest as nils nobody looked at again.
 			logger.Warn(
-				"this broker cannot place orders, so brackets can be planned but not armed",
+				"this broker cannot place, cancel and move orders, so brackets can be " +
+					"planned but not armed",
 			)
+			orders = bracket.NoBroker(
+				"the configured broker does not support placing, cancelling and " +
+					"moving orders",
+			)
+			bracketBroker = nil
+			break
 		}
+		orders = venue
 	}
+	bracketService, err := bracket.NewService(
+		store, orders, bracketAccounts{appConfig: appConfig, store: store},
+		appConfig.TradingMode,
+	)
+	if err != nil {
+		return fmt.Errorf("wiring the bracket terminal: %w", err)
+	}
+	bracketService, err = bracketService.WithStopShape(bracketStopShape(appConfig))
+	if err != nil {
+		return fmt.Errorf("configuring the protective stop: %w", err)
+	}
+	bracketService = bracketService.WithLogger(logger)
 	bracketFeed, err := buildBracketFeed(
 		ctx, appConfig, store, bracketService, bracketBroker, logger,
 	)

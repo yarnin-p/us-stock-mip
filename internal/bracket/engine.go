@@ -650,13 +650,17 @@ func (engine *Engine) settleSlice(
 	// a level to happen to change. This happens even under a manual hold: a hold
 	// means the operator chooses where the stop sits, and correcting the size it
 	// covers leaves that choice exactly where they put it.
-	stopErr := engine.amend(
+	stopID, stopErr := engine.amend(
 		ctx, record, record.StopOrderID, engine.stopShape.OrderType,
 		record.StopPrice, !engine.stopShape.HeldByEngine(regularSession),
 	)
-	targetErr := engine.amend(
+	targetID, targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT", record.TargetPrice, true,
 	)
+	// Kept whatever happened, for the same reason as in the trailing path: a handle
+	// the adapter has replaced or dropped must not survive in the record.
+	record.StopOrderID = stopID
+	record.TargetOrderID = targetID
 	brokerErr := errors.Join(stopErr, targetErr)
 	adjustment := Adjustment{
 		Trigger: TriggerPartialTP, HighWater: record.HighWater,
@@ -814,7 +818,7 @@ func (engine *Engine) advance(
 
 	// An engine-held stop has nothing at the broker to amend: the level is the record,
 	// and saving it is the amendment. That is also why it needs no amendable session.
-	stopErr := engine.amend(
+	stopID, stopErr := engine.amend(
 		ctx, record, record.StopOrderID, engine.stopShape.OrderType,
 		adjustment.StopPrice,
 		// Who *should* be holding it, not whether a handle happens to exist. A broker-held
@@ -823,10 +827,17 @@ func (engine *Engine) advance(
 		!engine.stopShape.HeldByEngine(regularSession) &&
 			adjustment.StopPrice != record.StopPrice,
 	)
-	targetErr := engine.amend(
+	targetID, targetErr := engine.amend(
 		ctx, record, record.TargetOrderID, "LIMIT",
 		adjustment.TargetPrice, adjustment.TargetPrice != record.TargetPrice,
 	)
+	// The handles first, and whether or not the move succeeded. A venue with no amend
+	// is served by an adapter that withdraws and re-places, so the ID can change on
+	// the way through -- and on a failure an empty one is the adapter saying the old
+	// order is gone. Keeping the stale handle would point the next amendment, and the
+	// close, at an order that no longer exists.
+	record.StopOrderID = stopID
+	record.TargetOrderID = targetID
 	if brokerErr := errors.Join(stopErr, targetErr); brokerErr != nil {
 		engine.record(ctx, record, adjustment, lastPrice, false, brokerErr.Error())
 		return false, brokerErr
@@ -846,18 +857,24 @@ func (engine *Engine) advance(
 	return true, nil
 }
 
+// amend moves one leg and returns the client order ID that is live afterwards.
+//
+// It returns the handle it was given when there is nothing to do, so a caller can
+// store the result unconditionally. On a venue that amends in place the ID never
+// changes; on one that does not, the adapter withdraws and re-places and hands back
+// a new one, or an empty one if the replacement failed.
 func (engine *Engine) amend(
 	ctx context.Context,
 	record Record,
 	orderID, orderType string,
 	price float64,
 	changed bool,
-) error {
+) (string, error) {
 	if !changed {
-		return nil
+		return orderID, nil
 	}
 	if strings.TrimSpace(orderID) == "" {
-		return fmt.Errorf(
+		return orderID, fmt.Errorf(
 			"%s has no %s order to amend; the level moved but nothing is protecting it",
 			record.Ticker, strings.ToLower(orderType),
 		)
@@ -877,10 +894,13 @@ func (engine *Engine) amend(
 	default:
 		request.LimitPrice = price
 	}
-	if err := engine.modifier.ModifyOrder(ctx, request); err != nil {
-		return fmt.Errorf("amending %s %s order: %w", record.Ticker, orderType, err)
+	live, err := engine.modifier.ModifyOrder(ctx, request)
+	if err != nil {
+		return live, fmt.Errorf(
+			"amending %s %s order: %w", record.Ticker, orderType, err,
+		)
 	}
-	return nil
+	return live, nil
 }
 
 // record persists the state and its audit row together. A failure to write the

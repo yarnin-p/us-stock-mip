@@ -22,11 +22,11 @@ import (
 func TestAPlanBecomesAProtectedPositionAndExitsOnItsStop(t *testing.T) {
 	venue := execution.NewPaperAdapter()
 	repository := newStubRepository()
-	service, err := NewService(repository, "paper")
+	service, err := NewService(repository, venue, stubAccounts{id: "acct-1"}, "paper")
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
-	service = service.WithBroker(venue, stubAccounts{id: "acct-1"}, quietLogger())
+	service = service.WithLogger(quietLogger())
 
 	engine, err := NewEngine(EngineOptions{
 		Repository: repository, Modifier: venue, Seller: venue,
