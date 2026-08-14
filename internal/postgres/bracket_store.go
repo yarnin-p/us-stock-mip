@@ -27,6 +27,7 @@ const bracketColumns = `id, mode, coalesce(account_id, ''), ticker, state,
 	partial_taken_quantity, coalesce(partial_order_id, ''),
 	coalesce(partial_fill_price, 0), stop_generation,
 	stop_fired, coalesce(note, ''),
+	coalesce(entry_order_ref, 0), entry_settled, entry_sent_at,
 	opened_at, closed_at, updated_at`
 
 func (store *Store) CreateBracket(
@@ -420,6 +421,7 @@ func scanBracket(row bracketRow) (bracket.Record, error) {
 		&record.PartialTakenQuantity, &record.PartialOrderID,
 		&record.PartialFillPrice,
 		&record.StopGeneration, &record.StopFired, &record.Note,
+		&record.EntryOrderRef, &record.EntrySettled, &record.EntrySentAt,
 		&record.OpenedAt, &closedAt, &record.UpdatedAt,
 	); err != nil {
 		return bracket.Record{}, err
@@ -438,4 +440,92 @@ func nonNilStrings(values []string) []string {
 		return []string{}
 	}
 	return values
+}
+
+/* SaveEntryLink records which buy a bracket is waiting on, and the row explaining it.
+ *
+ * One transaction, because the state and the handle are one fact. A bracket in
+ * WORKING with no reference is a bracket that will wait for ever on an order nobody
+ * can name, and a reference with no state change is an order nothing is watching.
+ *
+ * entry_settled is written with an OR: the flag is set once and never cleared, so a
+ * later write about the same order -- a top-up seen after the entry finished, say --
+ * cannot reopen a question that already has a fixed answer.
+ */
+func (store *Store) SaveEntryLink(
+	ctx context.Context,
+	id int64,
+	link bracket.EntryLink,
+	adjustment bracket.AdjustmentRecord,
+) (bracket.Record, error) {
+	transaction, err := store.pool.Begin(ctx)
+	if err != nil {
+		return bracket.Record{}, fmt.Errorf("beginning entry link: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+
+	closing := link.State == bracket.StateStopped ||
+		link.State == bracket.StateTargetHit ||
+		link.State == bracket.StateCancelled
+	row := transaction.QueryRow(
+		ctx,
+		`UPDATE brackets SET
+			state = $2,
+			-- Zero clears the link rather than being coalesced away. Giving up on an
+			-- entry has to be able to forget it, or the next send would find the old
+			-- reference still there and the watcher would follow a dead order.
+			entry_order_ref = nullif($3, 0::bigint),
+			entry_order_id = nullif($4, ''),
+			entry_settled = entry_settled OR $5,
+			entry_sent_at = coalesce($6, entry_sent_at),
+			closed_at = CASE WHEN $7 THEN coalesce(closed_at, now()) ELSE closed_at END,
+			updated_at = now()
+		  WHERE id = $1
+		  RETURNING `+bracketColumns,
+		id, string(link.State), link.Ref, link.ClientOrderID,
+		link.Settled, link.SentAt, closing,
+	)
+	updated, err := scanBracket(row)
+	if err != nil {
+		return bracket.Record{}, fmt.Errorf("saving entry link: %w", err)
+	}
+	if err := insertAdjustment(ctx, transaction, id, adjustment); err != nil {
+		return bracket.Record{}, err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return bracket.Record{}, fmt.Errorf("committing entry link: %w", err)
+	}
+	return updated, nil
+}
+
+// UnsettledEntryBrackets is the watcher's sweep: every bracket in this mode whose buy
+// is not finished with. It reads from durable state rather than from a queue, so a
+// process that died between a fill and its stop picks the work up again on the next
+// tick instead of losing it.
+func (store *Store) UnsettledEntryBrackets(
+	ctx context.Context, mode string,
+) ([]bracket.Record, error) {
+	rows, err := store.pool.Query(
+		ctx,
+		`SELECT `+bracketColumns+`
+		   FROM brackets
+		  WHERE mode = $1
+		    AND entry_settled = false
+		    AND state IN ('WORKING', 'UNPROTECTED', 'PROTECTED')
+		  ORDER BY opened_at`,
+		mode,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reading unsettled entries: %w", err)
+	}
+	defer rows.Close()
+	records := make([]bracket.Record, 0, 8)
+	for rows.Next() {
+		record, err := scanBracket(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning unsettled entry: %w", err)
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }

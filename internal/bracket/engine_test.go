@@ -566,3 +566,48 @@ func TestHandleTickStopsWhenTheContextEnds(t *testing.T) {
 		t.Fatalf("the broker was called after cancellation: %+v", calls)
 	}
 }
+
+// SaveEntryLink mirrors the store: state and handles move together, and settled is
+// set once. A stub that let them drift would let a test pass on an arrangement the
+// database refuses.
+func (repository *stubRepository) SaveEntryLink(
+	_ context.Context, id int64, link EntryLink, adjustment AdjustmentRecord,
+) (Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if repository.saveErr != nil {
+		return Record{}, repository.saveErr
+	}
+	record, ok := repository.records[id]
+	if !ok {
+		return Record{}, errors.New("no such bracket")
+	}
+	record.State = link.State
+	record.EntryOrderRef = link.Ref
+	record.EntryOrderID = link.ClientOrderID
+	record.EntrySettled = record.EntrySettled || link.Settled
+	if link.SentAt != nil {
+		record.EntrySentAt = link.SentAt
+	}
+	repository.records[id] = record
+	repository.adjustments = append(repository.adjustments, adjustment)
+	return record, nil
+}
+
+func (repository *stubRepository) UnsettledEntryBrackets(
+	_ context.Context, mode string,
+) ([]Record, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	records := make([]Record, 0, len(repository.records))
+	for _, record := range repository.records {
+		if record.Mode != mode || record.EntrySettled {
+			continue
+		}
+		switch record.State {
+		case StateWorking, StateUnprotected, StateProtected:
+			records = append(records, record)
+		}
+	}
+	return records, nil
+}

@@ -101,3 +101,69 @@ func (broker unavailable) ModifyOrder(
 	// its protection had been withdrawn.
 	return request.ClientOrderID, broker.err("move a level")
 }
+
+/* EntryOrders is how this package buys.
+ *
+ * Separate from BrokerOrders, and deliberately so. BrokerOrders is a venue: it puts
+ * an order where it is told. This is the order path -- the risk gate, the audit
+ * trail, the state machine that every other entry in this system already goes
+ * through. A bracket that called PlaceOrder for its buy would be routing around the
+ * kill switch and the ceilings, and would be the only way into this account that
+ * does, which is exactly the shape nobody notices until it matters.
+ *
+ * Nothing here names a venue or a service. Buy takes an intent and gives back a
+ * handle; Entry answers what became of it; CancelEntry asks for it back. Whether
+ * that is Webull, the paper venue, or a counting fake is not this package's business.
+ */
+type EntryOrders interface {
+	// Buy sends the entry. A refusal is not an error: the gate saying no is the
+	// system working, and it comes back as reasons on the ticket so the operator is
+	// told what to change rather than shown a failure.
+	Buy(context.Context, EntryRequest) (EntryTicket, error)
+	// Entry reports where the buy has got to. Called on a timer by the watcher, so
+	// it must be cheap and must not mind being asked about a finished order.
+	Entry(ctx context.Context, ref int64) (EntryStatus, error)
+	// CancelEntry asks the venue to take the buy back. On a live venue this is a
+	// request rather than a fact -- a fill can beat the cancel -- so the caller
+	// learns what actually happened from the next Entry, not from this returning nil.
+	CancelEntry(ctx context.Context, ref int64) error
+}
+
+// EntryRequest is one buy, in the plan's terms.
+type EntryRequest struct {
+	Ticker     string
+	Quantity   float64
+	LimitPrice float64
+	// TimeInForce is DAY for an entry. A GTC buy that fills tomorrow against a plan
+	// written today is a position nobody decided to take.
+	TimeInForce string
+	Reason      string
+	// ScaleIn allows a buy on a ticker already held. The one-open-per-ticker index
+	// is the duplicate guard for brackets, so refusing here as well would only block
+	// stock the operator knowingly holds.
+	ScaleIn bool
+}
+
+// EntryTicket is what came back from sending a buy.
+type EntryTicket struct {
+	// Ref is the order's own row; ClientOrderID is the venue's handle for it. Both
+	// are kept: the first is what this package asks about, the second is what shows
+	// in the broker app when the operator goes looking.
+	Ref           int64
+	ClientOrderID string
+	// Refusals are the risk gate's reasons, and their presence means nothing was
+	// sent. Empty on a buy that went out.
+	Refusals []string
+}
+
+// EntryStatus is where a buy has got to.
+type EntryStatus struct {
+	State            string
+	FilledQuantity   float64
+	AverageFillPrice float64
+	// Done means the venue is finished with this order, whether it filled or not.
+	// It is the difference between "no fill yet" and "no fill, ever" -- the first is
+	// worth waiting on and the second is worth giving up on, and a quantity of zero
+	// cannot tell them apart.
+	Done bool
+}

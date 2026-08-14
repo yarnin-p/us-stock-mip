@@ -92,6 +92,15 @@ const (
 	// TriggerStopHandover records the stop changing hands between the broker and this
 	// engine as the session opens or closes.
 	TriggerStopHandover Trigger = "STOP_HANDOVER"
+
+	// The entry's own life, recorded as loudly as the exits are. A buy that was
+	// refused, or that ended without filling, is a thing that happened to this plan
+	// and the trail is where an operator goes to find out why nothing is held.
+	TriggerEntrySent      Trigger = "ENTRY_SENT"
+	TriggerEntryRefused   Trigger = "ENTRY_REFUSED"
+	TriggerEntryCancelled Trigger = "ENTRY_CANCELLED"
+	TriggerEntryToppedUp  Trigger = "ENTRY_TOPPED_UP"
+	TriggerEntryExposed   Trigger = "ENTRY_EXPOSED"
 )
 
 // Config is the risk shape of one bracket, expressed as fractions of the entry

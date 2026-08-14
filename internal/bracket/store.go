@@ -25,6 +25,17 @@ type Record struct {
 	StopOrderID    string   `json:"stop_order_id,omitempty"`
 	TargetOrderID  string   `json:"target_order_id,omitempty"`
 	RiskFlags      []string `json:"risk_flags"`
+	// EntryOrderRef is the buy's own row, where EntryOrderID is the venue's handle
+	// for it. The watcher asks about this one: it survives a broker reissuing a
+	// client order id, and it is the key the fills are already summed under.
+	EntryOrderRef int64 `json:"entry_order_ref,omitempty"`
+	// EntrySettled says the buy will never move again -- filled out, cancelled, or
+	// refused. Set once and never cleared, like StopFired, so a later write that does
+	// not know the entry is finished cannot talk the watcher into asking for ever.
+	EntrySettled bool `json:"entry_settled"`
+	// EntrySentAt is when the buy went out, so an entry that never fills can be given
+	// up on a deadline rather than waited on until somebody happens to notice.
+	EntrySentAt *time.Time `json:"entry_sent_at,omitempty"`
 	// ManualHold means the operator has taken the wheel: the engine records what it
 	// would have done and sends nothing. It exists because a stop typed by hand and
 	// then moved by the engine leaves nobody able to say which of them is driving.
@@ -136,4 +147,29 @@ type Repository interface {
 	SaveBracket(context.Context, Record, AdjustmentRecord) (Record, error)
 	SaveBracketState(context.Context, int64, State, string) (Record, error)
 	BracketAdjustments(context.Context, int64) ([]AdjustmentRecord, error)
+	// SaveEntryLink records which buy a bracket is waiting on, together with the row
+	// that explains it. One write, because a bracket in WORKING with no handle is a
+	// bracket that will wait for ever on an order nobody can name.
+	SaveEntryLink(context.Context, int64, EntryLink, AdjustmentRecord) (Record, error)
+	// UnsettledEntryBrackets is the watcher's sweep: every bracket whose buy is not
+	// finished with. Scoped by mode, because a paper run and a live run share a
+	// database and must not read each other's positions.
+	UnsettledEntryBrackets(context.Context, string) ([]Record, error)
+}
+
+// EntryLink is what changes about a bracket when its buy is sent, moves on, or ends.
+//
+// State is carried alongside the handles rather than written separately, because the
+// two are one fact: a bracket is in WORKING *because* this order is live, and a
+// version of this that could set one without the other is a version that can leave a
+// bracket waiting on nothing.
+type EntryLink struct {
+	Ref           int64
+	ClientOrderID string
+	State         State
+	// Settled marks the buy as finished with. Set once; the store never clears it.
+	Settled bool
+	// SentAt stamps the send. Nil leaves whatever is already there, so a later write
+	// about the same order does not restart its deadline.
+	SentAt *time.Time
 }

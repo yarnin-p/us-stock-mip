@@ -222,6 +222,19 @@ type Service struct {
 	accounts  AccountSource
 	stopShape StopShape
 	log       *slog.Logger
+	// entries is the order path the buy goes down. Optional in exactly one sense:
+	// without it a plan can still be written and a fill made by hand can still be
+	// protected, and SendEntry says plainly that it cannot buy. It is never used for
+	// a sell -- those go to orders, which is a venue; this is the risk gate.
+	entries EntryOrders
+}
+
+// WithEntryOrders attaches the path a buy is sent down. Separate from WithStopShape
+// and the constructor because a deployment can legitimately read and protect without
+// being allowed to open a position.
+func (service *Service) WithEntryOrders(entries EntryOrders) *Service {
+	service.entries = entries
+	return service
 }
 
 // NewService builds the service. The broker and the account it trades are arguments
