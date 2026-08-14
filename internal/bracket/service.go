@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
 )
@@ -735,4 +736,108 @@ func (service *Service) Adjustments(
 	ctx context.Context, id int64,
 ) ([]AdjustmentRecord, error) {
 	return service.repository.BracketAdjustments(ctx, id)
+}
+
+// ExitInput is how a position is closed out by hand.
+type ExitInput struct {
+	// LimitPrice is where the closing order rests. Zero means market, which is
+	// offered but not the default: a market sell into a thin book is how a stop that
+	// looked like 10% becomes a fill at 20%, and the whole reason this system
+	// measures depth is to stop that happening by accident.
+	LimitPrice float64
+	// Quantity closes part of the position. Zero closes what is held.
+	Quantity float64
+	Note     string
+}
+
+/* Get out now.
+ *
+ * The three close buttons this service already had only ever wrote a state: they tell
+ * MIP the plan is finished, and the shares stay exactly where they were. That is the
+ * right behaviour for recording what the broker already did, and the wrong thing
+ * entirely to reach for when a position is moving against you and the answer is "sell
+ * it". There was no button for that, in a system whose entire purpose is protecting a
+ * position.
+ *
+ * Order of work matters. The resting protective orders come back first, because
+ * leaving them live while sending another sell is how one position gets sold twice
+ * and the account ends up short. Only then does the closing order go out, and only if
+ * that is accepted does the bracket close -- a bracket marked closed over a position
+ * still held is worse than one still open.
+ */
+func (service *Service) Exit(
+	ctx context.Context, id int64, input ExitInput,
+) (Record, error) {
+	record, err := service.repository.Bracket(ctx, id)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.State != StateActive && record.State != StatePending {
+		return Record{}, fmt.Errorf("%s is already closed", record.State)
+	}
+	if service.protector == nil {
+		return Record{}, errors.New(
+			"no broker is wired, so nothing here can sell -- close the position in the " +
+				"broker app and then mark this plan closed",
+		)
+	}
+	quantity := input.Quantity
+	if quantity <= 0 {
+		quantity = record.Quantity
+	}
+	if quantity <= 0 {
+		return Record{}, errors.New("there is nothing to sell")
+	}
+
+	// Withdrawn before anything new is sent. Two live sells for one position is the
+	// failure worth spending a round trip to avoid.
+	service.withdrawResting(ctx, record)
+
+	orderType := "MARKET"
+	if input.LimitPrice > 0 {
+		orderType = "LIMIT"
+	}
+	request := execution.BrokerOrderRequest{
+		AccountID:      record.AccountID,
+		ClientOrderID:  fmt.Sprintf("bracket-%d-exit-%d", id, time.Now().UnixMilli()),
+		Ticker:         record.Ticker,
+		Side:           "SELL",
+		OrderType:      orderType,
+		TimeInForce:    "DAY",
+		TradingSession: "ALL",
+		Quantity:       quantity,
+	}
+	if input.LimitPrice > 0 {
+		request.LimitPrice = input.LimitPrice
+	}
+	if _, err := service.protector.PlaceOrder(ctx, request); err != nil {
+		return Record{}, fmt.Errorf(
+			"placing the closing order for %s: %w -- the protective orders have been "+
+				"withdrawn, so this position is now unguarded and must be dealt with by hand",
+			record.Ticker, err,
+		)
+	}
+
+	note := strings.TrimSpace(input.Note)
+	if note == "" {
+		note = "closed by hand from the terminal"
+	}
+	closed, err := service.repository.SaveBracketState(ctx, id, StateCancelled, note)
+	if err != nil {
+		// The sell is already live. Saying the close failed would have someone send a
+		// second one.
+		service.warn(
+			"the closing order was accepted but the bracket state could not be saved; "+
+				"do not send another sell",
+			"bracket_id", id, "ticker", record.Ticker, "error", err,
+		)
+		return record, nil
+	}
+	service.unwatch(closed.Ticker)
+	service.info(
+		"position closed by hand",
+		"bracket_id", id, "ticker", record.Ticker,
+		"quantity", quantity, "order_type", orderType,
+	)
+	return closed, nil
 }

@@ -1483,6 +1483,115 @@ function BracketList({ reload }: { reload: number }) {
  * Nothing here sends an entry. Force exit closes the bracket's record so the engine
  * stops trailing it -- the sell itself still goes through the execution path, which
  * is the only thing that can see the kill switch. */
+/* Selling out by hand.
+ *
+ * Two steps on purpose. The first press shows what is about to be sent -- the size and
+ * the order type -- and the second sends it. A single button that fires a market sell
+ * is the shape of every "I meant to click the other one" story, and this is the only
+ * control on the panel that moves shares.
+ *
+ * Limit is the default and the price is prefilled from the stop the engine is already
+ * holding, which is the level the plan expected to get out at. Market is available and
+ * says what it costs: a market sell into a thin book is exactly the slippage the depth
+ * work exists to measure.
+ */
+function ForceExit({
+  bracket, onChanged,
+}: {
+  bracket?: BracketRecord;
+  onChanged: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [market, setMarket] = useState(false);
+  const [limit, setLimit] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const stopPrice = bracket?.stop_price;
+  useEffect(() => {
+    if (stopPrice) setLimit(String(stopPrice));
+  }, [stopPrice]);
+
+  if (!bracket) return null;
+  const held = bracket.quantity - (bracket.partial_taken_quantity ?? 0);
+
+  const send = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API}/brackets/${bracket.id}/exit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(market ? {} : { limit_price: Number(limit) }),
+          note: market ? "force exit at market" : `force exit, limit ${limit}`,
+        }),
+      });
+      const answer = await response.json();
+      if (!response.ok) throw new Error(answer?.error ?? `HTTP ${response.status}`);
+      setConfirming(false);
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "the exit was refused");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="tm-exitblock">
+      <p className="tm-hint">
+        <strong>Sell out of this position now.</strong> Unlike the buttons below, this
+        sends a real order: it withdraws the resting stop and target first, then sells{" "}
+        {held.toLocaleString()} {bracket.ticker}.
+      </p>
+      <div className="tm-row">
+        <label className="tm-field">
+          <span>Limit price</span>
+          <input
+            className="tm-input" value={limit} inputMode="decimal" disabled={market}
+            onChange={(event) => setLimit(sanitizeDecimal(event.target.value))} />
+        </label>
+        <label className="tm-check">
+          <input type="checkbox" checked={market}
+            onChange={(event) => setMarket(event.target.checked)} />
+          <span>send at market instead</span>
+        </label>
+      </div>
+      {market && (
+        <p className="tm-warn">
+          A market sell takes whatever the book is showing. On a thin name that is how a
+          planned 10% stop becomes a 20% fill — read the depth before using it.
+        </p>
+      )}
+      {!confirming ? (
+        <button
+          type="button" className="tm-btn danger"
+          disabled={busy || (!market && !(Number(limit) > 0))}
+          onClick={() => setConfirming(true)}
+        >
+          Force exit — sell {held.toLocaleString()} {bracket.ticker}
+        </button>
+      ) : (
+        <div className="tm-row">
+          <button type="button" className="tm-btn ghost" disabled={busy}
+            onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+          <button type="button" className="tm-btn danger" disabled={busy} onClick={send}>
+            {busy
+              ? "Selling…"
+              : `Confirm — sell ${held.toLocaleString()} ${bracket.ticker} ${
+                  market ? "at market" : `at $${limit}`
+                }`}
+          </button>
+        </div>
+      )}
+      {error && <p className="tm-error">{error}</p>}
+    </div>
+  );
+}
+
 function Manage({
   bracket, onChanged,
 }: {
@@ -1640,6 +1749,10 @@ function Manage({
           <strong> Selling for real still happens at the broker</strong>, because a sell has to go through the execution path
           that can see the kill switch.
         </p>
+        {/* The one control on this panel that sends an order. Everything below it only
+            records what the broker already did, so it sits apart and asks twice. */}
+        <ForceExit bracket={bracket} onChanged={onChanged} />
+
         <div className="tm-row">
           <button type="button" className="tm-btn warn" disabled={busy}
             onClick={() => close("CANCELLED")}>

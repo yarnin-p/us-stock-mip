@@ -691,3 +691,14 @@
   line-height: 1.45;
   color: var(--te-text);
 }
+
+/* Force exit sits apart from the record-only buttons: it is the one control on the
+ * panel that sends an order, and it should not read as another way of writing a note. */
+.tm-exitblock {
+  border: 1px solid var(--te-red);
+  border-radius: var(--te-radius-card);
+  padding: 0.9rem 1rem;
+  margin-bottom: 0.9rem;
+  background: var(--te-red-bg);
+}
+.tm-check { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; }

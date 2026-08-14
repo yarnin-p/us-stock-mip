@@ -19,6 +19,8 @@ type BracketSource interface {
 	Open(context.Context, bracket.OpenInput, string) (bracket.Record, error)
 	Amend(context.Context, int64, bracket.AmendInput) (bracket.Record, error)
 	Close(context.Context, int64, bracket.State, string) (bracket.Record, error)
+	// Exit sells out of the position. Close only records; this one sends.
+	Exit(context.Context, int64, bracket.ExitInput) (bracket.Record, error)
 	Mode() string
 }
 
@@ -270,4 +272,43 @@ func bracketID(
 		return 0, false
 	}
 	return id, true
+}
+
+type exitBracketRequest struct {
+	LimitPrice float64 `json:"limit_price"`
+	Quantity   float64 `json:"quantity"`
+	Note       string  `json:"note"`
+}
+
+/* Selling out of a position by hand. Separate from close, which only records that the
+ * broker already did something -- this one actually sends the order. */
+func (handler *Handler) exitBracket(
+	response http.ResponseWriter, request *http.Request,
+) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeAPIError(response, http.StatusBadRequest, "invalid bracket id")
+		return
+	}
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	var body exitBracketRequest
+	if request.ContentLength > 0 {
+		if err := decodeJSON(response, request, &body); err != nil {
+			writeAPIError(response, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	record, err := source.Exit(request.Context(), id, bracket.ExitInput{
+		LimitPrice: body.LimitPrice,
+		Quantity:   body.Quantity,
+		Note:       body.Note,
+	})
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, record)
 }
