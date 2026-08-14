@@ -272,6 +272,19 @@ func runServe(args []string, stderr io.Writer) error {
 			bracketService = bracketService.WithBroker(
 				protector, bracketAccounts{appConfig: appConfig, store: store}, logger,
 			)
+			// Whatever can rest a GTC order should be able to take it back. Asked
+			// separately rather than assumed, so a broker that cannot says so at
+			// start-up instead of leaving the discovery to a closed bracket whose
+			// stop is still live.
+			if withdrawer, can := bracketBroker.(bracket.StopWithdrawer); can {
+				bracketService = bracketService.WithWithdrawer(withdrawer)
+			} else {
+				logger.Warn(
+					"this broker cannot cancel orders, so the GTC stop and target " +
+						"placed at arm will outlive a closed bracket and have to be " +
+						"cancelled by hand",
+				)
+			}
 			bracketService, err = bracketService.WithStopShape(
 				bracketStopShape(appConfig),
 			)

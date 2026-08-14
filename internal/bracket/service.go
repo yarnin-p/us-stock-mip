@@ -218,8 +218,11 @@ type Service struct {
 	// together: a service wired without a broker can still plan, record and read.
 	protector Protector
 	accounts  AccountSource
-	stopShape StopShape
-	log       *slog.Logger
+	// withdrawer takes back the GTC orders arming rested at the broker. Optional for
+	// the same reason protector is: a service that only plans has nothing to withdraw.
+	withdrawer StopWithdrawer
+	stopShape  StopShape
+	log        *slog.Logger
 }
 
 func NewService(repository Repository, mode string) (*Service, error) {
@@ -270,6 +273,27 @@ func (service *Service) WithBroker(
 	service.protector = protector
 	service.accounts = accounts
 	service.log = logger
+	return service
+}
+
+// StopWithdrawer takes back an order this service placed. Arming rests two GTC orders
+// at the broker -- the stop and the target -- and GTC means they outlive the bracket
+// unless something withdraws them. Closing is that something.
+//
+// Named for what it does rather than for the broker behind it, and declared here rather
+// than shared with the engine's StopCanceller of the same shape: the two are promises
+// made at different moments, and each consumer stating its own is what stops either
+// growing to fit the other.
+type StopWithdrawer interface {
+	CancelOrder(ctx context.Context, accountID, clientOrderID string) error
+}
+
+// WithWithdrawer attaches the way resting protective orders are taken back. Without it
+// Close still closes -- the state has to become durable either way -- but it says
+// loudly that orders were left behind, because a GTC sell nobody is watching will
+// eventually meet a price.
+func (service *Service) WithWithdrawer(withdrawer StopWithdrawer) *Service {
+	service.withdrawer = withdrawer
 	return service
 }
 
@@ -624,10 +648,79 @@ func (service *Service) Close(
 	if err != nil {
 		return Record{}, err
 	}
+	// Withdrawn after the state is durable, and for the same reason the feed is
+	// released after it: cancelling first and then failing to write would strip a
+	// bracket that is still open of the orders protecting it.
+	service.withdrawResting(ctx, closed)
 	// Released after the state is durable. Unwatching first would stop the feed
 	// for a position that is still open if the write then failed.
 	service.unwatch(closed.Ticker)
 	return closed, nil
+}
+
+/* Arming rests two GTC orders at the broker, a stop and a target, and GTC means the
+ * broker keeps them until someone takes them back. Closing the bracket only ever
+ * changed a row in this database, so both survived it -- and a resting sell nobody is
+ * watching does not expire, it waits. Re-enter the same ticker weeks later and the old
+ * order is still there, sized for a position that no longer exists.
+ *
+ * Failure here does not fail the close. The state is already durable and refusing to
+ * return it would leave the caller believing the bracket is still live, which is worse
+ * than an order left behind. What it must not do is fail quietly: an orphan the
+ * operator does not know about is one they cannot go and cancel by hand. */
+func (service *Service) withdrawResting(ctx context.Context, record Record) {
+	resting := []struct{ what, id string }{
+		{"stop", record.StopOrderID},
+		{"target", record.TargetOrderID},
+	}
+	for _, order := range resting {
+		if order.id == "" {
+			continue
+		}
+		if service.withdrawer == nil {
+			service.warn(
+				"a resting protective order was left at the broker because this service "+
+					"has no way to withdraw one; cancel it by hand before trading this "+
+					"ticker again",
+				"bracket_id", record.ID, "ticker", record.Ticker,
+				"which", order.what, "order", order.id,
+			)
+			continue
+		}
+		if err := service.withdrawer.CancelOrder(
+			ctx, record.AccountID, order.id,
+		); err != nil {
+			// An order the broker has already filled or expired cannot be cancelled,
+			// and that is the common case for a bracket closing as STOPPED or
+			// TARGETED. It is still said out loud rather than guessed at: this service
+			// cannot tell "already gone" from "still resting and the call failed", and
+			// only one of those is safe to assume.
+			service.warn(
+				"withdrawing a resting protective order failed; if it was still live it "+
+					"is now unwatched and should be cancelled by hand",
+				"bracket_id", record.ID, "ticker", record.Ticker,
+				"which", order.what, "order", order.id, "error", err,
+			)
+			continue
+		}
+		service.info(
+			"withdrew a resting protective order on close",
+			"bracket_id", record.ID, "ticker", record.Ticker,
+			"which", order.what, "order", order.id,
+		)
+	}
+}
+
+func (service *Service) warn(message string, fields ...any) {
+	if service.log != nil {
+		service.log.Warn(message, fields...)
+	}
+}
+
+func (service *Service) info(message string, fields ...any) {
+	if service.log != nil {
+		service.log.Info(message, fields...)
+	}
 }
 
 func (service *Service) List(ctx context.Context, limit int) ([]Record, error) {
