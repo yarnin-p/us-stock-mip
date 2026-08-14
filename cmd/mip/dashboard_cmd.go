@@ -299,6 +299,43 @@ func runServe(args []string, stderr io.Writer) error {
 		return fmt.Errorf("configuring the protective stop: %w", err)
 	}
 	bracketService = bracketService.WithLogger(logger)
+
+	/* The buy, and the thing that turns a fill into a stop.
+	 *
+	 * Wired here rather than inside the bracket service because it is the same
+	 * execution service every other entry in this system goes through -- the risk
+	 * gate, the ceilings, the kill switch. A bracket that reached for the venue
+	 * directly would be the only path into this account that skips all of it.
+	 *
+	 * The watcher is what makes a fill mean something. Without it a buy would go out,
+	 * fill, and sit there with no stop behind it until somebody noticed -- which is
+	 * the arrangement this whole change exists to end, so a failure to build it stops
+	 * the process rather than starting one that can open positions it cannot protect.
+	 */
+	var entryNudge func()
+	if executionService != nil {
+		entries := bracketEntryOrders{execution: executionService}
+		bracketService = bracketService.WithEntryOrders(entries)
+		watcher, watcherErr := bracket.NewEntryWatcher(bracket.EntryWatcherOptions{
+			Service: bracketService, Repository: store, Orders: entries,
+			Mode: appConfig.TradingMode, Logger: logger,
+		})
+		if watcherErr != nil {
+			return fmt.Errorf("wiring the entry watcher: %w", watcherErr)
+		}
+		go watcher.Run(ctx)
+		entryNudge = watcher.Nudge
+		logger.Info(
+			"the terminal can buy; a fill arms its own protection",
+			"mode", appConfig.TradingMode,
+		)
+	} else {
+		logger.Warn(
+			"no execution service, so the terminal cannot buy: plans can be written " +
+				"and a fill made by hand can still be protected",
+		)
+	}
+
 	bracketFeed, err := buildBracketFeed(
 		ctx, appConfig, store, bracketService, bracketBroker, logger,
 	)
@@ -338,6 +375,7 @@ func runServe(args []string, stderr io.Writer) error {
 		Symbols:       store,
 		SymbolQuoter:  symbolQuoterFor(bracketBroker),
 		LimitWriter:   store,
+		EntryNudge:    entryNudge,
 		RuntimeHealth: runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.

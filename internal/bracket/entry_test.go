@@ -148,6 +148,16 @@ func TestSendEntryRecordsARefusalAsItsOwnState(t *testing.T) {
 	if !strings.Contains(err.Error(), "over the 5 ceiling") {
 		t.Fatalf("the reason did not reach the caller: %v", err)
 	}
+	// As a list, because the screen shows them one per line. This was being answered
+	// with the bracket's structural risk flags -- thin book, small float -- so a
+	// refusal named a reason that had nothing to do with why the buy did not go.
+	reasons := Refusals(err)
+	if len(reasons) != 1 || !strings.Contains(reasons[0], "over the 5 ceiling") {
+		t.Fatalf(
+			"refusals = %v, want the gate's own reasons rather than whatever list was "+
+				"nearest", reasons,
+		)
+	}
 
 	adjustments, err := repository.BracketAdjustments(context.Background(), plan.ID)
 	if err != nil {

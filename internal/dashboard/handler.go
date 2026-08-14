@@ -46,16 +46,24 @@ type Options struct {
 	SymbolQuoter SymbolQuoter
 	// LimitWriter persists ceiling changes across a restart.
 	LimitWriter LimitWriter
+	// EntryNudge wakes the entry watcher after a send or a cancel, so a fill shows up
+	// as soon as the venue has it rather than on the next tick.
+	EntryNudge func()
 }
 
 type Handler struct {
-	repository         Repository
-	allowedOrigin      string
-	bookDepth          BookDepth
-	symbols            SymbolDirectory
-	symbolQuoter       SymbolQuoter
-	symbolVerdicts     *symbolVerdicts
-	limitWriter        LimitWriter
+	repository     Repository
+	allowedOrigin  string
+	bookDepth      BookDepth
+	symbols        SymbolDirectory
+	symbolQuoter   SymbolQuoter
+	symbolVerdicts *symbolVerdicts
+	limitWriter    LimitWriter
+	// entryNudge asks the entry watcher to sweep now rather than at its next tick.
+	// Optional and load-bearing on nothing: without it the same work happens a second
+	// later, which is the difference between a screen that updates instantly and one
+	// that updates soon.
+	entryNudge         func()
 	logger             *slog.Logger
 	mux                *http.ServeMux
 	events             EventSource
@@ -94,6 +102,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		symbolQuoter:       options.SymbolQuoter,
 		symbolVerdicts:     newSymbolVerdicts(30 * time.Minute),
 		limitWriter:        options.LimitWriter,
+		entryNudge:         options.EntryNudge,
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
@@ -128,6 +137,10 @@ func NewHandler(repository Repository, options Options) *Handler {
 	handler.mux.HandleFunc("GET /brackets/{id}", handler.bracketDetail)
 	handler.mux.HandleFunc("PATCH /brackets/{id}", handler.amendBracket)
 	handler.mux.HandleFunc("POST /brackets/{id}/arm", handler.armBracket)
+	handler.mux.HandleFunc("POST /brackets/{id}/entry", handler.sendBracketEntry)
+	handler.mux.HandleFunc(
+		"POST /brackets/{id}/entry/cancel", handler.cancelBracketEntry,
+	)
 	handler.mux.HandleFunc("POST /brackets/{id}/exit", handler.exitBracket)
 	handler.mux.HandleFunc("POST /brackets/{id}/close", handler.closeBracket)
 	if handler.spikeWatcher != nil {

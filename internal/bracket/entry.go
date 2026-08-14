@@ -30,6 +30,35 @@ import (
 // with the reasons rather than with an apology.
 var ErrEntryRefused = errors.New("the risk gate refused this entry")
 
+/* RefusedError carries the gate's reasons as a list.
+ *
+ * As a list, because a screen shows them one per line and each is a thing the
+ * operator can go and change -- "position value 3,000 is over the 5 ceiling" names
+ * the setting to move. Joining them into one sentence is how a fixable problem
+ * becomes a wall of text, and reaching for some other list that happens to be nearby
+ * is how a screen ends up naming a reason that had nothing to do with it.
+ */
+type RefusedError struct {
+	Reasons []string
+}
+
+func (refused *RefusedError) Error() string {
+	return ErrEntryRefused.Error() + ": " + strings.Join(refused.Reasons, "; ")
+}
+
+// Unwrap makes errors.Is(err, ErrEntryRefused) answer true, so a caller that only
+// wants to know "was this refused" does not have to know this type exists.
+func (refused *RefusedError) Unwrap() error { return ErrEntryRefused }
+
+// Refusals returns the gate's reasons, or nil if this was not a refusal.
+func Refusals(err error) []string {
+	var refused *RefusedError
+	if errors.As(err, &refused) {
+		return refused.Reasons
+	}
+	return nil
+}
+
 /* SendEntry buys the plan.
  *
  * Only a DRAFT can be sent. A REFUSED plan is a draft again the moment the operator
@@ -92,7 +121,7 @@ func (service *Service) SendEntry(ctx context.Context, id int64) (Record, error)
 				reason, saveErr,
 			)
 		}
-		return refused, fmt.Errorf("%w: %s", ErrEntryRefused, reason)
+		return refused, &RefusedError{Reasons: ticket.Refusals}
 	}
 
 	sentAt := service.clock()

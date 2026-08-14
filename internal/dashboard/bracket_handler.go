@@ -328,3 +328,102 @@ func (handler *Handler) exitBracket(
 	}
 	writeJSON(response, http.StatusOK, record)
 }
+
+/* BracketBuyer is the part of the bracket service that sends the entry.
+ *
+ * Asked for separately, like BracketArmer, because a deployment wired without an
+ * order path can still plan, read and protect a fill made by hand -- and the endpoint
+ * should say that plainly rather than fail on a nil.
+ */
+type BracketBuyer interface {
+	SendEntry(context.Context, int64) (bracket.Record, error)
+	CancelEntry(context.Context, int64) (bracket.Record, error)
+}
+
+/* sendBracketEntry buys the plan.
+ *
+ * A refusal answers 422 with the reasons as a list, not as a sentence. The screen
+ * needs them one per line -- "position value 3,000 is over the 5 ceiling" is a thing
+ * the operator can go and change, and joining several of those into one string is
+ * how a fixable problem becomes a wall of text nobody reads.
+ */
+func (handler *Handler) sendBracketEntry(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	id, ok := bracketID(response, request)
+	if !ok {
+		return
+	}
+	buyer, ok := source.(BracketBuyer)
+	if !ok {
+		writeAPIError(
+			response, http.StatusNotImplemented,
+			"this deployment cannot send orders; buy in the broker app and then set "+
+				"the protection here",
+		)
+		return
+	}
+	record, err := buyer.SendEntry(request.Context(), id)
+	if err != nil {
+		if refusals := bracket.Refusals(err); len(refusals) > 0 {
+			// The gate's reasons, not the bracket's risk flags. Those are structural
+			// warnings about the position -- thin book, small float -- and they were
+			// being sent here in place of the refusal, so a screen would name a
+			// reason that had nothing to do with why the buy did not go.
+			writeJSON(response, http.StatusUnprocessableEntity, map[string]any{
+				"error":    err.Error(),
+				"refusals": refusals,
+				"bracket":  record,
+			})
+			return
+		}
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	handler.nudgeEntries()
+	writeJSON(response, http.StatusOK, record)
+}
+
+// cancelBracketEntry asks for a working buy back. It answers with the bracket
+// unchanged: on a live venue a fill can beat the cancel, and a screen that showed the
+// plan as abandoned would be guessing at an answer only the venue has.
+func (handler *Handler) cancelBracketEntry(
+	response http.ResponseWriter, request *http.Request,
+) {
+	source, ok := handler.requireBrackets(response)
+	if !ok {
+		return
+	}
+	id, ok := bracketID(response, request)
+	if !ok {
+		return
+	}
+	buyer, ok := source.(BracketBuyer)
+	if !ok {
+		writeAPIError(
+			response, http.StatusNotImplemented,
+			"this deployment cannot cancel orders",
+		)
+		return
+	}
+	record, err := buyer.CancelEntry(request.Context(), id)
+	if err != nil {
+		writeAPIError(response, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	handler.nudgeEntries()
+	writeJSON(response, http.StatusOK, record)
+}
+
+// nudgeEntries asks the watcher to sweep now rather than at its next tick. It is an
+// optimisation and nothing depends on it: without it the same work happens a second
+// later, which is why a deployment with no watcher simply does nothing here.
+func (handler *Handler) nudgeEntries() {
+	if handler.entryNudge != nil {
+		handler.entryNudge()
+	}
+}
