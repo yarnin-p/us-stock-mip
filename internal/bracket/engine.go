@@ -869,6 +869,24 @@ func (engine *Engine) advance(
 // store the result unconditionally. On a venue that amends in place the ID never
 // changes; on one that does not, the adapter withdraws and re-places and hands back
 // a new one, or an empty one if the replacement failed.
+/* amend moves one leg, using the venue's own terms for everything it is not moving.
+ *
+ * An amendment is not an edit of one field. It carries the whole order -- quantity,
+ * type, time in force, both prices -- and whatever it carries is what the order
+ * becomes. So an amendment built from this process's memory writes that memory back
+ * over the order, including the parts it never meant to touch.
+ *
+ * That matters because nothing stops the operator opening the broker app and editing
+ * an order this engine placed. The venue does not know or care which of them sent it.
+ * If they cut the size to ten shares because they sold ten themselves, and the next
+ * price move has the engine send a routine amendment carrying twenty, the venue does
+ * one of two things: it accepts, and the stop covers ten shares that no longer exist;
+ * or it refuses, and the level does not move while the audit trail says it did.
+ *
+ * So the order is read first, every time, whether or not a level is moving. The
+ * engine changes the price it decided to change and copies everything else forward
+ * from what the venue just said.
+ */
 func (engine *Engine) amend(
 	ctx context.Context,
 	record Record,
@@ -885,10 +903,37 @@ func (engine *Engine) amend(
 			record.Ticker, strings.ToLower(orderType),
 		)
 	}
+	quantity := record.Quantity
+	if engine.inspector != nil {
+		outcome, err := engine.inspector.OrderOutcome(ctx, record.AccountID, orderID)
+		if err != nil {
+			// Refusing here is the safe answer. The alternative is amending on a
+			// remembered size, which is the thing this read exists to prevent, and a
+			// venue that cannot be read is a venue that cannot be safely written to.
+			return orderID, fmt.Errorf(
+				"reading %s before amending it: %w -- the level was not moved",
+				orderID, err,
+			)
+		}
+		if outcome.Known {
+			if !outcome.Working {
+				// The order is finished with. Amending it would either fail or, worse,
+				// be accepted as something new. settle is what deals with a leg that
+				// has ended; this just declines to write to it.
+				return orderID, fmt.Errorf(
+					"%s %s order is %s at the broker and cannot be amended",
+					record.Ticker, strings.ToLower(orderType), outcome.State,
+				)
+			}
+			if outcome.Quantity > 0 {
+				quantity = outcome.Quantity
+			}
+		}
+	}
 	request := execution.ModifyOrderRequest{
 		AccountID: record.AccountID, ClientOrderID: orderID,
 		Ticker: record.Ticker, OrderType: orderType,
-		TimeInForce: "GTC", Quantity: record.Quantity,
+		TimeInForce: "GTC", Quantity: quantity,
 	}
 	switch orderType {
 	case "STOP_LOSS":

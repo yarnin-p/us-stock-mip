@@ -277,7 +277,17 @@ func (adapter *PaperAdapter) OrderOutcome(
 		if order.clientOrderID != clientOrderID {
 			continue
 		}
-		outcome := OrderOutcome{State: order.state}
+		outcome := OrderOutcome{
+			State: order.state,
+			// The paper venue holds real terms and can report them, which is what
+			// makes it a venue rather than a stub: a test for "the operator edited
+			// this order" has somewhere to express the edit.
+			Known:      true,
+			OrderType:  order.orderType,
+			Quantity:   order.quantity,
+			LimitPrice: order.limitPrice,
+			StopPrice:  order.stopPrice,
+		}
 		switch order.state {
 		case string(StateFilled):
 			outcome.Filled = true

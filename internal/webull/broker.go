@@ -43,7 +43,10 @@ type BrokerOrder struct {
 	Symbol         string
 	Side           string
 	Status         string
+	OrderType      string
 	TotalQuantity  float64
+	LimitPrice     float64
+	StopPrice      float64
 	FilledQuantity float64
 	FilledPrice    *float64
 	Commission     float64
@@ -66,6 +69,13 @@ type rawBrokerOrder struct {
 	TotalQuantity  string `json:"total_quantity"`
 	FilledQuantity string `json:"filled_quantity"`
 	FilledPrice    string `json:"filled_price"`
+	// The order's terms as the venue holds them now, which is not the same as the
+	// terms it was placed with. Anyone can edit an order in the broker app, and an
+	// engine that amends from its own memory writes the whole order back -- so a
+	// quantity the operator changed is silently restored by the next price move.
+	OrderType  string `json:"order_type"`
+	LimitPrice string `json:"limit_price"`
+	StopPrice  string `json:"stop_price"`
 	PlaceTimeAt    string `json:"place_time_at"`
 	FilledTimeAt   string `json:"filled_time_at"`
 	Commission     struct {
@@ -338,6 +348,14 @@ func parseBrokerOrderGroups(
 			if err != nil {
 				return nil, err
 			}
+			limit, err := optionalNumber("order limit price", item.LimitPrice)
+			if err != nil {
+				return nil, err
+			}
+			stop, err := optionalNumber("order stop price", item.StopPrice)
+			if err != nil {
+				return nil, err
+			}
 			commission, err := optionalNumber(
 				"order commission", item.Commission.Actual,
 			)
@@ -356,7 +374,10 @@ func parseBrokerOrderGroups(
 				AccountID: accountID, ClientOrderID: item.ClientOrderID,
 				OrderID: item.OrderID, Symbol: strings.ToUpper(item.Symbol),
 				Side: item.Side, Status: item.Status,
+				OrderType:      item.OrderType,
 				TotalQuantity:  numberOrZero(total),
+				LimitPrice:     numberOrZero(limit),
+				StopPrice:      numberOrZero(stop),
 				FilledQuantity: numberOrZero(filled), FilledPrice: price,
 				Commission: numberOrZero(commission), Fees: fees,
 				PlacedAt: parseOptionalTime(item.PlaceTimeAt),

@@ -285,6 +285,25 @@ type OrderOutcome struct {
 	FilledQuantity float64
 	FilledPrice    float64
 	FilledAt       time.Time
+
+	/* The order's terms as the venue holds them now.
+	 *
+	 * Not the terms it was placed with. Nothing stops the operator opening the
+	 * broker app and editing an order this system placed -- the venue does not know
+	 * or care which of them sent it -- and an amendment carries the whole order, so
+	 * a quantity changed by hand is silently written back the next time a price
+	 * moves. The only way not to do that is to read the order before changing it and
+	 * copy forward everything that was not meant to change.
+	 *
+	 * Known says the venue actually answered about this order. Zeroes from an adapter
+	 * that cannot report terms are not the same as an order of zero size, and one
+	 * read as the other would send an amendment for no shares.
+	 */
+	Known      bool
+	OrderType  string
+	Quantity   float64
+	LimitPrice float64
+	StopPrice  float64
 }
 
 // OrderInspector reports what became of a single order, found by the client order

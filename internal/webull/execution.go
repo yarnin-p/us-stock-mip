@@ -368,6 +368,15 @@ func (client *Client) OrderOutcome(
 	outcome := execution.OrderOutcome{
 		State:          order.Status,
 		FilledQuantity: order.FilledQuantity,
+		// The terms as the venue holds them now, which is what an amendment has to
+		// copy forward. Anyone can edit this order in the broker app, and an
+		// amendment carries the whole order -- so a quantity changed by hand is
+		// written back by the next price move unless it is read first.
+		Known:      true,
+		OrderType:  order.OrderType,
+		Quantity:   order.TotalQuantity,
+		LimitPrice: order.LimitPrice,
+		StopPrice:  order.StopPrice,
 	}
 	switch strings.ToUpper(strings.TrimSpace(order.Status)) {
 	case "FILLED", "PARTIAL_FILLED", "PARTIALLY_FILLED":
