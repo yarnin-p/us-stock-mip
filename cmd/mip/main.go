@@ -88,6 +88,8 @@ func run(args []string, stderr io.Writer) error {
 		return runLLM(args[1:], stderr)
 	case "webull-token":
 		return runWebullToken(args[1:], stderr)
+	case "backfill-market-cap":
+		return runBackfillMarketCap(args[1:], stderr)
 	case "webull-probe":
 		return runWebullProbe(args[1:], os.Stdout, stderr)
 	case "scan":

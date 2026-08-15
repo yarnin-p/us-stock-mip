@@ -1,6 +1,8 @@
 package burst
 
 import (
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -240,3 +242,7 @@ func TestRefusesSettingsThatCannotWork(t *testing.T) {
 
 func nan() float64 { var zero float64; return zero / zero }
 func inf() float64 { var zero float64; return 1 / zero }
+
+func quietTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}

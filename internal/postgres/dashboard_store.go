@@ -1300,3 +1300,59 @@ func (store *Store) LookupSymbol(
 	info.Known = true
 	return info, nil
 }
+
+/* BurstWatchlist is the set of names the burst detector subscribes to.
+ *
+ * Small companies, and the ones nobody has published a market cap for. That second
+ * clause is doing real work rather than being permissive: over 106 sessions, market
+ * cap under $50M covered 77.7% of the large after-hours movers against 11.9% of the
+ * traded universe, and most of the movers with no cap on file were small too -- the
+ * data is missing for obscure names, and obscure is the population. Excluding them
+ * would drop movers to buy nothing.
+ *
+ * Stacking further filters was measured and rejected. Adding float, price and a
+ * reverse-split flag shrinks the list five-fold and moves precision from 58.8% to
+ * 64.6% while recall falls to 31%: the alerts a tighter filter removes are about half
+ * real movers, the same mix as the stream itself. The reason is structural -- only
+ * 18.6% of the universe can fire the burst rule at all, so the alert is already the
+ * microcap filter and doing it twice mostly discards.
+ *
+ * The book filter is what the study used: a price a position can actually be taken
+ * in, and enough volume that the exit exists.
+ */
+func (store *Store) BurstWatchlist(
+	ctx context.Context, limit int,
+) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	rows, err := store.pool.Query(ctx, `
+		WITH latest AS (
+			SELECT MAX(trade_date) AS trade_date FROM daily_prices
+		)
+		SELECT stocks.ticker
+		  FROM daily_prices AS prices
+		  JOIN latest ON latest.trade_date = prices.trade_date
+		  JOIN stocks ON stocks.id = prices.stock_id
+		 WHERE prices.close BETWEEN 0.20 AND 50
+		   AND prices.volume > 200000
+		   -- Unknown is kept, deliberately. See the comment above.
+		   AND (stocks.market_cap IS NULL OR stocks.market_cap < 50000000)
+		 ORDER BY prices.volume * prices.close DESC, stocks.ticker
+		 LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying the burst watchlist: %w", err)
+	}
+	defer rows.Close()
+	tickers := make([]string, 0, limit)
+	for rows.Next() {
+		var ticker string
+		if err := rows.Scan(&ticker); err != nil {
+			return nil, fmt.Errorf("scanning a burst watchlist ticker: %w", err)
+		}
+		tickers = append(tickers, ticker)
+	}
+	return tickers, rows.Err()
+}

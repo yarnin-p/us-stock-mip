@@ -254,3 +254,53 @@ func (store *Store) UpsertIntradayPrices(ctx context.Context, prices []model.Int
 	}
 	return nil
 }
+
+/* StocksMissingMarketCap lists the symbols the burst watchlist filter cannot see.
+ *
+ * Scoped to the book -- a price a position can be taken in and enough volume that
+ * the exit exists -- because that is the only population the watchlist ever draws
+ * from, and fetching a cap for the other seventeen thousand names would be paying
+ * for data nothing reads.
+ *
+ * staleAfter refetches a cap that has aged. A market cap is not a constant; a name
+ * that doubled last week is not the size it was, and the whole filter turns on which
+ * side of fifty million it lands.
+ */
+func (store *Store) StocksMissingMarketCap(
+	ctx context.Context, limit int, staleAfter time.Duration,
+) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+	cutoff := time.Now().UTC().Add(-staleAfter)
+	if staleAfter <= 0 {
+		// Zero means refetch everything, so nothing is ever fresh enough to skip.
+		cutoff = time.Now().UTC().Add(time.Hour)
+	}
+	rows, err := store.pool.Query(ctx, `
+		WITH latest AS (SELECT MAX(trade_date) AS trade_date FROM daily_prices)
+		SELECT stocks.ticker
+		  FROM daily_prices AS prices
+		  JOIN latest ON latest.trade_date = prices.trade_date
+		  JOIN stocks ON stocks.id = prices.stock_id
+		 WHERE prices.close BETWEEN 0.20 AND 50
+		   AND prices.volume > 200000
+		   AND (stocks.market_cap IS NULL OR stocks.updated_at < $2)
+		 ORDER BY prices.volume * prices.close DESC, stocks.ticker
+		 LIMIT $1`,
+		limit, cutoff,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying stocks without a market cap: %w", err)
+	}
+	defer rows.Close()
+	tickers := make([]string, 0, limit)
+	for rows.Next() {
+		var ticker string
+		if err := rows.Scan(&ticker); err != nil {
+			return nil, fmt.Errorf("scanning a ticker: %w", err)
+		}
+		tickers = append(tickers, ticker)
+	}
+	return tickers, rows.Err()
+}
