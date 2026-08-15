@@ -247,10 +247,23 @@ export function TerminalView() {
    * Only on load, and only into an empty field -- arriving with ?ticker=X and then
    * typing something else should not have the URL win back on the next render. */
   useEffect(() => {
-    const passed = new URLSearchParams(window.location.search).get("ticker");
-    if (!passed) return;
-    const clean = passed.trim().toUpperCase().slice(0, 8);
-    if (clean) setTicker((current) => (current === "" ? clean : current));
+    const query = new URLSearchParams(window.location.search);
+    const passed = query.get("ticker");
+    if (passed) {
+      const clean = passed.trim().toUpperCase().slice(0, 8);
+      if (clean) setTicker((current) => (current === "" ? clean : current));
+    }
+    /* And the price, when the scanner sent it. An alert arrives with the price it
+     * fired at, and retyping that number is the part of catching a move early that
+     * gives the time back. It is a starting point, not an instruction -- the field
+     * stays editable and a price already typed wins. */
+    const entryPassed = query.get("entry");
+    if (entryPassed) {
+      const price = Number(entryPassed);
+      if (price > 0 && Number.isFinite(price)) {
+        setEntry((current) => (current === "" ? String(price) : current));
+      }
+    }
   }, []);
   /* The review step. Nothing is written until it has been seen once -- the design's
    * two-step, and the reason the primary button opens a sheet instead of acting. */

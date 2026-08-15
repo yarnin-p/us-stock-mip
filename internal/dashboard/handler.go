@@ -49,6 +49,8 @@ type Options struct {
 	// EntryNudge wakes the entry watcher after a send or a cancel, so a fill shows up
 	// as soon as the venue has it rather than on the next tick.
 	EntryNudge func()
+	// Bursts is the scanner's alert log, if this deployment runs one.
+	Bursts *BurstLog
 }
 
 type Handler struct {
@@ -63,7 +65,10 @@ type Handler struct {
 	// Optional and load-bearing on nothing: without it the same work happens a second
 	// later, which is the difference between a screen that updates instantly and one
 	// that updates soon.
-	entryNudge         func()
+	entryNudge func()
+	// bursts_ is the scanner's alert log. Optional: a deployment without a scanner
+	// says so rather than showing an empty list, which reads as a calm market.
+	bursts_            *BurstLog
 	logger             *slog.Logger
 	mux                *http.ServeMux
 	events             EventSource
@@ -103,6 +108,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 		symbolVerdicts:     newSymbolVerdicts(30 * time.Minute),
 		limitWriter:        options.LimitWriter,
 		entryNudge:         options.EntryNudge,
+		bursts_:            options.Bursts,
 		usdTHB:             options.TicketUSDTHB,
 	}
 	handler.mux.HandleFunc("GET /healthz", handler.health)
@@ -132,6 +138,7 @@ func NewHandler(repository Repository, options Options) *Handler {
 	// intent. Neither places an order -- entry submission stays on the execution
 	// path so a bracket cannot route around approval or the kill switch.
 	handler.mux.HandleFunc("POST /brackets/preview", handler.previewBracket)
+	handler.mux.HandleFunc("GET /bursts", handler.bursts)
 	handler.mux.HandleFunc("GET /brackets", handler.brackets)
 	handler.mux.HandleFunc("POST /brackets", handler.openBracket)
 	handler.mux.HandleFunc("GET /brackets/{id}", handler.bracketDetail)

@@ -53,6 +53,11 @@ type Config struct {
 	// ledger fed by real prices is the only honest forward test.
 	BracketFeedAdapter      string
 	BracketFeedWalkInterval time.Duration
+	// BurstWatchlistLimit caps how many symbols the burst scanner subscribes to. The
+	// measured watchlist is a few hundred names; the cap is here so a filter that
+	// stops filtering cannot quietly subscribe to the whole tape and exhaust the
+	// venue's quota -- which fails as a scanner that sees nothing, not as an error.
+	BurstWatchlistLimit int
 	// BracketFeedWalkVolatility is the size of each synthetic step as a fraction of
 	// price. The default is calm enough that a ladder configured for real momentum
 	// names never arms, which makes a dry run look like a broken engine rather than
@@ -391,6 +396,10 @@ func load(requireMassive bool) (Config, error) {
 		return Config{}, err
 	}
 	config.AutoMaxCandidates, err = intEnv("AUTO_MAX_CANDIDATES", 2)
+	if err != nil {
+		return Config{}, err
+	}
+	config.BurstWatchlistLimit, err = intEnv("BURST_WATCHLIST_LIMIT", 500)
 	if err != nil {
 		return Config{}, err
 	}
@@ -941,6 +950,9 @@ func load(requireMassive bool) (Config, error) {
 	}
 	if config.MaxRiskPerTrade <= 0 {
 		return Config{}, errors.New("MAX_RISK_PER_TRADE must be positive")
+	}
+	if config.BurstWatchlistLimit <= 0 {
+		return Config{}, errors.New("BURST_WATCHLIST_LIMIT must be positive")
 	}
 	if config.PaperStartingCapital <= 0 {
 		return Config{}, errors.New("PAPER_STARTING_CAPITAL must be positive")

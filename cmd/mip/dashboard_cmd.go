@@ -22,6 +22,7 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/alpaca"
 	"github.com/momentum-intelligence-platform/mip/internal/automation"
 	"github.com/momentum-intelligence-platform/mip/internal/bracket"
+	"github.com/momentum-intelligence-platform/mip/internal/burst"
 	"github.com/momentum-intelligence-platform/mip/internal/catalyst"
 	"github.com/momentum-intelligence-platform/mip/internal/config"
 	"github.com/momentum-intelligence-platform/mip/internal/dashboard"
@@ -337,13 +338,48 @@ func runServe(args []string, stderr io.Writer) error {
 		)
 	}
 
-	bracketFeed, err := buildBracketFeed(
+	/* The burst scanner.
+	 *
+	 * It shares the bracket feed's provider rather than opening its own: both want
+	 * the same prints, and two subscriptions to one venue for one symbol is paying
+	 * twice for the same data and halving the quota that decides how many names can
+	 * be watched at all.
+	 *
+	 * Wired only when a provider exists. A scanner with no feed is worse than no
+	 * scanner: it draws an empty screen that reads as a quiet market.
+	 */
+	burstLog := dashboard.NewBurstLog(200)
+
+	bracketFeed, priceProvider, err := buildBracketFeed(
 		ctx, appConfig, store, bracketService, bracketBroker,
 		bracketAnnouncer{hub: eventHub}, logger,
 	)
 	if err != nil {
 		return fmt.Errorf("wiring the bracket price feed: %w", err)
 	}
+	if priceProvider != nil {
+		detector, detectorErr := burst.New(burst.Options{})
+		if detectorErr != nil {
+			return fmt.Errorf("building the burst detector: %w", detectorErr)
+		}
+		scanner, scannerErr := burst.NewScanner(burst.ScannerOptions{
+			Provider: priceProvider, Watchlist: burstWatchlist{store: store},
+			Detector: detector, Sink: burstLog, Logger: logger,
+			Limit: appConfig.BurstWatchlistLimit,
+		})
+		if scannerErr != nil {
+			return fmt.Errorf("building the burst scanner: %w", scannerErr)
+		}
+		burstLog.Attach(scanner)
+		go scanner.Run(ctx)
+		logger.Info("burst scanner started", "limit", appConfig.BurstWatchlistLimit)
+	} else {
+		logger.Warn(
+			"no price feed, so the burst scanner is not running: the scanner screen " +
+				"will say so rather than show an empty list",
+		)
+	}
+
 	if bracketFeed != nil {
 		defer func() { _ = bracketFeed.Close() }()
 		bracketService = bracketService.WithFeed(bracketFeed)
@@ -378,6 +414,7 @@ func runServe(args []string, stderr io.Writer) error {
 		SymbolQuoter:  symbolQuoterFor(bracketBroker),
 		LimitWriter:   store,
 		EntryNudge:    entryNudge,
+		Bursts:        burstLog,
 		RuntimeHealth: runtimeHealth.Snapshot,
 		// Ceilings are read per request, never cached: a ticket sized against a
 		// stale view of the day's spent allowance would be sized too large.
@@ -497,24 +534,24 @@ func buildBracketFeed(
 	modifier execution.OrderModifier,
 	announcer bracket.Announcer,
 	logger *slog.Logger,
-) (*bracket.Supervisor, error) {
+) (*bracket.Supervisor, marketdata.Provider, error) {
 	if appConfig.BracketFeedAdapter == "none" {
 		logger.Info(
 			"bracket price feed disabled; brackets will be recorded but not trailed",
 			"adapter", appConfig.BracketFeedAdapter,
 		)
-		return nil, nil
+		return nil, nil, nil
 	}
 	if modifier == nil {
 		logger.Error(
 			"the bracket feed needs a broker that can amend orders; nothing will be " +
 				"trailed until one is configured",
 		)
-		return nil, nil
+		return nil, nil, nil
 	}
 	provider, err := buildMarketDataProvider(ctx, appConfig, logger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// The same adapter sells the partial slice. It is passed as a separate port so
 	// the engine can tell a broker that can amend from one that can also place, and
@@ -560,7 +597,7 @@ func buildBracketFeed(
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// In paper the broker is a fake venue, and a venue that cannot see the market
 	// fills everything on arrival: a protective target would be born filled and a
@@ -585,13 +622,13 @@ func buildBracketFeed(
 		Logger:   logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	logger.Info(
 		"bracket price feed ready",
 		"adapter", appConfig.BracketFeedAdapter, "mode", appConfig.TradingMode,
 	)
-	return supervisor, nil
+	return supervisor, provider, nil
 }
 
 // bracketStopShape reads how the protective stop should be expressed. Named once so

@@ -35,12 +35,12 @@ const APPS = [
   },
   {
     key: "scanner",
-    href: "/scanner",
+    href: "/bursts",
     tag: "FIND",
-    name: "Scanner",
+    name: "Bursts",
     what:
-      "Daily scan, gainers and your watchlist in one table — send a candidate " +
-      "straight to the terminal.",
+      "Names moving 20% inside five minutes, as they move — not names that are " +
+      "up 20%. Click one straight into the ticket.",
     skin: "dark",
     mark: "ring",
   },
@@ -88,8 +88,26 @@ export function HubView() {
   const [risk, setRisk] = useState<{
     kill_switch: boolean; max_position_value: number; mode: string;
   } | null>(null);
+  /* The scanner's own state, so the card can say whether it is watching anything.
+   * "open the table" was a label; a card that reports 500 watched and 3 today is the
+   * difference between a menu and a dashboard -- and "WATCHING NOTHING" is the one
+   * state that has to reach the operator before they trust an empty list. */
+  const [bursts, setBursts] = useState<{
+    running: boolean; watching?: number; fired_today?: number;
+  } | null>(null);
   // Same control as the terminal, same stored choice.
   const { currency, setCurrency } = useCurrency();
+
+  useEffect(() => {
+    const read = () =>
+      fetch(`${API}/bursts`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((answer) => { if (answer) setBursts(answer); })
+        .catch(() => {});
+    read();
+    const timer = setInterval(read, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     fetch(`${API}/execution/config`)
@@ -248,7 +266,14 @@ export function HubView() {
                   {app.key === "terminal" && "opens empty"}
                   {app.key === "positions" &&
                     (loadError ? "—" : `${live.length} maintained · ${rows.length} total`)}
-                  {app.key === "scanner" && "open the table"}
+                  {app.key === "scanner" &&
+                    (bursts === null
+                      ? "—"
+                      : !bursts.running
+                        ? "not running"
+                        : (bursts.watching ?? 0) === 0
+                          ? "WATCHING NOTHING"
+                          : `${bursts.watching} watched · ${bursts.fired_today ?? 0} today`)}
                   {app.key === "performance" && "review the record"}
                   {app.key === "risk" &&
                     (risk

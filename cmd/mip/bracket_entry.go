@@ -7,6 +7,7 @@ import (
 	"github.com/momentum-intelligence-platform/mip/internal/bracket"
 	"github.com/momentum-intelligence-platform/mip/internal/dashboard"
 	"github.com/momentum-intelligence-platform/mip/internal/execution"
+	"github.com/momentum-intelligence-platform/mip/internal/postgres"
 )
 
 /* The bracket's buy, sent down the order path everything else uses.
@@ -156,4 +157,17 @@ func (announcer bracketAnnouncer) Announce(item bracket.Announcement) {
 		Level:     item.Level,
 		Applied:   item.Applied,
 	})
+}
+
+/* The burst scanner's watchlist, read from the store.
+ *
+ * Wiring, like the rest of this file: internal/burst asks for symbols and must not
+ * know that a database exists, and the store must not know what a burst is.
+ */
+type burstWatchlist struct{ store *postgres.Store }
+
+func (list burstWatchlist) Symbols(
+	ctx context.Context, limit int,
+) ([]string, error) {
+	return list.store.BurstWatchlist(ctx, limit)
 }
