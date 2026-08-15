@@ -73,12 +73,12 @@ type rawBrokerOrder struct {
 	// terms it was placed with. Anyone can edit an order in the broker app, and an
 	// engine that amends from its own memory writes the whole order back -- so a
 	// quantity the operator changed is silently restored by the next price move.
-	OrderType  string `json:"order_type"`
-	LimitPrice string `json:"limit_price"`
-	StopPrice  string `json:"stop_price"`
-	PlaceTimeAt    string `json:"place_time_at"`
-	FilledTimeAt   string `json:"filled_time_at"`
-	Commission     struct {
+	OrderType    string `json:"order_type"`
+	LimitPrice   string `json:"limit_price"`
+	StopPrice    string `json:"stop_price"`
+	PlaceTimeAt  string `json:"place_time_at"`
+	FilledTimeAt string `json:"filled_time_at"`
+	Commission   struct {
 		Actual string `json:"actual_commission"`
 	} `json:"commission"`
 	Fees []struct {
