@@ -216,3 +216,102 @@ func TestAnAmendmentIsRefusedWhenTheOrderCannotBeRead(t *testing.T) {
 		)
 	}
 }
+
+/* Selling part of a position does not end it.
+ *
+ * Exit closed the bracket whatever the size, having already withdrawn both protective
+ * orders -- so selling half left the other half held with nothing behind it and
+ * nothing watching it. The operator had asked to take some profit; what they got was
+ * an unguarded position and a plan marked finished.
+ */
+func TestAPartialExitLeavesTheRestProtected(t *testing.T) {
+	ctx := context.Background()
+	broker := &recordingBroker{}
+	repository := newStubRepository()
+	service, err := NewService(repository, broker, fixedAccount{}, "paper")
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+	service = service.WithLogger(quietLogger())
+	created, _ := service.Open(ctx, terminalInput(), "acct-1")
+	active, err := service.Activate(ctx, created.ID, 7.77, "stop-1", "target-1")
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	half := active.Quantity / 2
+
+	kept, err := service.Exit(ctx, created.ID, ExitInput{
+		Quantity: half, LimitPrice: 8.10, Note: "taking some off",
+	})
+	if err != nil {
+		t.Fatalf("partial exit: %v", err)
+	}
+	if kept.State != StateProtected {
+		t.Fatalf(
+			"state = %s after selling half; the rest is still held and still needs "+
+				"watching", kept.State,
+		)
+	}
+	if kept.Quantity != active.Quantity-half {
+		t.Fatalf("quantity = %.0f, want the %.0f that remain",
+			kept.Quantity, active.Quantity-half)
+	}
+	if kept.StopOrderID == "" {
+		t.Fatal("the remainder is held with no stop order behind it")
+	}
+	if kept.StopPrice != active.StopPrice || kept.TargetPrice != active.TargetPrice {
+		t.Fatalf(
+			"levels moved on a partial sale (%v/%v, were %v/%v); the entry price did "+
+				"not change, so the rungs the position had already climbed should not "+
+				"be reset",
+			kept.StopPrice, kept.TargetPrice, active.StopPrice, active.TargetPrice,
+		)
+	}
+
+	// The venue saw the sale, and then both legs go back on over what remains.
+	var sells, protection int
+	for _, order := range broker.placed {
+		if order.Quantity == half && order.OrderType == "LIMIT" &&
+			order.LimitPrice == 8.10 {
+			sells++
+			continue
+		}
+		if order.Quantity == active.Quantity-half {
+			protection++
+		}
+	}
+	if sells != 1 {
+		t.Fatalf("the venue saw %d closing orders, want one for %.0f shares",
+			sells, half)
+	}
+	if protection != 2 {
+		t.Fatalf(
+			"the venue got %d orders covering the remaining %.0f shares, want a stop "+
+				"and a target", protection, active.Quantity-half,
+		)
+	}
+}
+
+/* Selling all of it does end it, and must keep doing so. */
+func TestAFullExitStillClosesTheBracket(t *testing.T) {
+	ctx := context.Background()
+	broker := &recordingBroker{}
+	repository := newStubRepository()
+	service, err := NewService(repository, broker, fixedAccount{}, "paper")
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+	service = service.WithLogger(quietLogger())
+	created, _ := service.Open(ctx, terminalInput(), "acct-1")
+	if _, err := service.Activate(ctx, created.ID, 7.77, "stop-1", "target-1"); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+
+	closed, err := service.Exit(ctx, created.ID, ExitInput{Note: "out"})
+	if err != nil {
+		t.Fatalf("exit: %v", err)
+	}
+	if closed.State != StateCancelled {
+		t.Fatalf("state = %s, want CANCELLED", closed.State)
+	}
+}

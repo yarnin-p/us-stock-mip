@@ -864,6 +864,45 @@ func (service *Service) Exit(
 	if note == "" {
 		note = "closed by hand from the terminal"
 	}
+
+	/* Selling part of a position does not end it.
+	 *
+	 * This closed the bracket whatever the size, having already withdrawn both
+	 * protective orders -- so selling half left the other half held with nothing
+	 * behind it and nothing watching it. The operator had asked to take some profit;
+	 * what they got was an unguarded position and a plan marked finished.
+	 *
+	 * What is left goes back under protection at the levels it already had, on the
+	 * size that remains. The rungs keep their meaning because the entry price has not
+	 * changed -- only how much of it is still running.
+	 */
+	if quantity < record.Quantity {
+		remaining := record.Quantity - quantity
+		kept, keepErr := service.reprotect(ctx, record, remaining, note)
+		if keepErr != nil {
+			// The sale is live and the remainder is bare. Nothing here can undo the
+			// sale, so this says exactly what is loose rather than reporting a
+			// failure that hides it.
+			service.warn(
+				"POSITION PARTLY UNPROTECTED: the sale went out and the rest could not "+
+					"be put back under protection",
+				"bracket_id", id, "ticker", record.Ticker,
+				"sold", quantity, "remaining", remaining, "error", keepErr,
+			)
+			return Record{}, fmt.Errorf(
+				"sold %.0f %s, and the remaining %.0f could not be protected: %w -- "+
+					"those shares are held with nothing behind them",
+				quantity, record.Ticker, remaining, keepErr,
+			)
+		}
+		service.info(
+			"part of the position was sold by hand; the rest is still protected",
+			"bracket_id", id, "ticker", record.Ticker,
+			"sold", quantity, "remaining", remaining,
+		)
+		return kept, nil
+	}
+
 	closed, err := service.repository.SaveBracketState(ctx, id, StateCancelled, note)
 	if err != nil {
 		// The sell is already live. Saying the close failed would have someone send a

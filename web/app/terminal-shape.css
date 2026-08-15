@@ -1443,3 +1443,36 @@
 .tg .tg-sheetactions .tg-plain:hover { color: #fff; }
 /* REVIEW — LIVE, REAL MONEY. The one heading allowed to be red. */
 .tg .tg-sheet.review h3.live { color: #ff7a72; }
+
+/* How much to sell, and at what price. Two fields the panel never had, which is why
+   people went to the broker app to do the ordinary thing of taking some off. */
+.tg .tg-fesize {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 18px 0 4px;
+}
+.tg .tg-fesize label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tg .tg-fesize span {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--tg-text);
+}
+.tg .tg-fesize input {
+  background: #2c3034;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+  color: #fff;
+}
+.tg .tg-fesize input:hover { background: #363b40; }
+.tg .tg-fesize em {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.6;
+}

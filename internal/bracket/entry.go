@@ -561,3 +561,76 @@ func (service *Service) resizeLegs(ctx context.Context, record *Record) error {
 	}
 	return nil
 }
+
+/* reprotect puts what is left of a position back under a stop and a target.
+ *
+ * Used after part of it has been sold by hand. Both legs were withdrawn before the
+ * sale went out -- two live sells for one position is worth a round trip to avoid --
+ * so both have to be placed again, on the size that remains and at the levels the
+ * bracket already had. The levels do not move: the entry price has not changed, only
+ * how much of it is still running, and recomputing the ladder here would silently
+ * reset rungs the position had already climbed.
+ *
+ * The stop goes first and its failure is the caller's problem to report. A target
+ * that fails to place costs an exit taken by hand; a stop that fails leaves the
+ * remainder bare, and that is the whole reason this function exists.
+ */
+func (service *Service) reprotect(
+	ctx context.Context, record Record, remaining float64, note string,
+) (Record, error) {
+	if !(remaining > 0) {
+		return Record{}, errors.New("nothing is left to protect")
+	}
+	shape := service.shape()
+	record.StopGeneration++
+	stopID := fmt.Sprintf("bracket-%d-stop-%d", record.ID, record.StopGeneration)
+	if shape.HeldByEngine(false) {
+		stopID = ""
+	} else if _, err := service.orders.PlaceOrder(
+		ctx, execution.BrokerOrderRequest{
+			AccountID: record.AccountID, ClientOrderID: stopID,
+			Ticker: record.Ticker, Side: "SELL", OrderType: shape.OrderType,
+			TimeInForce: "GTC", TradingSession: "ALL", Quantity: remaining,
+			StopPrice: record.StopPrice, LimitPrice: shape.LimitFor(record.StopPrice),
+		},
+	); err != nil {
+		return Record{}, fmt.Errorf(
+			"replacing the stop over the remaining %.0f shares: %w", remaining, err,
+		)
+	}
+
+	targetID := fmt.Sprintf("bracket-%d-target-%d", record.ID, record.StopGeneration)
+	if _, err := service.orders.PlaceOrder(
+		ctx, execution.BrokerOrderRequest{
+			AccountID: record.AccountID, ClientOrderID: targetID,
+			Ticker: record.Ticker, Side: "SELL", OrderType: "LIMIT",
+			TimeInForce: "GTC", TradingSession: "ALL", Quantity: remaining,
+			LimitPrice: record.TargetPrice,
+		},
+	); err != nil {
+		targetID = ""
+		service.warn(
+			"the target did not go back on after a partial sale; the stop is in and "+
+				"the upside has to be taken by hand",
+			"bracket_id", record.ID, "ticker", record.Ticker, "error", err,
+		)
+	}
+
+	sold := record.Quantity - remaining
+	record.Quantity = remaining
+	record.StopOrderID = stopID
+	record.TargetOrderID = targetID
+	if note != "" {
+		record.Note = note
+	}
+	return service.repository.SaveLevels(ctx, record, AdjustmentRecord{
+		BracketID: record.ID, Trigger: TriggerPartialTP,
+		PreviousStop: record.StopPrice, NewStop: record.StopPrice,
+		PreviousTarget: record.TargetPrice, NewTarget: record.TargetPrice,
+		LastPrice: record.HighWater, HighWater: record.HighWater, Applied: true,
+		Reason: fmt.Sprintf(
+			"sold %.0f by hand; %.0f still protected at %.4f",
+			sold, remaining, record.StopPrice,
+		),
+	})
+}

@@ -710,8 +710,12 @@ function ForceExitPanel({
   const [confirming, setConfirming] = useState<"" | "stop" | "exit">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
+  // Empty means all of it, and empty means market. Both defaults are the old
+  // behaviour, so the panel does what it always did until something is typed.
+  const [sellQty, setSellQty] = useState("");
+  const [sellLimit, setSellLimit] = useState("");
   const held = record.quantity;
+  const partial = sellQty !== "" && Number(sellQty) > 0 && Number(sellQty) < held;
   const cover = depth && depth.shares > 0 ? held / depth.shares : 0;
   const thin = cover > 3 || !depth;
 
@@ -768,13 +772,43 @@ function ForceExitPanel({
         </div>
       </div>
 
+      {/* How much, and at what price.
+          Both were missing, and their absence is what sent people into the broker
+          app: the only exit this screen offered was all of it, at market, into
+          whatever the book happened to hold. Selling part of a position and naming a
+          price are the two ordinary things a trader does on the way out. */}
+      <div className="tg-fesize">
+        <label>
+          <span>Sell how many</span>
+          <input
+            value={sellQty} placeholder={String(held)} inputMode="decimal"
+            onChange={(event) => setSellQty(sanitizeInteger(event.target.value))}
+          />
+          <em>
+            {sellQty === ""
+              ? "all of it"
+              : `${(held - Number(sellQty)).toLocaleString()} would stay protected`}
+          </em>
+        </label>
+        <label>
+          <span>At price</span>
+          <input
+            value={sellLimit} placeholder="market" inputMode="decimal"
+            onChange={(event) => setSellLimit(sanitizeDecimal(event.target.value))}
+          />
+          <em>
+            {sellLimit === "" ? "market — whatever the book gives" : "limit"}
+          </em>
+        </label>
+      </div>
+
       {confirming === "" ? (
         <div className="tg-ferow">
           <button type="button" className="tg-febtn" onClick={() => setConfirming("stop")}>
             Stop managing it
           </button>
           <button type="button" className="tg-febtn danger" onClick={() => setConfirming("exit")}>
-            Exit at market now
+            {partial ? `Sell ${Number(sellQty).toLocaleString()} now` : "Exit now"}
           </button>
         </div>
       ) : (
@@ -787,7 +821,16 @@ function ForceExitPanel({
             type="button" className="tg-febtn danger" disabled={busy}
             onClick={() =>
               confirming === "exit"
-                ? call(`/brackets/${record.id}/exit`, { note: "force exit at market" })
+                ? call(`/brackets/${record.id}/exit`, {
+                    // Omitted rather than zeroed when empty: the server reads zero as
+                    // "all of it" and as "market", which are the defaults this panel
+                    // had before it could say anything else.
+                    ...(sellQty === "" ? {} : { quantity: Number(sellQty) }),
+                    ...(sellLimit === "" ? {} : { limit_price: Number(sellLimit) }),
+                    note: partial
+                      ? `sold ${sellQty} of ${held} by hand from the bracket screen`
+                      : "closed by hand from the bracket screen",
+                  })
                 : call(`/brackets/${record.id}/close`, {
                     state: "CANCELLED",
                     note: "stopped managing from the bracket screen",
@@ -797,7 +840,8 @@ function ForceExitPanel({
             {busy
               ? "Working…"
               : confirming === "exit"
-                ? `Confirm — sell ${held.toLocaleString()} ${record.ticker} at market`
+                ? `Confirm — sell ${(partial ? Number(sellQty) : held).toLocaleString()}`
+                  + ` ${record.ticker} ${sellLimit === "" ? "at market" : `at $${sellLimit}`}`
                 : "Confirm — stop managing, keep the shares"}
           </button>
         </div>
